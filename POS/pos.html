@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>POS — Coffee Shop</title>
+<meta name="description" content="Offline-first point of sale for the coffee shop, sharing the same local database as the Inventory app.">
+<link rel="manifest" href="./pos-manifest.json">
+<meta name="theme-color" content="#3b2418">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%9B%92%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../Inventory/styles.css">
+<link rel="stylesheet" href="./pos-styles.css">
+</head>
+<body>
+<div id="pin-gate" class="pin-gate">
+  <div class="pin-card">
+    <div class="pin-logo">☕</div>
+    <h2 id="pin-title">Enter PIN</h2>
+    <p class="pin-sub" id="pin-sub">Sign in to start a shift</p>
+    <div class="pin-display" id="pin-display"></div>
+    <div class="pin-pad" id="pin-pad">
+      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+      <button data-k="clear" class="pin-alt">Clear</button><button data-k="0">0</button><button data-k="back" class="pin-alt">⌫</button>
+    </div>
+    <div id="pin-error" class="pin-error"></div>
+    <a href="../Inventory/index.html" class="pin-inventory-link">Open Inventory App instead →</a>
+  </div>
+</div>
+
+<div id="app" style="display:none;">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div id="topbar">
+      <h1 id="topbar-title">POS</h1>
+      <div class="actions" id="topbar-actions"></div>
+    </div>
+    <div id="content"></div>
+  </div>
+</div>
+<div id="toast-wrap"></div>
+
+<script src="../Inventory/db.js"></script>
+<script src="../Inventory/logic.js"></script>
+<script src="./pos-app.js"></script>
+</body>
+</html>
