@@ -19,8 +19,11 @@
 --      * Admin rights come ONLY from the owner's email login (profile role
 --        ADMIN). A staff PIN on a counter never gives admin rights.
 --      * Counters join only with a pairing code (no owner sign-in on a counter).
---      * Refunds, voids and discounts must carry a manager approval token that
---        the server checks; refunds can't exceed what is left of the sale.
+--      * Refunds, voids, discounts and closing someone else's shift must carry
+--        a manager approval token that the server checks; refunds can't exceed
+--        what is left of the sale.
+--      * A finished counter sale must add up (items, discount, tax, total);
+--        sales below the menu price are flagged "needs review" for the owner.
 --      * Counters never see full customer phone numbers (only masked ones).
 --      * Answers that reveal whether a phone number is registered are
 --        rate-limited per login; wrong PINs lock the counter for longer
@@ -213,9 +216,15 @@ alter table public.sales add column if not exists source text not null default '
 alter table public.sales add column if not exists offline boolean not null default false;
 alter table public.sales add column if not exists discount_approved_by uuid;
 alter table public.sales add column if not exists discount_approved_by_name text;
+-- Set by the server when a counter sale looks odd (e.g. sold below the menu price),
+-- so the owner can check it in the Back Office ("Needs review"). The owner clears
+-- it after checking (apply_changes update: needs_review = false).
+alter table public.sales add column if not exists needs_review boolean not null default false;
+alter table public.sales add column if not exists review_reason text;
 create index if not exists sales_business_date_idx on public.sales(business_id, transaction_date);
 create index if not exists sales_shift_idx on public.sales(shift_id);
 create index if not exists sales_customer_idx on public.sales(customer_id);
+create index if not exists sales_needs_review_idx on public.sales(business_id, transaction_date) where needs_review;
 
 alter table public.sale_items add column if not exists notes text;
 create index if not exists sale_items_sale_idx on public.sale_items(sale_id);
@@ -1105,6 +1114,106 @@ begin
   return v_s;
 end $$;
 
+-- A FINISHED counter sale must add up. Same maths as computeSaleTotals() in
+-- cccc/shared/logic.js:
+--   each item:   quantity > 0, unit_price >= 0, line_total = unit_price x quantity
+--   subtotal   = sum of the items' line totals
+--   discount   = none -> 0;  'percent' -> subtotal x value / 100;  'fixed' -> value;
+--                never more than the subtotal (and never below 0)
+--   tax >= 0 and service charge >= 0. Their RATES are not re-checked: the shop's
+--                settings may have changed while the counter was offline.
+--                (Tax-inclusive shops send tax 0, which is fine.)
+--   grand_total = subtotal - discount + tax + service charge
+-- Every comparison allows +/- 0.02 pesos for rounding (the counter rounds only the
+-- grand total). Anything else -> SALE_TOTALS_MISMATCH.
+create or replace function public._check_sale_totals(p_sale jsonb, p_items jsonb) returns void
+language plpgsql immutable set search_path = public as $$
+declare
+  c_tol constant numeric := 0.02;
+  v_it jsonb; v_qty numeric; v_unit numeric; v_line numeric; v_sum numeric := 0;
+  v_sub numeric; v_disc numeric; v_dtype text; v_dval numeric; v_expect numeric;
+  v_tax numeric; v_svc numeric; v_grand numeric; v_bad boolean := false;
+begin
+  begin
+    for v_it in select value from jsonb_array_elements(case when jsonb_typeof(p_items) = 'array' then p_items else '[]'::jsonb end) loop
+      v_qty  := (v_it->>'quantity')::numeric;
+      v_unit := (v_it->>'unit_price')::numeric;
+      v_line := (v_it->>'line_total')::numeric;
+      if v_qty is null or v_qty <= 0 or v_unit is null or v_unit < 0 or v_line is null
+         or abs(v_line - v_unit * v_qty) > c_tol then
+        v_bad := true;
+      end if;
+      v_sum := v_sum + coalesce(v_line, 0);
+    end loop;
+    v_sub   := coalesce((p_sale->>'subtotal')::numeric, 0);
+    v_disc  := coalesce((p_sale->>'discount_amount')::numeric, 0);
+    v_dtype := lower(nullif(btrim(p_sale->>'discount_type'), ''));
+    v_dval  := coalesce((p_sale->>'discount_value')::numeric, 0);
+    v_tax   := coalesce((p_sale->>'tax_amount')::numeric, 0);
+    v_svc   := coalesce((p_sale->>'service_charge_amount')::numeric, 0);
+    v_grand := (p_sale->>'grand_total')::numeric;
+    v_expect := least(case v_dtype when 'percent' then v_sub * v_dval / 100 when 'fixed' then v_dval else 0 end, v_sub);
+    if abs(v_sub - v_sum) > c_tol
+       or v_disc < 0 or v_disc > v_sub + c_tol or abs(v_disc - v_expect) > c_tol
+       or v_tax < 0 or v_svc < 0
+       or v_grand is null or abs(v_grand - (v_sub - v_disc + v_tax + v_svc)) > c_tol then
+      v_bad := true;
+    end if;
+  exception when data_exception then
+    v_bad := true;   -- e.g. a "number" that isn't a number
+  end;
+  if v_bad then raise exception 'SALE_TOTALS_MISMATCH'; end if;
+end $$;
+
+-- The menu price of ONE sold item: the recipe's CURRENT selling price plus the
+-- price changes of the options chosen. Each chosen option is looked up on the
+-- recipe's current menu (same group name + label) and the menu's price change is
+-- used. An option that is no longer on the menu counts with the item's own price
+-- change, but never below 0 (so a made-up "-100 pesos" option can't hide a cheap price).
+create or replace function public._menu_unit_price(p_selling numeric, p_groups jsonb, p_mods jsonb) returns numeric
+language sql immutable as $$
+  select coalesce(p_selling, 0) + coalesce((
+    select sum(coalesce(
+             (select coalesce((o->>'price_delta')::numeric, 0)
+                from jsonb_array_elements(case when jsonb_typeof(p_groups) = 'array' then p_groups else '[]'::jsonb end) g,
+                     jsonb_array_elements(case when jsonb_typeof(g->'options') = 'array' then g->'options' else '[]'::jsonb end) o
+               where g->>'name' = m->>'group' and o->>'label' = m->>'label'
+               limit 1),
+             greatest(coalesce((m->>'price_delta')::numeric, 0), 0)))
+    from jsonb_array_elements(case when jsonb_typeof(p_mods) = 'array' then p_mods else '[]'::jsonb end) m), 0)
+$$;
+
+-- Prices below the menu are NOT refused (a counter may have sold at an old price
+-- while offline); the sale is FLAGGED for the owner to review instead.
+-- Returns null (all fine) or the reasons, comma separated:
+--   PRICE_BELOW_MENU = an item was sold below its menu price (0.02 peso tolerance)
+--   NOT_ON_MENU      = an item has no recipe at all
+-- An item whose recipe belongs to ANOTHER shop is refused: UNKNOWN_RECIPE.
+create or replace function public._sale_review_reason(p_biz uuid, p_items jsonb) returns text
+language plpgsql stable security definer set search_path = public as $$
+declare v_it jsonb; v_rid uuid; v_r public.recipes%rowtype; v_reasons text[] := '{}';
+begin
+  for v_it in select value from jsonb_array_elements(case when jsonb_typeof(p_items) = 'array' then p_items else '[]'::jsonb end) loop
+    v_rid := nullif(v_it->>'recipe_id', '')::uuid;
+    if v_rid is null then
+      if not ('NOT_ON_MENU' = any(v_reasons)) then v_reasons := v_reasons || 'NOT_ON_MENU'::text; end if;
+      continue;
+    end if;
+    select * into v_r from public.recipes where id = v_rid and business_id = p_biz;
+    if not found then raise exception 'UNKNOWN_RECIPE'; end if;
+    begin
+      if (v_it->>'unit_price')::numeric < public._menu_unit_price(v_r.selling_price, v_r.modifier_groups, v_it->'modifiers') - 0.02
+         and not ('PRICE_BELOW_MENU' = any(v_reasons)) then
+        v_reasons := v_reasons || 'PRICE_BELOW_MENU'::text;
+      end if;
+    exception when data_exception then
+      -- a price we can't read: let the owner look at it
+      if not ('PRICE_BELOW_MENU' = any(v_reasons)) then v_reasons := v_reasons || 'PRICE_BELOW_MENU'::text; end if;
+    end;
+  end loop;
+  return nullif(array_to_string(v_reasons, ', '), '');
+end $$;
+
 -- Stock lines from a counter must use one of THIS shop's ingredients.
 create or replace function public._require_ingredient(p_biz uuid, p_line jsonb) returns void
 language plpgsql stable security definer set search_path = public as $$
@@ -1123,6 +1232,7 @@ declare
   v_sale jsonb; v_id uuid; v_old text; v_r jsonb; v_cust uuid; v_qr uuid; v_amount numeric;
   v_shift public.shifts%rowtype; v_ref jsonb; v_status text;
   v_appr public.staff; v_sale_row public.sales%rowtype; v_prev numeric; v_type text; v_new_status text;
+  v_closer_name text; v_reason text;
 begin
   -- fo_sync only lets a paired counter call us with its own device row
   if p_dev.auth_user_id is distinct from auth.uid() then raise exception 'DEVICE_MISMATCH'; end if;
@@ -1134,16 +1244,23 @@ begin
     return 'ok';
 
   when 'shift_close' then
-    select * into v_shift from public.shifts where id = (p_d->>'id')::uuid and business_id = p_biz;
+    -- data = {id, closed_by, closed_at, declared_cash, ..., approval_token (only when
+    --         closing SOMEONE ELSE's shift)}
+    select * into v_shift from public.shifts where id = (p_d->>'id')::uuid and business_id = p_biz for update;
     if not found then raise exception 'SHIFT_NOT_FOUND'; end if;
     if v_shift.status = 'CLOSED' then return 'skipped'; end if;
-    if (p_d->>'closed_by')::uuid is distinct from v_shift.cashier_id then
-      perform public._require_staff(p_biz, (p_d->>'closed_by')::uuid, 2);
+    if nullif(p_d->>'closed_by', '')::uuid is distinct from v_shift.cashier_id then
+      -- Closing another cashier's shift needs a manager approval, checked like refunds.
+      v_appr := public._use_approval(p_biz, p_dev.auth_user_id, nullif(p_d->>'closed_by', '')::uuid,
+                                     p_d->>'approval_token', 'shift_close:' || v_shift.id);
+      v_closer_name := v_appr.name;
     else
-      perform public._require_staff(p_biz, (p_d->>'closed_by')::uuid, 1);
+      -- Closing your own shift: no approval needed.
+      perform public._require_staff(p_biz, v_shift.cashier_id, 1);
+      select name into v_closer_name from public.staff where id = v_shift.cashier_id;
     end if;
-    perform public._update_row('shifts', (p_d - 'cashier_id' - 'device_id' - 'opened_at' - 'opening_cash')
-      || jsonb_build_object('status', 'CLOSED'), 'id', p_biz);
+    perform public._update_row('shifts', (p_d - 'cashier_id' - 'device_id' - 'opened_at' - 'opening_cash' - 'approval_token')
+      || jsonb_build_object('status', 'CLOSED', 'closed_by_name', coalesce(v_closer_name, p_d->>'closed_by_name')), 'id', p_biz);
     return 'ok';
 
   when 'cash_movement' then
@@ -1169,6 +1286,13 @@ begin
                                      p_d->>'discount_approval_token', 'discount:' || v_id);
       v_sale := v_sale || jsonb_build_object('discount_approved_by', v_appr.id, 'discount_approved_by_name', v_appr.name);
     end if;
+    -- A finished sale must add up (else SALE_TOTALS_MISMATCH), and is flagged for
+    -- review when sold below the menu. Only the server sets the review flag.
+    if v_status = 'COMPLETED' then
+      perform public._check_sale_totals(v_sale, p_d->'items');
+      v_reason := public._sale_review_reason(p_biz, p_d->'items');
+    end if;
+    v_sale := v_sale || jsonb_build_object('needs_review', v_reason is not null, 'review_reason', v_reason);
     -- A customer link must point at one of THIS shop's customers (else it is dropped).
     v_cust := nullif(v_sale->>'customer_id', '')::uuid;
     if v_cust is not null and not exists (select 1 from public.customers where id = v_cust and business_id = p_biz) then
@@ -1770,7 +1894,8 @@ begin
     select p.oid::regprocedure as sig, p.proname from pg_proc p
     where p.pronamespace = 'public'::regnamespace
       and p.proname = any(public_fns || member_fns || array['_too_many_attempts','_pin_locked_until','_phone_lookup_allowed',
-        '_mask_phone','_customer_for_staff','_use_approval','_require_ingredient','_next_device_tag','_next_numbers',
+        '_mask_phone','_customer_for_staff','_use_approval','_require_ingredient','_check_sale_totals','_menu_unit_price',
+        '_sale_review_reason','_next_device_tag','_next_numbers',
         '_require_staff','_fo_apply','_type_label','_public_modifier_groups','_recipe_makeable','_qr_table','_qr_customer_json',
         'handle_new_user_signup','protect_profile_columns','touch_updated_at'])
   loop
