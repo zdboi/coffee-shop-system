@@ -7,36 +7,32 @@ Read this file fully before touching anything.
 A web-based POS + inventory system for **Cavite City Coffee Club**, a coffee shop in the
 Philippines, built to grow into a multi-shop SaaS. Three apps share one Supabase database:
 
-| App | Who | Needs internet? |
-|---|---|---|
-| **Front Office** (counter POS) | Staff, signing in with a 4–6 digit PIN | No — sells offline, uploads later |
-| **Back Office** (admin) | Admins only | Yes |
-| **QR order page** | Customers on their own phones | Yes |
+| App | Folder | Who | Needs internet? |
+|---|---|---|---|
+| **Front Office** (counter POS) | `cccc/front/` | Staff, signing in with a 4–6 digit PIN on a paired counter | No for selling (queues and uploads later); yes for manager approvals |
+| **Back Office** (admin) | `cccc/back/` | The owner's email login (profile role ADMIN) | Yes |
+| **QR order page** | `cccc/order/` | Customers on their own phones | Yes |
 
 Plain static files (HTML/CSS/vanilla JS), hosted on GitHub Pages
-(`https://zdboi.github.io/coffee-shop-system/`). No build step, no npm at runtime.
+(`https://zdboi.github.io/coffee-shop-system/`). No build step, no npm at runtime, no CDN
+scripts (the Supabase client is our own `cccc/shared/cloud.js`).
 The owner is a beginner: anything they must do (Supabase settings, uploading files) needs
 plain-language, step-by-step instructions.
 
-## Current state (read this)
-There are **two competing in-progress builds**. Until the owner picks one, do not merge them
-and do not delete either.
-
-| | Build R (repository root) | Build C (`cccc/`) |
-|---|---|---|
-| Folders | `frontoffice/` `backoffice/` `order/` `shared/` `supabase/004_cccc_frontoffice_backoffice_qr.sql` `config.js` `index.html` `README.md` | `cccc/front/` `cccc/order/` `cccc/shared/` `cccc/supabase/004_cccc_online_qr.sql` `cccc/sw.js` (no Back Office yet) |
-| Supabase client | supabase-js from jsDelivr CDN | in-house `cccc/shared/cloud.js` |
-| Tests | none yet | `tests/` (SQL + Front Office browser test) |
-
-`Inventory/` and `POS/` are the **original offline apps**. They stay untouched forever: shops
-still need them to export old data from the browsers they used.
+## Current state
+- **Build C (`cccc/`) is the chosen build** (owner decision, 2026-10-12).
+- The competing Build R is archived in `_archive/build-r/` — **read-only reference**. Its Back Office
+  screens, sales calendar and importer are the source for building `cccc/back/` (they use a different
+  data style: camelCase fields + `DB.put`; convert to this file's conventions when porting).
+- The database script `cccc/supabase/004_cccc_online_qr.sql` has **not** been run on the live
+  project yet, so it may still be edited in place.
 
 ## Golden rules (everyone)
 1. **Own only your files.** Each file has exactly one owner (table below). Need a change in
    someone else's file? Stop and report what you need to the lead.
-2. **Never modify** `Inventory/`, `POS/`, `connection-test.html`.
+2. **Never modify** `Inventory/`, `POS/`, `connection-test.html`, `_archive/**`.
 3. **Never** put a Supabase `service_role` key (or any secret) in any file. The anon key in
-   `config.js` / `cccc/shared/config.js` is public by design.
+   `cccc/shared/config.js` is public by design.
 4. **Never connect to the real Supabase project** (`qtkoxzuedxvqoktobtyg.supabase.co`), never run
    SQL against it. The owner runs database scripts themselves. Test only on the local test DB.
 5. **Never** `git commit`, `git push`, or switch branches. The lead does all git work.
@@ -46,15 +42,45 @@ still need them to export old data from the browsers they used.
 8. Don't edit tests to make them pass (only QA edits tests; expected numbers change only with
    the lead's approval).
 
+## Security decisions (2026-10-12, from the security review — binding)
+1. **Counters join only by pairing code** (anonymous device login + `redeem_device_pairing`).
+   No owner email sign-in on a counter; `fo_register_device` is removed; `fo_sync` accepts only
+   DEVICE logins.
+2. **Back Office = email login with profile role ADMIN only.** A staff PIN never gives Back Office
+   (or any admin) rights; a DEVICE login has admin rank 0 whatever PIN is entered.
+3. **Manager approvals are verified by the server.** Refunds, voids and discounts carry a one-time
+   approval token from `staff_pin_login(pin, 'OVERRIDE', 'MANAGER')`; `fo_sync` checks it belongs to the
+   named approver (MANAGER/ADMIN, same shop) and marks it used. These actions therefore need internet.
+4. **Offline PIN copies on counters are for CASHIER staff only.** Never cache manager/admin PINs.
+5. **Counters never see full customer phone numbers** (masked, e.g. `0917 ••• 4567`). Only the
+   owner's Back Office login reads full numbers.
+6. **Refund caps:** a refund can't exceed what's left of the sale, and returned stock can't exceed
+   what that sale deducted. Child rows (items, payments, stock lines) can never overwrite rows of
+   another sale.
+7. **Only `qr_relink` links a phone to an existing customer.** Any answer that reveals whether a
+   number is registered is rate-limited per login.
+
+## Counter → server contract (`fo_sync` ops)
+Each op is `{op_id, type, data}`; types: `shift_open`, `shift_close`, `cash_movement`, `sale`,
+`held_delete`, `refund`, `audit`, `sold_out`. Approval fields:
+- `sale` with a discount: `data.sale.discount_approved_by` (staff id) + `data.discount_approval_token`.
+- `refund` (incl. VOID): `data.refund.approved_by` (staff id) + `data.approval_token`.
+The server answers per op: `ok | duplicate | skipped | error` (+ `message`).
+
 ## Conventions
 - **Data shape:** JavaScript objects use the exact Supabase column names (snake_case:
   `ingredient_id`, `recipe_id`, `sale_id`, `modifier_groups`, `price_delta`…). Ids are UUIDs made
-  on the client (`crypto.randomUUID`).
+  on the client (`uid()` / `Cloud.uuid()`).
 - **Money:** all totals go through the shared logic (`computeSaleTotals`, `shiftMetrics`,
   `recipeCost`, `inventoryLinesForSaleLine`). Never re-implement these formulas in a screen.
   Customer-facing prices are calculated by the **database**; the QR page only displays them.
 - **Stock** is the sum of `inventory_transactions` (view `v_ingredient_stock`). Sales deduct
   recipe ingredients **plus modifier extras**; refunds/voids put the same amounts back.
+- **Back Office writes** go through `apply_changes(p_ops)` (all-or-nothing): ops `upsert` (full row),
+  `update` (id + changed columns), `insert_ignore`, `delete`, `delete_where`. Reads: `bo_bootstrap()`,
+  `sales_report(p_from, p_to)`, plain table reads via `cloud.select`.
+- **Sessions:** each app has its own storage key so logins never mix on one browser:
+  counter `cccc.staff.session`, Back Office `cccc.admin.session`, customer `cccc.customer.session`.
 - **Safety in pages:** every piece of user/customer text inserted into HTML goes through
   `escapeHtml` / `esc`. Errors shown to people use plain words (`friendlyError`).
 - **Philippines:** currency ₱ (en-PH formatting), timezone Asia/Manila, mobile numbers
@@ -62,16 +88,16 @@ still need them to export old data from the browsers they used.
 - **Copy:** sentence case, plain verbs, no jargon; buttons say what happens ("Start shift").
 
 ## File ownership
-| Owner | Build C paths | Build R paths |
-|---|---|---|
-| `db-security-engineer` | `cccc/supabase/*.sql` | `supabase/*.sql` |
-| `core-sync-engineer` | `cccc/shared/{cloud,local,logic,ui,config}.js`, `cccc/shared/styles.css`, `cccc/sw.js` | `shared/{supa,data,logic}.js`, `shared/styles.css`, `config.js` |
-| `front-office-dev` | `cccc/front/**` | `frontoffice/**` |
-| `back-office-dev` | `cccc/back/**` | `backoffice/**`, `shared/calendar.js`, `shared/import.js` |
-| `customer-qr-dev` | `cccc/order/**` | `order/**` |
-| `qa-test-engineer` | `tests/**` | `tests/**` |
-| `security-reviewer` | nothing (read-only) | nothing (read-only) |
-| lead (C) | `CLAUDE.md`, `.claude/**`, `README.md`, `index.html`, `docs/**`, `.gitignore`, vendored libs | same |
+| Owner | Paths |
+|---|---|
+| `db-security-engineer` | `cccc/supabase/*.sql` |
+| `core-sync-engineer` | `cccc/shared/{cloud,local,logic,ui,config}.js`, `cccc/shared/styles.css`, `cccc/sw.js` |
+| `front-office-dev` | `cccc/front/**` |
+| `back-office-dev` | `cccc/back/**` |
+| `customer-qr-dev` | `cccc/order/**` |
+| `qa-test-engineer` | `tests/**` |
+| `security-reviewer` | nothing (read-only) |
+| lead (C) | `CLAUDE.md`, `.claude/**`, `README.md`, `index.html`, `docs/**`, `.gitignore`, `cccc/shared/vendor/**`, `_archive/**` (moves only) |
 
 ## How work flows
 1. Lead writes a brief: goal, acceptance checks, files in scope.
@@ -83,19 +109,22 @@ still need them to export old data from the browsers they used.
 6. Findings go back to the file's owner; repeat until clean. Lead integrates and delivers.
 
 Every agent ends with a short report to the lead: what changed (files), how it was checked
-(commands + results), anything left open or needing a decision.
+(commands + results), anything left open or needing a decision. Security findings are reported
+as weakness + effect + fix, without step-by-step abuse instructions.
 
 ## Testing (local only)
 ```bash
 tests/start_pg.sh                    # local PostgreSQL 16 on port 54329 (test only)
-tests/reset_db.sh [migration.sql] [db]   # stand-in Supabase + live-schema copy + one 004 script
-tests/e2e_reset.sh                   # reset + seed data for browser tests (Build C)
+tests/reset_db.sh [migration.sql] [db]   # stand-in Supabase + live-schema copy + the 004 script
+tests/e2e_reset.sh                   # reset + seed data for browser tests
 tests/restart_fake.sh                # local Supabase stand-in + file server on :8787
-tests/run_all.sh                     # full regression for Build C
+tests/run_all.sh                     # full regression
 ```
 - `tests/sql/01_existing_schema.sql` reconstructs the **live** schema (from the owner's Supabase
-  output). Every 004 script must install on top of it and run twice without errors.
+  output). The 004 script must install on top of it and run twice without errors.
 - Browser tests use Playwright from `/opt/npm-tools/node_modules/playwright` (Chromium preinstalled).
-- The sandbox blocks npm and most CDNs (incl. jsDelivr): Build R's pages cannot load supabase-js here.
+- The sandbox blocks npm and most CDNs.
+- Several agents may test at the same time: use your own database names (e.g. `db_<you>`) for
+  ad-hoc work; `cccc` and the stand-in on :8787 belong to QA's regression runs.
 - Don't put `fake-supabase/server.js` or `pgrep -f "fake-supabase/server.js"` text in the same shell
   command that runs `restart_fake.sh` — the restart kills processes matching that text.
