@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cavite City Coffee Club — POS</title>
+<meta name="description" content="Front Office (counter), Back Office (admins) and QR ordering for Cavite City Coffee Club.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%98%95%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#2c1e14;--paper:#f7f1e6;--brand:#241209;--leaf:#33513f;--line:rgba(44,30,20,.14);--soft:rgba(44,30,20,.65);}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--paper);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;line-height:1.5;}
+  main{max-width:720px;margin:0 auto;padding:56px 16px 40px;}
+  h1{font-family:'Bricolage Grotesque',ui-sans-serif,system-ui,sans-serif;font-weight:800;font-size:clamp(34px,8vw,52px);line-height:1;letter-spacing:-.02em;}
+  .lead{color:var(--soft);margin:10px 0 30px;font-size:17px;}
+  .doors{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  a.door{display:block;text-decoration:none;color:inherit;border:1.5px solid var(--ink);border-radius:18px;padding:22px 20px;background:#fffdf9;}
+  a.door:hover{background:#fff;}
+  a.door:focus-visible{outline:3px solid #c17a3d;outline-offset:3px;}
+  a.door.main{background:var(--brand);color:#fbf6ee;border-color:var(--brand);}
+  .door b{display:block;font-family:'Bricolage Grotesque',ui-sans-serif,system-ui,sans-serif;font-weight:800;font-size:24px;letter-spacing:-.01em;}
+  .door span{display:block;margin-top:6px;font-size:14.5px;opacity:.8;}
+  .old{margin-top:34px;font-size:14px;color:var(--soft);border-top:1px solid var(--line);padding-top:16px;}
+  .old a{color:inherit;}
+  @media(max-width:560px){.doors{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Cavite City Coffee Club</h1>
+  <p class="lead">Choose where you're working today.</p>
+  <div class="doors">
+    <a class="door main" href="./frontoffice/"><b>Front Office</b><span>The counter. Staff sign in with their PIN to sell, take QR orders and run the cash drawer.</span></a>
+    <a class="door" href="./backoffice/"><b>Back Office</b><span>Admins only. Menu and recipes, stock, costing, staff and PINs, QR codes, customers and reports.</span></a>
+  </div>
+  <p class="old">Customers don't start here: they scan the QR code on their table.<br>
+    Moving from the old apps? Open the old <a href="./Inventory/index.html">Inventory</a> or <a href="./POS/pos.html">POS</a> in this same browser once, then use Back Office → Settings → Import.</p>
+</main>
+</body>
+</html>

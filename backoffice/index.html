@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Back Office — Cavite City Coffee Club</title>
+<meta name="description" content="Admin-only Back Office: inventory, recipes and menu, costing, staff PINs, devices, QR ordering, customers and reports.">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#241209">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%98%95%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/styles.css">
+<link rel="stylesheet" href="./backoffice.css">
+</head>
+<body>
+<div id="boot-screen" class="center-screen">
+  <div class="auth-card" style="text-align:center;">
+    <div class="auth-logo">☕</div>
+    <div class="boot-msg">Starting…</div>
+    <div class="boot-actions" style="margin-top:14px;display:flex;gap:8px;justify-content:center;"></div>
+  </div>
+</div>
+
+<div id="auth-screen" class="center-screen" style="display:none;">
+  <div class="auth-card">
+    <div class="auth-logo">☕</div>
+    <h1>Back Office</h1>
+    <p class="auth-sub">For admins. Sign in with your email and password.</p>
+    <form id="login-form" autocomplete="on">
+      <div class="form-row"><label for="li-email">Email</label><input id="li-email" type="email" autocomplete="username" required></div>
+      <div class="form-row"><label for="li-password">Password</label><input id="li-password" type="password" autocomplete="current-password" required></div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;">Sign in</button>
+      <div class="auth-alt"><a class="linklike" id="forgot-link">Forgot password?</a> · <a class="linklike" id="show-invite">Have an invite code?</a></div>
+    </form>
+    <form id="invite-form" style="display:none;" autocomplete="on">
+      <p class="hint" style="margin-bottom:10px;">An admin gave you an invite code. Create your Back Office login here.</p>
+      <div class="form-row"><label for="iv-code">Invite code</label><input id="iv-code" autocomplete="off" placeholder="XXXXX-XXXXX" required></div>
+      <div class="form-row"><label for="iv-name">Your name</label><input id="iv-name" autocomplete="name" required></div>
+      <div class="form-row"><label for="iv-email">Email</label><input id="iv-email" type="email" autocomplete="username" required></div>
+      <div class="form-row"><label for="iv-password">Password (8+ characters)</label><input id="iv-password" type="password" autocomplete="new-password" minlength="8" required></div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;">Create my login</button>
+      <div class="auth-alt"><a class="linklike" id="show-login">← Back to sign in</a></div>
+    </form>
+    <div id="auth-msg" class="auth-msg" role="status" aria-live="polite"></div>
+    <a href="../frontoffice/" class="auth-link">Staff: go to the Front Office (counter) →</a>
+  </div>
+</div>
+
+<div id="app" style="display:none;">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div id="topbar">
+      <h1 id="topbar-title">Dashboard</h1>
+      <div class="actions" id="topbar-actions"></div>
+    </div>
+    <div id="content"></div>
+  </div>
+</div>
+<div id="toast-wrap"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
+<script>window.supabase || document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');</script>
+<script src="../config.js"></script>
+<script src="../shared/logic.js"></script>
+<script src="../shared/data.js"></script>
+<script src="../shared/supa.js"></script>
+<script src="../shared/import.js"></script>
+<script src="../shared/calendar.js"></script>
+<script src="./app.js"></script>
+<script src="./bo-extra.js"></script>
+</body>
+</html>

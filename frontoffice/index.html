@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Front Office — Cavite City Coffee Club</title>
+<meta name="description" content="Counter point of sale: sales, held orders, QR order queue, shifts and cash drawer. Keeps selling if the internet drops.">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#241209">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%9B%92%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/styles.css">
+<link rel="stylesheet" href="./pos-styles.css">
+</head>
+<body>
+<div id="fo-boot" class="pin-gate">
+  <div class="pin-card"><div class="pin-logo">☕</div><div class="boot-msg">Starting…</div><div class="boot-actions" style="margin-top:14px;"></div></div>
+</div>
+
+<div id="pair-screen" class="pin-gate" style="display:none;">
+  <div class="pin-card" style="width:380px;">
+    <div class="pin-logo">🔗</div>
+    <h2>Set up this counter</h2>
+    <p class="pin-sub">An admin makes a one-time pairing code in the <b>Back Office → Devices</b>. Type it here.</p>
+    <form id="pair-form" style="text-align:left;">
+      <div class="form-row"><label for="pair-code">Pairing code</label><input id="pair-code" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX" style="font-family:var(--font-mono);font-size:20px;letter-spacing:3px;text-align:center;"></div>
+      <div class="form-row"><label for="pair-name">Name for this device (optional)</label><input id="pair-name" placeholder="e.g. Front counter iPad"></div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;">Pair</button>
+    </form>
+    <div id="pair-msg" class="auth-msg" role="status" aria-live="polite"></div>
+    <a href="../backoffice/" class="pin-inventory-link">Back Office (admins) →</a>
+  </div>
+</div>
+
+<div id="pin-gate" class="pin-gate" style="display:none;">
+  <div class="pin-card">
+    <div class="pin-logo">☕</div>
+    <h2 id="pin-title">Enter your PIN</h2>
+    <p class="pin-sub" id="pin-sub">Sign in to start a shift</p>
+    <div class="pin-display" id="pin-display"></div>
+    <div class="pin-pad" id="pin-pad">
+      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+      <button data-k="clear" class="pin-alt">Clear</button><button data-k="0">0</button><button data-k="back" class="pin-alt" aria-label="Delete">⌫</button>
+    </div>
+    <button id="pin-enter" class="pin-enter">Enter</button>
+    <div id="pin-error" class="pin-error" role="status" aria-live="polite"></div>
+    <a href="../backoffice/" class="pin-inventory-link">Back Office (admins) →</a>
+  </div>
+</div>
+
+<div id="app" style="display:none;">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div id="topbar">
+      <h1 id="topbar-title">POS</h1>
+      <div class="actions" id="topbar-actions"></div>
+    </div>
+    <div id="content"></div>
+  </div>
+</div>
+<div id="toast-wrap"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
+<script>window.supabase || document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');</script>
+<script src="../config.js"></script>
+<script src="../shared/logic.js"></script>
+<script src="../shared/data.js"></script>
+<script src="../shared/supa.js"></script>
+<script src="../shared/calendar.js"></script>
+<script src="./pos-app.js"></script>
+<script src="./fo-extra.js"></script>
+</body>
+</html>

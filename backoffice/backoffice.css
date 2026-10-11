@@ -1,0 +1,31 @@
+/* Back Office additions on top of shared/styles.css */
+.center-screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--espresso-dark);padding:16px;z-index:400;overflow-y:auto;}
+.auth-card{background:var(--white);border-radius:18px;padding:30px 30px 24px;width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,.35);}
+.auth-logo{font-size:38px;text-align:center;}
+.auth-card h1{font-family:var(--font-display);font-size:24px;text-align:center;color:var(--espresso);margin-top:2px;}
+.auth-sub{text-align:center;color:var(--text-light);font-size:13.5px;margin:4px 0 18px;}
+.auth-alt{text-align:center;font-size:13px;margin-top:12px;color:var(--text-light);}
+.auth-msg{min-height:20px;margin-top:12px;font-size:13.5px;text-align:center;color:var(--green);}
+.auth-msg.err{color:var(--red);font-weight:600;}
+.auth-link{display:block;text-align:center;margin-top:16px;font-size:12.5px;color:var(--text-light);}
+.boot-msg{font-size:15px;color:var(--text);margin-top:8px;}
+
+.nav-group{padding:14px 20px 4px;font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--beige-dark);opacity:.7;font-weight:700;}
+#sidebar-foot .who{font-size:12.5px;color:var(--cream);margin-bottom:8px;font-weight:600;}
+#sidebar-foot .foot-actions{display:flex;justify-content:space-between;margin-top:10px;}
+#sidebar-foot .foot-link{color:var(--beige-dark);font-size:12px;cursor:pointer;text-decoration:none;}
+#sidebar-foot .foot-link:hover{color:var(--cream);text-decoration:underline;}
+
+.big-code{font-family:var(--font-mono);font-size:34px;font-weight:600;letter-spacing:4px;text-align:center;padding:16px;margin:12px 0;background:var(--beige);border-radius:12px;color:var(--espresso);user-select:all;}
+.chk{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;margin-right:14px;cursor:pointer;}
+.chk input{width:16px;height:16px;}
+.chk-row{display:flex;flex-wrap:wrap;gap:6px 0;margin-top:8px;}
+.mod-ed-group{background:var(--white);border-radius:10px;padding:10px;margin-top:10px;border:1px solid var(--beige-dark);}
+.mod-ed-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px;}
+.mod-ed-head .mg-name{flex:1;min-width:160px;padding:7px 10px;border:1.5px solid var(--beige-dark);border-radius:8px;}
+.mod-ed-group .ri-table input,.mod-ed-group .ri-table select{width:100%;}
+.text-red{color:var(--red);}
+@media(max-width:700px){
+  #topbar{padding:0 12px;} #content{padding:16px 14px 60px;}
+  .toolbar{flex-wrap:wrap;gap:10px;}
+}

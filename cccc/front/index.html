@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Front Office — Cavite City Coffee Club</title>
+<meta name="description" content="Counter POS for Cavite City Coffee Club: sales, QR orders, shifts.">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#241209">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%98%95%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/styles.css">
+<link rel="stylesheet" href="./front.css">
+</head>
+<body>
+<div id="boot-screen" class="auth-screen"><div class="auth-card"><div class="pin-logo">☕</div><p class="text-light">Starting the counter…</p></div></div>
+
+<div id="setup-screen" class="auth-screen" style="display:none;"></div>
+
+<div id="pin-gate" class="pin-gate" style="display:none;">
+  <div class="pin-card">
+    <div class="pin-logo" id="pin-logo">☕</div>
+    <h2 id="pin-title">Enter PIN</h2>
+    <p class="pin-sub" id="pin-sub">Sign in to start selling</p>
+    <div class="pin-display" id="pin-display"></div>
+    <div class="pin-pad" id="pin-pad">
+      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+      <button data-k="clear" class="pin-alt">Clear</button><button data-k="0">0</button><button data-k="back" class="pin-alt">⌫</button>
+    </div>
+    <button class="btn btn-primary" id="pin-enter" style="width:100%;margin-top:10px;justify-content:center;">Enter</button>
+    <div id="pin-error" class="pin-error"></div>
+    <div id="pin-foot" class="pin-foot"></div>
+  </div>
+</div>
+
+<div id="app" style="display:none;">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div id="offline-banner" class="offline-banner" style="display:none;"></div>
+    <div id="topbar">
+      <h1 id="topbar-title">Front Office</h1>
+      <div class="actions" id="topbar-actions"></div>
+    </div>
+    <div id="content"></div>
+  </div>
+</div>
+<div id="toast-wrap"></div>
+
+<script src="../shared/config.js"></script>
+<script src="../shared/cloud.js"></script>
+<script src="../shared/local.js"></script>
+<script src="../shared/ui.js"></script>
+<script src="../shared/logic.js"></script>
+<script src="./front.js"></script>
+</body>
+</html>
