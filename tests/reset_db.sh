@@ -1,10 +1,16 @@
 #!/bin/bash
-# Recreate the test database: Supabase stub + user's existing schema + 004 migration
+# Build a throw-away test database:
+#   Supabase stand-in (00) + reconstruction of the LIVE schema (01) + ONE 004 migration.
+# Usage: tests/reset_db.sh [path/to/migration.sql] [database-name]
+#   default migration: cccc/supabase/004_cccc_online_qr.sql   default database: cccc
 set -e
+DIR="$(cd "$(dirname "$0")" && pwd)"; REPO="$(dirname "$DIR")"
+MIG="${1:-$REPO/cccc/supabase/004_cccc_online_qr.sql}"
+DB="${2:-cccc}"
+"$DIR/start_pg.sh" >/dev/null
 P="psql -h /tmp -p 54329 -U postgres -v ON_ERROR_STOP=1 -q"
-psql -h /tmp -p 54329 -U postgres -q -c "drop database if exists cccc" -c "create database cccc" >/dev/null
-for r in anon authenticated service_role authenticator; do psql -h /tmp -p 54329 -U postgres -q -d postgres -c "do \$\$ begin if exists (select 1 from pg_roles where rolname='$r') then execute 'drop owned by $r cascade'; end if; end \$\$" >/dev/null 2>&1 || true; done
-$P -d cccc -c "do \$\$ begin if not exists (select 1 from pg_roles where rolname='anon') then null; end if; end \$\$" 
-psql -h /tmp -p 54329 -U postgres -q -d cccc -f sql/00_supabase_stub.sql 2>&1 | grep -v "already exists" || true
-$P -d cccc -f sql/01_existing_schema.sql
-$P -d cccc -f /home/claude/repo/cccc/supabase/004_cccc_online_qr.sql
+psql -h /tmp -p 54329 -U postgres -q -c "drop database if exists $DB" -c "create database $DB" >/dev/null
+psql -h /tmp -p 54329 -U postgres -q -d "$DB" -f "$DIR/sql/00_supabase_stub.sql" 2>&1 | grep -vE "already exists|already been granted|NOTICE" || true
+$P -d "$DB" -f "$DIR/sql/01_existing_schema.sql"
+$P -d "$DB" -f "$MIG"
+echo "test db '$DB' ready with $(basename "$MIG")"

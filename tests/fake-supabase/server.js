@@ -6,7 +6,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 
 const PORT = Number(process.env.PORT || 8787);
-const ROOT = '/home/claude/repo';
+const ROOT = path.resolve(__dirname, '..', '..');   // the repository root
 const ANON_KEY = 'test-anon-key';
 const storage = new Map();
 let requestLog = [];
