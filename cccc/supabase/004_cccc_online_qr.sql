@@ -15,6 +15,16 @@
 --   5. Replaces the old "anyone in the business can change anything" rules
 --      with: everyone in the business can READ, only admins can CHANGE.
 --      Counter sales go through one checked function (fo_sync).
+--   6. Security decisions of 2026-10-12:
+--      * Admin rights come ONLY from the owner's email login (profile role
+--        ADMIN). A staff PIN on a counter never gives admin rights.
+--      * Counters join only with a pairing code (no owner sign-in on a counter).
+--      * Refunds, voids and discounts must carry a manager approval token that
+--        the server checks; refunds can't exceed what is left of the sale.
+--      * Counters never see full customer phone numbers (only masked ones).
+--      * Answers that reveal whether a phone number is registered are
+--        rate-limited per login; wrong PINs lock the counter for longer
+--        and longer.
 -- =============================================================================
 begin;
 
@@ -53,6 +63,10 @@ create table if not exists public.staff_pins (
   updated_at timestamptz not null default now()
 );
 
+-- One row per PIN login on a counter. The app keeps the secret token; we only
+-- store its fingerprint (sha256), so a database leak can't be replayed.
+--   purpose LOGIN    = staff member signed in on the counter (16 hours)
+--   purpose OVERRIDE = one-time manager approval for a refund / void / discount
 create table if not exists public.staff_sessions (
   id uuid primary key default gen_random_uuid(),
   staff_id uuid not null references public.staff(id) on delete cascade,
@@ -64,8 +78,13 @@ create table if not exists public.staff_sessions (
   expires_at timestamptz not null,
   revoked_at timestamptz
 );
+-- When an OVERRIDE approval was spent, and on what (e.g. 'refund:<id>').
+-- A spent approval can never approve a second action.
+alter table public.staff_sessions add column if not exists used_at timestamptz;
+alter table public.staff_sessions add column if not exists used_for text;
 
--- Failed PIN / pairing / phone-relink attempts, for rate limiting.
+-- Failed PIN / pairing / phone-relink attempts (and counter phone look-ups),
+-- for rate limiting.
 create table if not exists public.auth_attempts (
   id bigint generated always as identity primary key,
   subject uuid not null,
@@ -293,30 +312,26 @@ end $$;
 -- 4. Who is calling? (owner / counter device / staff PIN session)
 -- -----------------------------------------------------------------------------
 -- Permission level of the caller: 3 = admin, 2 = manager, 1 = cashier, 0 = none.
---  * Owner's email login (profile role ADMIN)  -> 3
---  * Paired counter device (profile role DEVICE) -> the level of the staff member
---    whose PIN session token is sent in the x-staff-token header, else 0.
+-- It depends ONLY on the login's profile role:
+--  * Owner's email login (profile role ADMIN)    -> 3  (Back Office)
+--  * Old-style MANAGER / CASHIER email profiles  -> 2 / 1
+--  * Paired counter device (profile role DEVICE) -> 0, whatever staff PIN is
+--    entered on it. A staff PIN never gives admin rights; counter work goes
+--    through fo_sync(), which checks each action itself.
 create or replace function public.app_rank() returns integer
-language plpgsql stable security definer set search_path = public, extensions as $$
-declare v_role text; v_token text; v_rank integer;
-begin
-  select role into v_role from public.profiles where id = auth.uid();
-  if v_role is null then return 0; end if;
-  if v_role = 'ADMIN' then return 3; end if;
-  if v_role = 'MANAGER' then return 2; end if;
-  if v_role = 'CASHIER' then return 1; end if;
-  begin
-    v_token := nullif(current_setting('request.headers', true)::json->>'x-staff-token', '');
-  exception when others then v_token := null;
-  end;
-  if v_token is null then return 0; end if;
-  select case s.role when 'ADMIN' then 3 when 'MANAGER' then 2 when 'CASHIER' then 1 else 0 end
-    into v_rank
-  from public.staff_sessions ss join public.staff s on s.id = ss.staff_id
-  where ss.token_hash = encode(extensions.digest(v_token, 'sha256'), 'hex')
-    and ss.device_user_id = auth.uid() and ss.revoked_at is null and ss.expires_at > now() and s.active;
-  return coalesce(v_rank, 0);
-end $$;
+language sql stable security definer set search_path = public as $$
+  select coalesce((select case p.role when 'ADMIN' then 3 when 'MANAGER' then 2 when 'CASHIER' then 1 else 0 end
+                   from public.profiles p where p.id = auth.uid()), 0)
+$$;
+
+-- Left over from the live schema (001). Kept so nothing that still refers to it
+-- breaks, but now with a fixed search_path (a SECURITY DEFINER function without
+-- one could be tricked into using someone else's "profiles" table).
+create or replace function public.current_role_rank() returns integer
+language sql stable security definer set search_path = public as $$
+  select case (select p.role from public.profiles p where p.id = auth.uid())
+    when 'ADMIN' then 3 when 'MANAGER' then 2 when 'CASHIER' then 1 else 0 end
+$$;
 
 -- True only for the owner's own email login.
 create or replace function public.is_owner() returns boolean
@@ -334,6 +349,60 @@ returns boolean language sql stable security definer set search_path = public as
   select count(*) >= p_max from public.auth_attempts
   where subject = p_subject and kind = p_kind and not success and at > now() - p_window
 $$;
+
+-- Wrong-PIN lock for one counter login, getting longer the more wrong PINs:
+--    5 wrong in 15 minutes -> locked for  5 minutes after the last wrong PIN
+--   10 wrong in 1 hour     -> locked for 30 minutes after the last wrong PIN
+--   20 wrong in 24 hours   -> locked for  4 hours   after the last wrong PIN
+-- A correct PIN does NOT reset the count (otherwise someone who knows one PIN
+-- could keep guessing another). Returns when the lock ends, or null if not locked.
+create or replace function public._pin_locked_until(p_subject uuid) returns timestamptz
+language sql stable security definer set search_path = public as $$
+  select case when x.until > now() then x.until end
+  from (
+    select greatest(
+             case when count(*) >= 20 then max(at) + interval '4 hours' end,
+             case when count(*) filter (where at > now() - interval '1 hour') >= 10 then max(at) + interval '30 minutes' end,
+             case when count(*) filter (where at > now() - interval '15 minutes') >= 5 then max(at) + interval '5 minutes' end
+           ) as until
+    from public.auth_attempts
+    where subject = p_subject and kind = 'PIN' and not success and at > now() - interval '24 hours'
+  ) x
+$$;
+
+-- How a COUNTER sees a customer's mobile number: local format with the middle
+-- hidden, e.g. +639171234567 -> '0917 ••• 4567'. Only the owner sees full numbers.
+create or replace function public._mask_phone(p text) returns text
+language sql immutable as $$
+  select case
+    when p is null then null
+    when p ~ '^\+639\d{9}$' then '0' || substr(p, 4, 3) || ' ••• ' || right(p, 4)
+    else '••• ' || right(p, 2)
+  end
+$$;
+
+-- A customer row as a counter may see it (phone masked unless the caller is the owner).
+create or replace function public._customer_for_staff(p_c public.customers, p_owner boolean) returns jsonb
+language sql immutable as $$
+  select case when p_c.id is null then null
+    else to_jsonb(p_c) || jsonb_build_object('phone', case when p_owner then p_c.phone else public._mask_phone(p_c.phone) end,
+                                             'phone_masked', not p_owner and p_c.phone is not null) end
+$$;
+
+-- Counters may look up a customer by a FULL mobile number (e.g. at the till).
+-- Each such look-up is counted, max 60 per hour per counter login, so nobody can
+-- guess the hidden digits of a masked number by trying numbers one by one.
+-- Returns true when the look-up is allowed (and records it).
+create or replace function public._phone_lookup_allowed(p_subject uuid) returns boolean
+language plpgsql volatile security definer set search_path = public as $$
+begin
+  if (select count(*) from public.auth_attempts
+      where subject = p_subject and kind = 'PHONE_LOOKUP' and at > now() - interval '1 hour') >= 60 then
+    return false;
+  end if;
+  insert into public.auth_attempts(subject, kind, success) values (p_subject, 'PHONE_LOOKUP', true);
+  return true;
+end $$;
 
 -- Philippine mobile numbers -> +639XXXXXXXXX (returns null when not valid).
 create or replace function public._norm_phone(p text) returns text
@@ -433,9 +502,15 @@ begin
   end loop;
 
   foreach t in array std_tables loop
-    -- Everyone who belongs to the business (owner, counter devices) can read.
-    execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()))', t || '_read', t);
-    -- Changes through the API need admin level (owner login, or an ADMIN PIN on a counter).
+    if t = 'customers' then
+      -- Customer records hold full phone numbers: only the owner's login reads them
+      -- directly. Counters use search_customers() / fo_add_customer(), which mask numbers.
+      execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3)', t || '_read', t);
+    else
+      -- Everyone who belongs to the business (owner, counter devices) can read.
+      execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()))', t || '_read', t);
+    end if;
+    -- Changes through the API need admin level (the owner's email login only).
     -- Counter sales/shifts do NOT use these: they go through fo_sync() below.
     if t not in ('sync_operations') then
       execute format('create policy %I on public.%I for insert to authenticated with check (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3)', t || '_admin_insert', t);
@@ -484,12 +559,17 @@ $$;
 -- Insert-or-update ONE row from JSON. Only columns present in the JSON are written,
 -- so missing columns keep their defaults / current values. Runs with the CALLER's
 -- rights (Row Level Security applies), except when called from fo_sync.
+-- p_conflict = what to do when a row with the same key already exists:
+--   'update'  -> overwrite it            'nothing' -> leave it as it is
+--   'error'   -> refuse (FORBIDDEN_ROW). Used for a sale's / refund's child rows,
+--                so they can never overwrite a row that belongs to something else.
 create or replace function public._write_row(p_table text, p_row jsonb, p_key text default 'id',
   p_conflict text default 'update', p_biz uuid default null)
 returns void language plpgsql security invoker set search_path = public as $$
 declare v_cols text; v_set text; v_owner uuid;
 begin
   if not (p_table = any(public._writable_tables())) then raise exception 'TABLE_NOT_ALLOWED: %', p_table; end if;
+  if p_conflict not in ('update', 'nothing', 'error') then raise exception 'BAD_CONFLICT_MODE'; end if;
   if p_biz is not null and p_key = 'id' and (p_row ? 'id') then
     execute format('select business_id from public.%I where id = $1', p_table) into v_owner using (p_row->>'id')::uuid;
     if v_owner is not null and v_owner <> p_biz then raise exception 'FORBIDDEN_ROW'; end if;
@@ -502,6 +582,17 @@ begin
   where a.attrelid = format('public.%I', p_table)::regclass and a.attnum > 0 and not a.attisdropped
     and a.attgenerated = '' and p_row ? a.attname::text;
   if v_cols is null then return; end if;
+  if p_conflict = 'error' then
+    -- plain insert: an id that already exists anywhere is refused
+    begin
+      execute format('insert into public.%1$I (%2$s) select %2$s from jsonb_populate_record(null::public.%1$I, $1)',
+                     p_table, v_cols)
+        using p_row;
+    exception when unique_violation then
+      raise exception 'FORBIDDEN_ROW';
+    end;
+    return;
+  end if;
   execute format('insert into public.%1$I (%2$s) select %2$s from jsonb_populate_record(null::public.%1$I, $1) on conflict (%3$I) do %4$s',
                  p_table, v_cols, p_key,
                  case when p_conflict = 'nothing' or v_set is null then 'nothing' else 'update set ' || v_set end)
@@ -584,19 +675,30 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- PIN login. Returns {token, expires_at, staff:{id,name,role}} or {error:'...'}.
--- p_purpose 'OVERRIDE' = short manager approval (10 min); p_min_role = required level.
+--   p_purpose 'LOGIN'    = staff member signs in on this counter (16 hours).
+--   p_purpose 'OVERRIDE' = one-time manager approval for ONE refund / void /
+--                          discount (needs a MANAGER or ADMIN PIN). fo_sync()
+--                          accepts it for up to 24 hours, once.
+--   p_min_role = lowest role allowed (e.g. 'MANAGER').
+-- Too many wrong PINs: {error:'TOO_MANY_ATTEMPTS', locked_until:<time>}.
 create or replace function public.staff_pin_login(p_pin text, p_purpose text default 'LOGIN', p_min_role text default null)
 returns jsonb language plpgsql volatile security definer set search_path = public, extensions as $$
 declare
   v_uid uuid := auth.uid();
   v_biz uuid := public.current_business_id();
-  s record; v_id uuid; v_name text; v_role text; v_token text; v_ttl interval;
+  v_purpose text := upper(coalesce(nullif(btrim(p_purpose), ''), 'LOGIN'));
+  v_min_role text := upper(coalesce(nullif(btrim(p_min_role), ''), 'CASHIER'));
+  s record; v_id uuid; v_name text; v_role text; v_token text; v_ttl interval; v_locked timestamptz;
 begin
   if v_uid is null or v_biz is null then return jsonb_build_object('error', 'NOT_A_MEMBER'); end if;
-  if p_pin is null or p_pin !~ '^\d{4,6}$' then return jsonb_build_object('error', 'WRONG_PIN'); end if;
-  if public._too_many_attempts(v_uid, 'PIN', 5, interval '5 minutes') then
-    return jsonb_build_object('error', 'TOO_MANY_ATTEMPTS');
+  if v_purpose not in ('LOGIN', 'OVERRIDE') then return jsonb_build_object('error', 'BAD_PURPOSE'); end if;
+  -- an approval always needs at least a manager
+  if v_purpose = 'OVERRIDE' and public._role_rank(v_min_role) < 2 then v_min_role := 'MANAGER'; end if;
+  v_locked := public._pin_locked_until(v_uid);
+  if v_locked is not null then
+    return jsonb_build_object('error', 'TOO_MANY_ATTEMPTS', 'locked_until', v_locked);
   end if;
+  if p_pin is null or p_pin !~ '^\d{4,6}$' then return jsonb_build_object('error', 'WRONG_PIN'); end if;
   for s in
     select st.id, st.name, st.role, sp.pin_hash, sp.legacy_sha256
     from public.staff st join public.staff_pins sp on sp.staff_id = st.id
@@ -614,14 +716,20 @@ begin
   end loop;
   insert into public.auth_attempts(subject, kind, success) values (v_uid, 'PIN', v_id is not null);
   delete from public.auth_attempts where at < now() - interval '2 days';
-  if v_id is null then return jsonb_build_object('error', 'WRONG_PIN'); end if;
-  if public._role_rank(v_role) < public._role_rank(coalesce(p_min_role, 'CASHIER')) then
+  if v_id is null then
+    v_locked := public._pin_locked_until(v_uid);
+    if v_locked is not null then
+      return jsonb_build_object('error', 'TOO_MANY_ATTEMPTS', 'locked_until', v_locked);
+    end if;
+    return jsonb_build_object('error', 'WRONG_PIN');
+  end if;
+  if public._role_rank(v_role) < public._role_rank(v_min_role) then
     return jsonb_build_object('error', 'ROLE_TOO_LOW', 'staff', jsonb_build_object('id', v_id, 'name', v_name, 'role', v_role));
   end if;
   v_token := encode(gen_random_bytes(32), 'hex');
-  v_ttl := case when p_purpose = 'OVERRIDE' then interval '10 minutes' else interval '16 hours' end;
+  v_ttl := case when v_purpose = 'OVERRIDE' then interval '10 minutes' else interval '16 hours' end;
   insert into public.staff_sessions(staff_id, business_id, device_user_id, token_hash, purpose, expires_at)
-    values (v_id, v_biz, v_uid, encode(digest(v_token, 'sha256'), 'hex'), coalesce(p_purpose, 'LOGIN'), now() + v_ttl);
+    values (v_id, v_biz, v_uid, encode(digest(v_token, 'sha256'), 'hex'), v_purpose, now() + v_ttl);
   delete from public.staff_sessions where expires_at < now() - interval '2 days';
   return jsonb_build_object('token', v_token, 'expires_at', now() + v_ttl,
     'staff', jsonb_build_object('id', v_id, 'name', v_name, 'role', v_role));
@@ -751,25 +859,10 @@ begin
   return jsonb_build_object('device', to_jsonb(v_dev));
 end $$;
 
--- The owner can also run the counter from their own (email) login, e.g. a laptop.
-create or replace function public.fo_register_device(p_device_key text, p_device_name text default null) returns jsonb
-language plpgsql volatile security definer set search_path = public as $$
-declare v_biz uuid := public.current_business_id(); v_dev public.devices%rowtype; v_store uuid;
-begin
-  if v_biz is null or not public.is_owner() then raise exception 'OWNER_ONLY'; end if;
-  if coalesce(length(p_device_key), 0) < 16 then raise exception 'BAD_DEVICE_KEY'; end if;
-  select * into v_dev from public.devices where device_key = p_device_key;
-  if found then
-    if v_dev.business_id <> v_biz then raise exception 'DEVICE_KEY_TAKEN'; end if;
-    update public.devices set active = true, last_seen_at = now() where id = v_dev.id returning * into v_dev;
-  else
-    select id into v_store from public.stores where business_id = v_biz order by created_at limit 1;
-    insert into public.devices(business_id, store_id, device_tag, device_name, device_type, device_key, active, paired_at, last_seen_at)
-      values (v_biz, v_store, public._next_device_tag(v_biz), coalesce(public._clean_name(p_device_name), 'Owner device'), 'COUNTER', p_device_key, true, now(), now())
-      returning * into v_dev;
-  end if;
-  return to_jsonb(v_dev);
-end $$;
+-- Counters join ONLY with a pairing code (security decision 1). The old
+-- "owner signs in on a counter" function is removed; drop it if an earlier
+-- test copy of this script created it.
+drop function if exists public.fo_register_device(text, text);
 
 -- Remove a counter: it immediately loses all access.
 create or replace function public.revoke_device(p_device_id uuid) returns void
@@ -784,6 +877,21 @@ begin
     delete from public.staff_sessions where device_user_id = v_dev.auth_user_id;
     delete from public.profiles where id = v_dev.auth_user_id and role = 'DEVICE';
   end if;
+end $$;
+
+-- Owner only: lift a wrong-PIN lock on a counter right away (e.g. after someone
+-- kept typing wrong PINs and the counter is locked for hours).
+-- Returns {ok:true, cleared:<number of wrong PINs forgotten>} or {error:'...'}.
+create or replace function public.unlock_device_pin(p_device_id uuid) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare v_dev public.devices%rowtype; v_n integer;
+begin
+  if public.app_rank() < 3 then return jsonb_build_object('error', 'ADMIN_ONLY'); end if;
+  select * into v_dev from public.devices where id = p_device_id and business_id = public.current_business_id();
+  if not found then return jsonb_build_object('error', 'UNKNOWN_DEVICE'); end if;
+  delete from public.auth_attempts where subject = v_dev.auth_user_id and kind = 'PIN' and not success;
+  get diagnostics v_n = row_count;
+  return jsonb_build_object('ok', true, 'cleared', v_n);
 end $$;
 
 -- -----------------------------------------------------------------------------
@@ -895,17 +1003,48 @@ begin
   );
 end $$;
 
+-- Find customers by nickname or mobile number. Returns a list of customer rows.
+--  * Owner (Back Office login): search by name or ANY part of the number;
+--    full numbers are returned.
+--  * Counter (DEVICE login): search by name, by the last 3-4 digits, or by the
+--    FULL number (each full-number look-up is counted, max 60 per hour). Numbers
+--    come back masked, e.g. phone = '0917 ••• 4567' with phone_masked = true.
+--    (Searching by middle digits is not allowed: it would reveal hidden digits.)
+-- VOLATILE because counting a look-up writes a row.
 create or replace function public.search_customers(p_q text default '', p_limit integer default 50) returns jsonb
-language sql stable security invoker set search_path = public as $$
-  select coalesce(jsonb_agg(to_jsonb(c) order by c.last_seen_at desc), '[]'::jsonb) from (
-    select * from public.customers
-    where business_id = public.current_business_id() and merged_into is null
-      and (coalesce(p_q, '') = '' or nickname ilike '%' || p_q || '%'
-           or (length(regexp_replace(p_q, '\D', '', 'g')) >= 3 and phone like '%' || regexp_replace(p_q, '\D', '', 'g') || '%'))
-    order by last_seen_at desc
-    limit least(greatest(coalesce(p_limit, 50), 1), 500)
-  ) c
-$$;
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  v_biz uuid := public.current_business_id();
+  v_role text;
+  v_owner boolean := public.is_owner();
+  v_q text := btrim(coalesce(p_q, ''));
+  v_digits text := regexp_replace(coalesce(p_q, ''), '\D', '', 'g');
+  v_full text := public._norm_phone(p_q);
+  v_lim integer := least(greatest(coalesce(p_limit, 50), 1), 500);
+begin
+  if v_biz is null then raise exception 'NOT_A_MEMBER'; end if;
+  select role into v_role from public.profiles where id = auth.uid();
+  if coalesce(v_role, '') not in ('DEVICE', 'ADMIN') then raise exception 'NOT_ALLOWED'; end if;
+  if not v_owner and v_full is not null and not public._phone_lookup_allowed(auth.uid()) then
+    raise exception 'TOO_MANY_ATTEMPTS';
+  end if;
+  return coalesce((
+    select jsonb_agg(public._customer_for_staff(c.x, v_owner) order by (c.x).last_seen_at desc)
+    from (
+      select x from public.customers x
+      where x.business_id = v_biz and x.merged_into is null
+        and (v_q = ''
+             or x.nickname ilike '%' || v_q || '%'
+             or (v_full is not null and x.phone = v_full)
+             -- owner: any part of the number (+63… or 09… style)
+             or (v_owner and length(v_digits) >= 3
+                 and (x.phone like '%' || v_digits || '%' or ('0' || substr(x.phone, 4)) like '%' || v_digits || '%'))
+             -- counter: only the last 3-4 digits (already visible in the masked number)
+             or (not v_owner and length(v_digits) between 3 and 4 and right(x.phone, length(v_digits)) = v_digits))
+      order by x.last_seen_at desc
+      limit v_lim
+    ) c), '[]'::jsonb);
+end $$;
 
 -- -----------------------------------------------------------------------------
 -- 12. Counter sync: every counter write goes through here (works for queued offline sales)
@@ -919,12 +1058,74 @@ begin
   if public._role_rank(v_role) < p_min then raise exception 'ROLE_TOO_LOW'; end if;
 end $$;
 
+-- Checks the manager approval sent with a refund / void / discount and returns
+-- the approving staff member. Called only from fo_sync (through _fo_apply).
+--   p_approver = the staff id the counter says approved it
+--                (refund.approved_by or sale.discount_approved_by)
+--   p_token    = the approval token sent with the action
+-- The token must be a PIN session of THAT staff member, who must be an active
+-- MANAGER or ADMIN of this shop. It must have been issued to THIS counter login,
+-- at most 24 hours ago (uploads can be late), and not cancelled. Two kinds:
+--   * OVERRIDE token (a manager typed their PIN to approve): works ONCE. It is
+--     marked used here, so it can never approve a second action.
+--   * LOGIN token of the approver (a manager approving their own action while
+--     signed in on this counter): not used up.
+-- Errors: APPROVAL_REQUIRED (no approver or no token sent), UNKNOWN_STAFF,
+--         ROLE_TOO_LOW, APPROVAL_INVALID (wrong / used / too old / cancelled /
+--         from another counter / approver switched off).
+create or replace function public._use_approval(p_biz uuid, p_device_user uuid, p_approver uuid,
+  p_token text, p_used_for text)
+returns public.staff language plpgsql volatile security definer set search_path = public, extensions as $$
+declare v_s public.staff%rowtype; v_sess public.staff_sessions%rowtype;
+begin
+  if p_approver is null then raise exception 'APPROVAL_REQUIRED'; end if;
+  select * into v_s from public.staff where id = p_approver and business_id = p_biz;
+  if not found then raise exception 'UNKNOWN_STAFF'; end if;
+  if public._role_rank(v_s.role) < 2 then raise exception 'ROLE_TOO_LOW'; end if;
+  if coalesce(btrim(p_token), '') = '' then raise exception 'APPROVAL_REQUIRED'; end if;
+  -- "for update" makes two uploads that use the same token wait for each other,
+  -- so a single-use token can't be spent twice at the same moment.
+  select * into v_sess from public.staff_sessions
+    where token_hash = encode(extensions.digest(p_token, 'sha256'), 'hex')
+    for update;
+  if not found
+     or v_sess.staff_id <> v_s.id
+     or v_sess.business_id <> p_biz
+     or v_sess.device_user_id is distinct from p_device_user
+     or v_sess.revoked_at is not null
+     or v_sess.created_at < now() - interval '24 hours'
+     or not v_s.active
+     or v_sess.purpose not in ('LOGIN', 'OVERRIDE')
+     or (v_sess.purpose = 'OVERRIDE' and v_sess.used_at is not null) then
+    raise exception 'APPROVAL_INVALID';
+  end if;
+  if v_sess.purpose = 'OVERRIDE' then
+    update public.staff_sessions set used_at = now(), used_for = left(p_used_for, 80) where id = v_sess.id;
+  end if;
+  return v_s;
+end $$;
+
+-- Stock lines from a counter must use one of THIS shop's ingredients.
+create or replace function public._require_ingredient(p_biz uuid, p_line jsonb) returns void
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if not exists (select 1 from public.ingredients
+                 where id = nullif(p_line->>'ingredient_id', '')::uuid and business_id = p_biz) then
+    raise exception 'UNKNOWN_INGREDIENT';
+  end if;
+end $$;
+
+-- Applies ONE counter action. Any error undoes everything this action did
+-- (fo_sync runs each action in its own savepoint).
 create or replace function public._fo_apply(p_biz uuid, p_dev public.devices, p_type text, p_d jsonb) returns text
 language plpgsql volatile security definer set search_path = public as $$
 declare
   v_sale jsonb; v_id uuid; v_old text; v_r jsonb; v_cust uuid; v_qr uuid; v_amount numeric;
   v_shift public.shifts%rowtype; v_ref jsonb; v_status text;
+  v_appr public.staff; v_sale_row public.sales%rowtype; v_prev numeric; v_type text; v_new_status text;
 begin
+  -- fo_sync only lets a paired counter call us with its own device row
+  if p_dev.auth_user_id is distinct from auth.uid() then raise exception 'DEVICE_MISMATCH'; end if;
   case p_type
   when 'shift_open' then
     perform public._require_staff(p_biz, (p_d->>'cashier_id')::uuid, 1);
@@ -951,32 +1152,48 @@ begin
     return 'ok';
 
   when 'sale' then
+    -- data = {sale:{...}, items:[...], payment:{...}, inventory:[...],
+    --         discount_approval_token: '...' (when the sale has a discount)}
     v_sale := p_d->'sale';
+    if jsonb_typeof(v_sale) is distinct from 'object' then raise exception 'BAD_SALE'; end if;
     v_id := (v_sale->>'id')::uuid;
+    if v_id is null then raise exception 'BAD_SALE'; end if;
     v_status := v_sale->>'status';
     if v_status is null or v_status not in ('HELD','COMPLETED') then raise exception 'BAD_SALE_STATUS'; end if;
-    select status into v_old from public.sales where id = v_id and business_id = p_biz;
+    select status into v_old from public.sales where id = v_id and business_id = p_biz for update;
     if v_old in ('COMPLETED','VOIDED','REFUNDED','PARTIALLY_REFUNDED') then return 'skipped'; end if;
     perform public._require_staff(p_biz, (v_sale->>'cashier_id')::uuid, 1);
+    -- A finished sale with a discount needs a manager approval that the server checks.
     if v_status = 'COMPLETED' and coalesce((v_sale->>'discount_amount')::numeric, 0) > 0 then
-      perform public._require_staff(p_biz, (v_sale->>'discount_approved_by')::uuid, 2);
+      v_appr := public._use_approval(p_biz, p_dev.auth_user_id, nullif(v_sale->>'discount_approved_by', '')::uuid,
+                                     p_d->>'discount_approval_token', 'discount:' || v_id);
+      v_sale := v_sale || jsonb_build_object('discount_approved_by', v_appr.id, 'discount_approved_by_name', v_appr.name);
+    end if;
+    -- A customer link must point at one of THIS shop's customers (else it is dropped).
+    v_cust := nullif(v_sale->>'customer_id', '')::uuid;
+    if v_cust is not null and not exists (select 1 from public.customers where id = v_cust and business_id = p_biz) then
+      v_sale := v_sale || jsonb_build_object('customer_id', null);
     end if;
     perform public._write_row('sales', v_sale || jsonb_build_object('business_id', p_biz, 'device_id', p_dev.id,
       'store_id', p_dev.store_id), 'id', 'update', p_biz);
+    -- Replace THIS sale's own child rows. New child rows are only ever INSERTED:
+    -- an id that already exists anywhere (another sale, a refund...) makes the
+    -- whole action fail with FORBIDDEN_ROW, so nothing else can be overwritten.
     delete from public.sale_items where sale_id = v_id;
     for v_r in select value from jsonb_array_elements(coalesce(p_d->'items', '[]'::jsonb)) loop
-      perform public._write_row('sale_items', v_r || jsonb_build_object('business_id', p_biz, 'sale_id', v_id), 'id', 'update', p_biz);
+      perform public._write_row('sale_items', v_r || jsonb_build_object('business_id', p_biz, 'sale_id', v_id), 'id', 'error', p_biz);
     end loop;
     delete from public.payments where sale_id = v_id;
     if jsonb_typeof(p_d->'payment') = 'object' then
-      perform public._write_row('payments', (p_d->'payment') || jsonb_build_object('business_id', p_biz, 'sale_id', v_id), 'id', 'update', p_biz);
+      perform public._write_row('payments', (p_d->'payment') || jsonb_build_object('business_id', p_biz, 'sale_id', v_id), 'id', 'error', p_biz);
     end if;
     delete from public.inventory_transactions
       where business_id = p_biz and reference_id = v_id::text and transaction_type = 'SALE_USAGE';
     if v_status = 'COMPLETED' then
       for v_r in select value from jsonb_array_elements(coalesce(p_d->'inventory', '[]'::jsonb)) loop
+        perform public._require_ingredient(p_biz, v_r);
         perform public._write_row('inventory_transactions', v_r || jsonb_build_object('business_id', p_biz,
-          'reference_id', v_id::text, 'transaction_type', 'SALE_USAGE'), 'id', 'update', p_biz);
+          'reference_id', v_id::text, 'transaction_type', 'SALE_USAGE'), 'id', 'error', p_biz);
       end loop;
       v_qr := nullif(v_sale->>'qr_order_id', '')::uuid;
       if v_qr is not null then
@@ -1008,27 +1225,65 @@ begin
     return 'skipped';
 
   when 'refund' then
+    -- data = {refund:{id, sale_id, type, amount, approved_by, ...}, inventory:[...],
+    --         approval_token: '...'}   (sale_status is worked out here, not taken from the counter)
     v_ref := p_d->'refund';
+    if jsonb_typeof(v_ref) is distinct from 'object' then raise exception 'BAD_REFUND'; end if;
     v_id := (v_ref->>'id')::uuid;
+    if v_id is null then raise exception 'BAD_REFUND'; end if;
     if exists (select 1 from public.refunds where id = v_id) then return 'skipped'; end if;
-    perform public._require_staff(p_biz, (v_ref->>'approved_by')::uuid, 2);
-    select status, customer_id into v_old, v_cust from public.sales where id = (v_ref->>'sale_id')::uuid and business_id = p_biz;
-    if v_old is null then raise exception 'SALE_NOT_FOUND'; end if;
-    if v_old = 'VOIDED' then return 'skipped'; end if;
-    perform public._write_row('refunds', v_ref || jsonb_build_object('business_id', p_biz), 'id', 'nothing', p_biz);
+    -- Lock the sale: two refunds of the same sale are then checked one after the other.
+    select * into v_sale_row from public.sales where id = (v_ref->>'sale_id')::uuid and business_id = p_biz for update;
+    if not found then raise exception 'SALE_NOT_FOUND'; end if;
+    if v_sale_row.status = 'VOIDED' then return 'skipped'; end if;
+    if v_sale_row.status not in ('COMPLETED','PARTIALLY_REFUNDED') then raise exception 'SALE_NOT_REFUNDABLE'; end if;
+    v_cust := v_sale_row.customer_id;
+    v_type := v_ref->>'type';
+    if v_type is null or v_type not in ('VOID','FULL_REFUND','PARTIAL_REFUND') then raise exception 'BAD_REFUND_TYPE'; end if;
+    -- Manager approval, checked by the server (and used up if it is a one-time token).
+    v_appr := public._use_approval(p_biz, p_dev.auth_user_id, nullif(v_ref->>'approved_by', '')::uuid,
+                                   p_d->>'approval_token', 'refund:' || v_id);
+    -- Money cap: no more than what is left of the sale (1 centavo rounding allowed).
+    v_amount := (v_ref->>'amount')::numeric;
+    if v_amount is null or v_amount < 0 then raise exception 'BAD_AMOUNT'; end if;
+    select coalesce(sum(amount), 0) into v_prev from public.refunds where sale_id = v_sale_row.id;
+    if v_amount > coalesce(v_sale_row.grand_total, 0) - v_prev + 0.01 then raise exception 'REFUND_TOO_LARGE'; end if;
+    perform public._write_row('refunds', v_ref || jsonb_build_object('business_id', p_biz, 'sale_id', v_sale_row.id,
+      'amount', v_amount, 'approved_by', v_appr.id, 'approved_by_name', v_appr.name), 'id', 'error', p_biz);
+    -- Stock put back: inserted only (never overwrites another row) ...
     for v_r in select value from jsonb_array_elements(coalesce(p_d->'inventory', '[]'::jsonb)) loop
+      perform public._require_ingredient(p_biz, v_r);
       perform public._write_row('inventory_transactions', v_r || jsonb_build_object('business_id', p_biz,
-        'reference_id', v_id::text, 'transaction_type', 'SALE_REVERSAL'), 'id', 'update', p_biz);
+        'reference_id', v_id::text, 'transaction_type', 'SALE_REVERSAL'), 'id', 'error', p_biz);
     end loop;
-    if (p_d->>'sale_status') not in ('VOIDED','REFUNDED','PARTIALLY_REFUNDED') then raise exception 'BAD_SALE_STATUS'; end if;
-    update public.sales set status = p_d->>'sale_status', updated_at = now() where id = (v_ref->>'sale_id')::uuid;
+    -- ... and, per ingredient, all refunds of this sale together can't put back
+    -- more than this sale took out.
+    if exists (
+      select 1
+      from (select it.ingredient_id, sum(abs(it.quantity)) as put_back
+            from public.inventory_transactions it
+            join public.refunds r on it.reference_id = r.id::text
+            where r.sale_id = v_sale_row.id and it.business_id = p_biz and it.transaction_type = 'SALE_REVERSAL'
+            group by it.ingredient_id) b
+      left join (select ingredient_id, sum(abs(quantity)) as taken
+                 from public.inventory_transactions
+                 where business_id = p_biz and reference_id = v_sale_row.id::text and transaction_type = 'SALE_USAGE'
+                 group by ingredient_id) s on s.ingredient_id = b.ingredient_id
+      where b.put_back > coalesce(s.taken, 0) + 0.001) then
+      raise exception 'RETURN_TOO_LARGE';
+    end if;
+    -- New status of the sale, from ALL its refunds: VOID -> VOIDED; refunded in
+    -- full -> REFUNDED; otherwise PARTIALLY_REFUNDED.
+    v_new_status := case when v_type = 'VOID' then 'VOIDED'
+                         when v_prev + v_amount >= coalesce(v_sale_row.grand_total, 0) - 0.01 then 'REFUNDED'
+                         else 'PARTIALLY_REFUNDED' end;
+    update public.sales set status = v_new_status, updated_at = now() where id = v_sale_row.id;
     if v_cust is not null then
-      v_amount := coalesce((v_ref->>'amount')::numeric, 0);
       update public.customers
         set total_spent = greatest(0, total_spent - v_amount),
-            visit_count = case when (v_ref->>'type') in ('VOID','FULL_REFUND') then greatest(0, visit_count - 1) else visit_count end,
+            visit_count = case when v_type in ('VOID','FULL_REFUND') then greatest(0, visit_count - 1) else visit_count end,
             updated_at = now()
-        where id = v_cust;
+        where id = v_cust and business_id = p_biz;
     end if;
     return 'ok';
 
@@ -1048,6 +1303,9 @@ end $$;
 
 -- ops = [{op_id, type, data}, ...] in the order they happened on the counter.
 -- Returns one result per op: ok | duplicate | skipped | error (with message).
+-- Only a PAIRED COUNTER (DEVICE login) may call this, and only with its own device key.
+-- Each op is applied on its own: an op that fails leaves no trace (its approval
+-- token is not used up either) and the next ops still run.
 create or replace function public.fo_sync(p_device_key text, p_ops jsonb) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare
@@ -1059,10 +1317,10 @@ declare
 begin
   if v_uid is null or v_biz is null then raise exception 'NOT_A_MEMBER'; end if;
   select role into v_role from public.profiles where id = v_uid;
-  if v_role not in ('DEVICE','ADMIN') then raise exception 'NOT_ALLOWED'; end if;
+  if v_role is distinct from 'DEVICE' then raise exception 'NOT_ALLOWED'; end if;
   select * into v_dev from public.devices where device_key = p_device_key and business_id = v_biz;
   if not found or not v_dev.active then raise exception 'DEVICE_NOT_REGISTERED'; end if;
-  if v_role = 'DEVICE' and v_dev.auth_user_id is distinct from v_uid then raise exception 'DEVICE_MISMATCH'; end if;
+  if v_dev.auth_user_id is distinct from v_uid then raise exception 'DEVICE_MISMATCH'; end if;
   update public.devices set last_seen_at = now() where id = v_dev.id;
 
   for v_op in select value from jsonb_array_elements(coalesce(p_ops, '[]'::jsonb)) loop
@@ -1087,31 +1345,42 @@ begin
 end $$;
 
 -- Staff adds a walk-in customer at the counter (or finds the existing one by phone).
+-- Callers: a paired counter (DEVICE) or the owner. Returns {customer:{...}} or
+-- {customer:{...}, existing:true}; on a counter the phone comes back masked
+-- ('0917 ••• 4567', phone_masked = true). Look-ups by number are counted
+-- (max 60 per hour per counter) -> {error:'TOO_MANY_ATTEMPTS'}.
 create or replace function public.fo_add_customer(p_nickname text, p_phone text default null) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
-declare v_biz uuid := public.current_business_id(); v_name text := public._clean_name(p_nickname); v_phone text; v_c public.customers%rowtype;
+declare
+  v_biz uuid := public.current_business_id(); v_name text := public._clean_name(p_nickname); v_phone text;
+  v_c public.customers%rowtype; v_role text; v_owner boolean := public.is_owner();
 begin
   if v_biz is null then raise exception 'NOT_A_MEMBER'; end if;
+  select role into v_role from public.profiles where id = auth.uid();
+  if coalesce(v_role, '') not in ('DEVICE', 'ADMIN') then raise exception 'NOT_ALLOWED'; end if;
   if v_name is null then return jsonb_build_object('error', 'NAME_REQUIRED'); end if;
   if coalesce(btrim(p_phone), '') <> '' then
     v_phone := public._norm_phone(p_phone);
     if v_phone is null then return jsonb_build_object('error', 'BAD_PHONE'); end if;
+    if not v_owner and not public._phone_lookup_allowed(auth.uid()) then
+      return jsonb_build_object('error', 'TOO_MANY_ATTEMPTS');
+    end if;
     select * into v_c from public.customers where business_id = v_biz and phone = v_phone and merged_into is null;
-    if found then return jsonb_build_object('customer', to_jsonb(v_c), 'existing', true); end if;
+    if found then return jsonb_build_object('customer', public._customer_for_staff(v_c, v_owner), 'existing', true); end if;
   end if;
   insert into public.customers(business_id, nickname, phone, source, consent_at)
     values (v_biz, v_name, v_phone, 'COUNTER', now()) returning * into v_c;
-  return jsonb_build_object('customer', to_jsonb(v_c));
+  return jsonb_build_object('customer', public._customer_for_staff(v_c, v_owner));
 end $$;
 
--- QR order status changes from the counter.
+-- QR order status changes from the counter (paired counter, or the owner).
 create or replace function public.qr_update_order(p_order_id uuid, p_action text, p_staff_name text default null, p_reason text default null)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare v_biz uuid := public.current_business_id(); v_o public.qr_orders%rowtype; v_role text;
 begin
   if v_biz is null then raise exception 'NOT_A_MEMBER'; end if;
   select role into v_role from public.profiles where id = auth.uid();
-  if v_role not in ('DEVICE','ADMIN') then raise exception 'NOT_ALLOWED'; end if;
+  if coalesce(v_role, '') not in ('DEVICE', 'ADMIN') then raise exception 'NOT_ALLOWED'; end if;
   select * into v_o from public.qr_orders where id = p_order_id and business_id = v_biz for update;
   if not found then return jsonb_build_object('error', 'NOT_FOUND'); end if;
   case upper(p_action)
@@ -1267,8 +1536,11 @@ begin
   return jsonb_build_object('customer', public._qr_customer_json(v_c));
 end $$;
 
--- First visit: save nickname (+ optional phone). If the phone is already registered
--- AND the nickname matches, this phone is linked to that customer ("welcome back").
+-- First visit: save nickname (+ optional phone). This NEVER links the phone to an
+-- existing customer (only qr_relink does that). If the number is already
+-- registered the answer is PHONE_TAKEN; because that answer reveals a number is
+-- registered, it counts toward the same per-login limit as qr_relink
+-- (5 per 15 minutes), after which the answer is TOO_MANY_ATTEMPTS.
 create or replace function public.qr_register(p_token text, p_nickname text, p_phone text default null, p_consent boolean default false)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare
@@ -1286,13 +1558,11 @@ begin
   if coalesce(btrim(p_phone), '') <> '' then
     v_phone := public._norm_phone(p_phone);
     if v_phone is null then return jsonb_build_object('error', 'BAD_PHONE'); end if;
-    select * into v_c from public.customers where business_id = v_t.business_id and phone = v_phone and merged_into is null;
-    if found then
-      if lower(v_c.nickname) = lower(v_name) then
-        insert into public.customer_devices(auth_user_id, business_id, customer_id) values (v_uid, v_t.business_id, v_c.id);
-        update public.customers set last_seen_at = now() where id = v_c.id;
-        return jsonb_build_object('customer', public._qr_customer_json(v_c), 'relinked', true);
-      end if;
+    if public._too_many_attempts(v_uid, 'RELINK', 5, interval '15 minutes') then
+      return jsonb_build_object('error', 'TOO_MANY_ATTEMPTS');
+    end if;
+    if exists (select 1 from public.customers where business_id = v_t.business_id and phone = v_phone and merged_into is null) then
+      insert into public.auth_attempts(subject, kind, success) values (v_uid, 'RELINK', false);
       return jsonb_build_object('error', 'PHONE_TAKEN');
     end if;
   end if;
@@ -1303,6 +1573,8 @@ begin
 end $$;
 
 -- "I've ordered here before" on a new phone: phone number + the same nickname.
+-- The ONLY way a phone gets linked to an existing customer. Wrong answers are
+-- limited to 5 per 15 minutes per login (shared with qr_register / qr_set_phone).
 create or replace function public.qr_relink(p_token text, p_phone text, p_nickname text) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare v_uid uuid := auth.uid(); v_t public.dining_tables; v_phone text := public._norm_phone(p_phone); v_c public.customers%rowtype;
@@ -1325,16 +1597,23 @@ begin
   return jsonb_build_object('customer', public._qr_customer_json(v_c), 'relinked', true);
 end $$;
 
+-- A registered customer adds / changes their number. PHONE_TAKEN reveals that a
+-- number is registered, so it counts toward the same per-login limit as qr_relink.
 create or replace function public.qr_set_phone(p_token text, p_phone text) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare v_uid uuid := auth.uid(); v_t public.dining_tables; v_phone text := public._norm_phone(p_phone); v_cid uuid; v_c public.customers%rowtype;
 begin
   v_t := public._qr_table(p_token);
   if v_t.id is null then return jsonb_build_object('error', 'TABLE_NOT_FOUND'); end if;
+  if v_uid is null then return jsonb_build_object('error', 'NOT_SIGNED_IN'); end if;
   select customer_id into v_cid from public.customer_devices where auth_user_id = v_uid and business_id = v_t.business_id;
   if v_cid is null then return jsonb_build_object('error', 'REGISTER_FIRST'); end if;
   if v_phone is null then return jsonb_build_object('error', 'BAD_PHONE'); end if;
+  if public._too_many_attempts(v_uid, 'RELINK', 5, interval '15 minutes') then
+    return jsonb_build_object('error', 'TOO_MANY_ATTEMPTS');
+  end if;
   if exists (select 1 from public.customers where business_id = v_t.business_id and phone = v_phone and merged_into is null and id <> v_cid) then
+    insert into public.auth_attempts(subject, kind, success) values (v_uid, 'RELINK', false);
     return jsonb_build_object('error', 'PHONE_TAKEN');
   end if;
   update public.customers set phone = v_phone, updated_at = now() where id = v_cid returning * into v_c;
@@ -1475,19 +1754,23 @@ end $$;
 -- -----------------------------------------------------------------------------
 -- 14. Who may call what
 -- -----------------------------------------------------------------------------
+-- public_fns: anyone with the shop's QR code (customers, even before login).
+-- member_fns: logged-in users; each function checks the caller's shop/role itself.
+-- Everything else in the list below: internal only (no direct API access).
 do $$
 declare f record;
   public_fns text[] := array['get_qr_menu','qr_session','qr_register','qr_relink','qr_set_phone','qr_forget_device',
                              'qr_place_order','qr_my_orders','qr_cancel_order'];
-  member_fns text[] := array['current_business_id','app_rank','is_owner','apply_changes','staff_pin_ids','staff_pin_login',
+  member_fns text[] := array['current_business_id','current_role_rank','app_rank','is_owner','apply_changes','staff_pin_ids','staff_pin_login',
     'staff_logout','staff_set_pin','staff_import_legacy_pin','create_device_pairing_code','redeem_device_pairing',
-    'fo_register_device','revoke_device','fo_bootstrap','bo_bootstrap','sales_report','search_customers','fo_sync',
+    'revoke_device','unlock_device_pin','fo_bootstrap','bo_bootstrap','sales_report','search_customers','fo_sync',
     'fo_add_customer','qr_update_order','merge_customers','_write_row','_update_row','_writable_tables','_role_rank','_norm_phone','_clean_name','_next_numbers'];
 begin
   for f in
     select p.oid::regprocedure as sig, p.proname from pg_proc p
     where p.pronamespace = 'public'::regnamespace
-      and p.proname = any(public_fns || member_fns || array['_too_many_attempts','_next_device_tag','_next_numbers',
+      and p.proname = any(public_fns || member_fns || array['_too_many_attempts','_pin_locked_until','_phone_lookup_allowed',
+        '_mask_phone','_customer_for_staff','_use_approval','_require_ingredient','_next_device_tag','_next_numbers',
         '_require_staff','_fo_apply','_type_label','_public_modifier_groups','_recipe_makeable','_qr_table','_qr_customer_json',
         'handle_new_user_signup','protect_profile_columns','touch_updated_at'])
   loop

@@ -6,7 +6,7 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 You are the Database & Security Engineer for the Cavite City Coffee Club POS. Read `CLAUDE.md` first.
 
 ## You own
-- Build C: `cccc/supabase/*.sql` · Build R: `supabase/*.sql` (only the build named in your brief)
+- `cccc/supabase/*.sql`
 - New SQL behaviour tests for functions you add, as new files in `tests/sql/` named `3x_<topic>_tests.sql`
   (QA owns the existing test files and the harness; don't edit them).
 
@@ -23,7 +23,7 @@ owner has already run on Supabase (write `005_…sql` instead). Never connect to
    and have EXECUTE revoked from `public, anon` unless they are meant for customers; prices are
    always computed in SQL; rate-limit anything a stranger can call repeatedly.
 3. The script must be idempotent and install on top of the live-schema copy:
-   `tests/reset_db.sh <script> && psql -h /tmp -p 54329 -U postgres -d cccc -v ON_ERROR_STOP=1 -f <script>`
+   `tests/reset_db.sh <script> db_sec && psql -h /tmp -p 54329 -U postgres -d db_sec -v ON_ERROR_STOP=1 -f <script>` (your own database name — `cccc` belongs to QA)
    (second run must also succeed).
 4. Prove behaviour with SQL tests that impersonate users (`test.login(uuid, staff_token)` +
    `set role authenticated|anon`, see `tests/sql/10_behaviour_tests.sql`). Run the existing suites

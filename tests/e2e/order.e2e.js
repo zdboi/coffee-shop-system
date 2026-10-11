@@ -5,20 +5,22 @@
 //
 // Needs:  tests/e2e_reset.sh   then (as its own command)  tests/restart_fake.sh
 // Run:    QA_SHOTS=/some/folder node tests/e2e/order.e2e.js
+// Own stand-in:  tests/e2e_reset.sh db_qr && tests/restart_fake.sh 8792 db_qr
+//                FAKE_PORT=8792 FAKE_DB=db_qr node tests/e2e/order.e2e.js
 const { chromium } = require('/opt/npm-tools/node_modules/playwright');
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const BASE = 'http://localhost:8787';
+const BASE = 'http://localhost:' + (process.env.FAKE_PORT || 8787);   // FAKE_PORT=8791 to use your own stand-in
 const URL = BASE + '/cccc/order/?t=tabletoken5';
 const SHOTS = process.env.QA_SHOTS || path.join(os.tmpdir(), 'cccc-qa-shots');
 fs.mkdirSync(SHOTS, { recursive: true });
 
 // read-only checks go through the stand-in's /__sql helper; status changes use psql directly
 async function sql(q){ const r = await fetch(BASE + '/__sql', {method: 'POST', body: `select to_jsonb((${q}))`}); const t = await r.text(); if(!r.ok) throw new Error(t); return JSON.parse(t); }
-function psql(q){ return execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U', 'postgres', '-d', 'cccc', '-At', '-v', 'ON_ERROR_STOP=1', '-c', q]).toString().trim(); }
+function psql(q){ return execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U', 'postgres', '-d', process.env.FAKE_DB || 'cccc', '-At', '-v', 'ON_ERROR_STOP=1', '-c', q]).toString().trim(); }
 
 const results = [];
 function ok(cond, msg, got){

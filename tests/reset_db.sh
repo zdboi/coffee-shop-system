@@ -7,9 +7,12 @@ set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"; REPO="$(dirname "$DIR")"
 MIG="${1:-$REPO/cccc/supabase/004_cccc_online_qr.sql}"
 DB="${2:-cccc}"
+if ! [[ "$DB" =~ ^[a-z_][a-z0-9_]*$ ]] || [[ "$DB" =~ ^(postgres|template0|template1)$ ]]; then
+  echo "reset_db: bad database name '$DB' (lowercase letters, digits, _; not a system database)" >&2; exit 1
+fi
 "$DIR/start_pg.sh" >/dev/null
 P="psql -h /tmp -p 54329 -U postgres -v ON_ERROR_STOP=1 -q"
-psql -h /tmp -p 54329 -U postgres -q -c "drop database if exists $DB" -c "create database $DB" >/dev/null
+psql -h /tmp -p 54329 -U postgres -q -c "drop database if exists $DB with (force)" -c "create database $DB" >/dev/null
 psql -h /tmp -p 54329 -U postgres -q -d "$DB" -f "$DIR/sql/00_supabase_stub.sql" 2>&1 | grep -vE "already exists|already been granted|NOTICE" || true
 $P -d "$DB" -f "$DIR/sql/01_existing_schema.sql"
 $P -d "$DB" -f "$MIG"

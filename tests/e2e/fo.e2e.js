@@ -1,6 +1,6 @@
 // Front Office end-to-end: pair, PIN, shift, sale with modifiers, offline sale + sync, void.
 const { chromium } = require('/opt/npm-tools/node_modules/playwright');
-const BASE = 'http://localhost:8787';
+const BASE = 'http://localhost:' + (process.env.FAKE_PORT || 8787);   // FAKE_PORT=8791 to use your own stand-in
 async function sql(q){ const r = await fetch(BASE + '/__sql', {method:'POST', body: `select to_jsonb((${q}))`}); const t = await r.text(); if(!r.ok) throw new Error(t); return JSON.parse(t); }
 function ok(cond, msg){ if(!cond) throw new Error('FAILED: ' + msg); console.log('ok  ' + msg); }
 async function until(fn, msg, ms){ const end = Date.now() + (ms||20000); while(Date.now() < end){ try{ if(await fn()) return true; }catch(e){} await new Promise(r=>setTimeout(r, 300)); } throw new Error('TIMEOUT waiting for: ' + msg); }

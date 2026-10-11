@@ -6,6 +6,10 @@ const path = require('path');
 const { execFile } = require('child_process');
 
 const PORT = Number(process.env.PORT || 8787);
+// Test database this stand-in talks to (default 'cccc'). Lets several stand-ins run side by side,
+// each on its own port + database:  PORT=8791 FAKE_DB=db_bo node tests/fake-supabase/server.js
+const DB = process.env.FAKE_DB || 'cccc';
+if(!/^[a-z_][a-z0-9_]*$/.test(DB)){ console.error('FAKE_DB must be a plain lowercase database name, got: ' + DB); process.exit(1); }
 const ROOT = path.resolve(__dirname, '..', '..');   // the repository root
 const ANON_KEY = 'test-anon-key';
 const storage = new Map();
@@ -18,7 +22,7 @@ function lit(v){
 }
 function runSql(sql){
   return new Promise((resolve) => {
-    const child = execFile('psql', ['-h','/tmp','-p','54329','-U','postgres','-d','cccc','-At','-q','-v','ON_ERROR_STOP=1','-f','-'],
+    const child = execFile('psql', ['-h','/tmp','-p','54329','-U','postgres','-d',DB,'-At','-q','-v','ON_ERROR_STOP=1','-f','-'],
       {maxBuffer: 64*1024*1024}, (err, stdout, stderr) => {
         const line = (stdout||'').split('\n').find(l => l.startsWith('@@R@@'));
         if(err || !line){
@@ -190,4 +194,4 @@ const server = http.createServer(async (req, res) => {
     send(res, 500, {message: String(e.message || e)});
   }
 });
-server.listen(PORT, () => console.log('fake supabase on ' + PORT));
+server.listen(PORT, () => console.log('fake supabase on ' + PORT + ' (database ' + DB + ', pid ' + process.pid + ')'));

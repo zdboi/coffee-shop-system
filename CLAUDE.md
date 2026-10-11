@@ -116,15 +116,15 @@ as weakness + effect + fix, without step-by-step abuse instructions.
 ```bash
 tests/start_pg.sh                    # local PostgreSQL 16 on port 54329 (test only)
 tests/reset_db.sh [migration.sql] [db]   # stand-in Supabase + live-schema copy + the 004 script
-tests/e2e_reset.sh                   # reset + seed data for browser tests
-tests/restart_fake.sh                # local Supabase stand-in + file server on :8787
-tests/run_all.sh                     # full regression
+tests/e2e_reset.sh [db]              # reset + seed data for browser tests (default db: cccc)
+tests/restart_fake.sh [port] [db]    # local Supabase stand-in + file server (default 8787 / cccc)
+tests/run_all.sh                     # full regression (QA; uses 8787 / cccc)
 ```
 - `tests/sql/01_existing_schema.sql` reconstructs the **live** schema (from the owner's Supabase
   output). The 004 script must install on top of it and run twice without errors.
 - Browser tests use Playwright from `/opt/npm-tools/node_modules/playwright` (Chromium preinstalled).
 - The sandbox blocks npm and most CDNs.
-- Several agents may test at the same time: use your own database names (e.g. `db_<you>`) for
-  ad-hoc work; `cccc` and the stand-in on :8787 belong to QA's regression runs.
-- Don't put `fake-supabase/server.js` or `pgrep -f "fake-supabase/server.js"` text in the same shell
-  command that runs `restart_fake.sh` — the restart kills processes matching that text.
+- Several agents test at the same time, each with its own database and port:
+  Front Office `db_fo` / 8790, Back Office `db_bo` / 8791, QR page `db_qr` / 8792, database work `db_sec`.
+  `cccc` and port 8787 belong to QA. Example: `tests/e2e_reset.sh db_bo && tests/restart_fake.sh 8791 db_bo`,
+  then open `http://localhost:8791/cccc/back/`. Browser tests: `FAKE_PORT=8790 FAKE_DB=db_fo node tests/e2e/fo.e2e.js`.
