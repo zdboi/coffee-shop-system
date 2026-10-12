@@ -75,6 +75,12 @@ img{display:block;max-width:100%;}
 .btn-quiet{background:transparent;border:1.5px solid var(--line);color:var(--text);}
 .btn-row{display:flex;gap:10px;}
 .form-error{color:var(--danger);font-size:14px;font-weight:600;min-height:20px;margin:-6px 0 10px;}
+/* "That number is already registered" -> offer to connect this phone */
+.taken{border:1.5px solid var(--crema);background:var(--sheet);border-radius:14px;padding:12px 14px;margin:0 0 14px;}
+.taken p{font-size:14px;color:var(--muted);margin:0 0 10px;}
+.taken .btn{width:100%;}
+.card-quiet .taken{margin:10px 0 0;background:var(--paper);}
+.inline-alert{border:1.5px solid var(--danger);background:var(--sheet);color:var(--danger);border-radius:14px;padding:12px 14px;font-size:14.5px;font-weight:600;}
 
 /* ---------- open orders strip ---------- */
 .my-orders{margin-top:16px;display:flex;flex-direction:column;gap:8px;}
@@ -87,7 +93,7 @@ img{display:block;max-width:100%;}
 /* ---------- menu ---------- */
 .notice{border-radius:14px;padding:12px 14px;font-size:14.5px;margin-top:16px;background:var(--sheet);border:1.5px solid var(--line);}
 .notice.warn{border-color:var(--crema);}
-.cats{position:sticky;top:57px;z-index:15;display:flex;gap:8px;overflow-x:auto;padding:12px var(--pad);margin:16px calc(-1 * var(--pad)) 0;
+.cats{position:sticky;top:calc(57px + env(safe-area-inset-top));z-index:15;display:flex;gap:8px;overflow-x:auto;padding:12px var(--pad);margin:16px calc(-1 * var(--pad)) 0;
   background:var(--paper);scrollbar-width:none;}
 .cats::-webkit-scrollbar{display:none;}
 .cat{flex-shrink:0;border:1.5px solid var(--line);background:transparent;border-radius:999px;padding:8px 15px;font-weight:600;font-size:14.5px;white-space:nowrap;}
@@ -175,6 +181,7 @@ img{display:block;max-width:100%;}
 .ticket-items li{list-style:none;padding:4px 0;display:flex;justify-content:space-between;gap:10px;}
 .ticket-items .mods{color:var(--muted);font-size:13px;}
 .after-order{margin-top:16px;display:flex;flex-direction:column;gap:10px;}
+.after-order .slot{display:contents;}
 .card-quiet{background:var(--sheet);border:1.5px solid var(--line);border-radius:16px;padding:16px;}
 .card-quiet h4{font-family:var(--display);font-size:18px;margin-bottom:4px;color:var(--ink);}
 .card-quiet p{color:var(--muted);font-size:14px;margin-bottom:10px;}
@@ -182,10 +189,17 @@ img{display:block;max-width:100%;}
 .inline-form .input{font-size:16px;padding:11px 12px;}
 .inline-form .btn{min-height:46px;padding:10px 16px;}
 
-.toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);opacity:0;pointer-events:none;
-  background:var(--ink);color:#fff;padding:11px 16px;border-radius:12px;font-size:14.5px;font-weight:600;max-width:calc(100% - 36px);transition:opacity .2s, transform .2s;z-index:80;}
-.toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+/* Toasts cover the top bar only (brand + table label, nothing to tap), so they never sit on a
+   button. At most 2 lines (57 px bar); longer messages are shown next to their button instead. */
+.toast{position:fixed;z-index:80;left:50%;top:calc(4px + env(safe-area-inset-top));width:min(548px, calc(100% - 12px));min-height:49px;
+  display:flex;align-items:center;gap:10px;padding:5px 14px;border-radius:14px;background:var(--ink);color:#fff;
+  font-size:14.5px;font-weight:600;line-height:1.3;box-shadow:0 10px 22px -14px rgba(0,0,0,.6);
+  opacity:0;pointer-events:none;transform:translate(-50%, -8px);transition:opacity .2s, transform .2s;}
+.toast::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--crema);flex-shrink:0;}
+.toast-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.toast.show{opacity:1;transform:translate(-50%, 0);}
 .toast.bad{background:var(--danger);}
+.toast.bad::before{background:#fff;}
 
 .empty{text-align:center;padding:50px 10px;color:var(--muted);}
 .empty h1{font-family:var(--display);color:var(--ink);font-size:24px;margin-bottom:8px;}

@@ -21,6 +21,7 @@
     menu: null, customer: null, canOrder: true, blockedReason: '',
     cart: [], orders: [], view: 'menu', orderId: null,
     orderType: 'DINE_IN', note: '', justRegistered: false, pollTimer: null,
+    ticketAlert: null,   // {id, text}: a problem with cancelling, shown under the ticket's buttons
   };
 
   /* ---------------- helpers ---------------- */
@@ -28,10 +29,24 @@
   function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   function money(n){ return '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
   function shop(){ return S.menu ? S.menu.business.name : 'the shop'; }
-  let toastTimer = null;
+  // Toasts sit over the top bar (which has nothing to tap), so they never cover a button.
+  // Keep them short (2 lines at most); longer messages go next to the thing they're about.
+  let toastTimer = null, toastWipe = null;
   function toast(msg, bad){
-    const t = $('#toast'); t.textContent = msg; t.className = 'toast show' + (bad ? ' bad' : '');
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = 'toast' + (bad ? ' bad' : ''); }, 3200);
+    const t = $('#toast');
+    const text = document.createElement('span');
+    text.className = 'toast-text'; text.textContent = msg;
+    t.textContent = ''; t.appendChild(text);
+    t.className = 'toast show' + (bad ? ' bad' : '');
+    clearTimeout(toastTimer); clearTimeout(toastWipe);
+    toastTimer = setTimeout(hideToast, 3200);
+  }
+  function hideToast(){
+    const t = $('#toast');
+    clearTimeout(toastTimer); clearTimeout(toastWipe);
+    if(!t.classList.contains('show')) return;
+    t.classList.remove('show');
+    toastWipe = setTimeout(() => { t.textContent = ''; }, 250);
   }
   const MSG = {
     TABLE_NOT_FOUND: 'This QR code isn\'t active anymore. Please ask our staff for help.',
@@ -40,9 +55,9 @@
     CONSENT_REQUIRED: 'Please tick the box so we can save your name.',
     NAME_REQUIRED: 'Enter a name or nickname.',
     BAD_PHONE: 'Enter a mobile number like 0917 123 4567.',
-    PHONE_TAKEN: 'That number is already saved under a different name. If it\'s yours, tap “I\'ve ordered here before”.',
+    PHONE_TAKEN: 'That number is already registered here.',
     NO_MATCH: 'No match for that number and name. Use the same name you gave us before.',
-    TOO_MANY_ATTEMPTS: 'Too many tries. Please wait a few minutes.',
+    TOO_MANY_ATTEMPTS: 'Too many tries. Please wait about 15 minutes, then try again.',
     BAD_OPTION: 'Something on the menu changed. Please remove that item and add it again.',
     BAD_QUANTITY: 'Please order 1 to 20 of each item.',
     TOO_MANY_OPEN_ORDERS: 'You already have 3 orders waiting. Please pay for those at the counter first.',
@@ -59,6 +74,24 @@
     if(code === 'ITEM_UNAVAILABLE') return `${r.name || 'An item'} just sold out. Remove it to continue.`;
     if(code === 'OPTION_REQUIRED') return `Choose a ${r.group || 'option'} for ${r.name}.`;
     return MSG[code] || (r.message ? r.message : 'Something went wrong. Please try again.');
+  }
+  // The server limits number checks (register, save number, "ordered here before") per phone.
+  const TOO_MANY = {
+    register: 'Too many tries with a mobile number. Please wait about 15 minutes, or leave the number blank for now and add it later.',
+    phone: 'Too many tries. Please wait about 15 minutes, then try again.',
+    relink: 'Too many tries. Please wait about 15 minutes, or ask our staff to help.',
+  };
+  function errFor(r, where){
+    const code = r && (r.error || r.message);
+    return (code === 'TOO_MANY_ATTEMPTS' && TOO_MANY[where]) || errText(r);
+  }
+  // PHONE_TAKEN: the number already belongs to a customer here. Offer "I've ordered here
+  // before" with the number filled in (only qr_relink links a phone to an existing customer).
+  function showPhoneTaken(slot, prefill, blankOk){
+    slot.innerHTML = `<div class="taken">
+      <p>Is it yours? Connect this phone to your visits and rewards.${blankOk ? ' If not, check the number or leave it blank.' : ' If not, check the number.'}</p>
+      <button class="btn btn-quiet" type="button">Yes, connect this phone</button></div>`;
+    slot.querySelector('button').onclick = () => openRelinkSheet(prefill());
   }
 
   /* ---------------- theme from the shop's settings ---------------- */
@@ -181,10 +214,16 @@
     $('#bottom').hidden = true;
   }
 
+  // quiet = a refresh (new order status, back from another app), not something the customer tapped.
+  let lastScreen = '';
   function render(quiet){
     if(!S.menu) return;
+    const screen = S.view === 'order' ? 'order:' + S.orderId : (S.canOrder && !S.customer ? 'welcome' : 'menu');
+    const changed = screen !== lastScreen;
+    if(changed){ hideToast(); S.ticketAlert = null; lastScreen = screen; }
     if(S.view === 'order') renderTicket();
-    else if(S.canOrder && !S.customer) renderWelcome();
+    // The welcome form doesn't depend on orders: never wipe what the customer is typing.
+    else if(screen === 'welcome'){ if(changed || !quiet) renderWelcome(); }
     else renderMenu(quiet);
     renderBottom();
   }
@@ -227,6 +266,7 @@
       <label class="consent"><input type="checkbox" id="w-consent">
         <span>Save my name and number with ${esc(shop())} to keep track of my orders, visits and rewards. I can ask the staff to delete them anytime.</span></label>
       <div class="form-error" id="w-err" role="alert"></div>
+      <div id="w-help"></div>
       <button class="btn btn-main" id="w-go">Start ordering</button>
       <p style="text-align:center;margin-top:12px;"><button class="textlink" id="w-relink">I've ordered here before on another phone</button></p>
       ${menuHtml(true)}`;
@@ -236,27 +276,36 @@
       preview.textContent = v || 'Your name';
       preview.classList.toggle('placeholder', !v);
     };
+    $('#w-phone').oninput = () => { $('#w-help').innerHTML = ''; };
     $('#w-go').onclick = register;
-    $('#w-relink').onclick = openRelinkSheet;
+    $('#w-relink').onclick = () => openRelinkSheet();
     wireMenu();
   }
 
+  // First visit. qr_register only ever creates a new customer; an existing number answers
+  // PHONE_TAKEN and the customer is offered "I've ordered here before" instead.
   async function register(){
-    const btn = $('#w-go'), err = $('#w-err');
+    const btn = $('#w-go'), err = $('#w-err'), help = $('#w-help');
     const nickname = $('#w-name').value.trim();
     const phone = $('#w-phone').value.trim();
+    help.innerHTML = '';
     if(!nickname){ err.textContent = MSG.NAME_REQUIRED; $('#w-name').focus(); return; }
     if(!$('#w-consent').checked){ err.textContent = MSG.CONSENT_REQUIRED; return; }
     btn.disabled = true; err.textContent = '';
     try{
-      const r = await cloud.rpc('qr_register', {p_token: token, p_nickname: nickname, p_phone: phone || null, p_consent: true});
-      if(r.error){ err.textContent = errText(r); btn.disabled = false; return; }
+      const r = (await cloud.rpc('qr_register', {p_token: token, p_nickname: nickname, p_phone: phone || null, p_consent: true})) || {};
+      if(r.error || !r.customer){
+        err.textContent = errFor(r.error ? r : null, 'register'); btn.disabled = false;
+        if(r.error === 'PHONE_TAKEN') showPhoneTaken(help, () => ({phone, nickname: $('#w-name').value.trim()}), true);
+        if(r.error === 'BAD_PHONE') $('#w-phone').focus();
+        return;
+      }
       S.customer = r.customer;
-      S.justRegistered = !r.relinked;
-      toast(r.relinked ? `Welcome back, ${r.customer.nickname}!` : `Welcome, ${r.customer.nickname}!`);
+      S.justRegistered = true;
       window.scrollTo({top: 0});
       render();
-    }catch(e){ err.textContent = errText(e); btn.disabled = false; }
+      toast(`Welcome, ${r.customer.nickname}!`);
+    }catch(e){ err.textContent = errFor(e, 'register'); btn.disabled = false; }
   }
 
   function menuHtml(preview){
@@ -478,26 +527,34 @@
     try{ const m = await cloud.rpc('get_qr_menu', {p_token: token}); if(m && !m.error){ S.menu = m; render(true); } }catch(e){}
   }
 
-  function openRelinkSheet(){
+  // "I've ordered here before". prefill = {phone, nickname} when we come from a PHONE_TAKEN answer.
+  function openRelinkSheet(prefill){
+    prefill = prefill || {};
+    const filled = !!prefill.phone;
     openSheet('Welcome back', `
-      <p style="color:var(--muted);margin-bottom:14px;">Enter the mobile number and the name you used before. We'll connect this phone to your visits.</p>
+      <p style="color:var(--muted);margin-bottom:14px;">${filled
+        ? 'Check the name: use the same one you gave us before. We\'ll connect this phone to your visits.'
+        : 'Enter the mobile number and the name you used before. We\'ll connect this phone to your visits.'}</p>
       <div class="field"><label for="r-phone">Mobile number</label><input class="input" id="r-phone" inputmode="tel" autocomplete="tel" placeholder="0917 123 4567"></div>
       <div class="field"><label for="r-name">Name or nickname you used</label><input class="input" id="r-name" maxlength="30" autocomplete="nickname"></div>
       <div class="form-error" id="r-err" role="alert"></div>
-      <p style="color:var(--muted);font-size:13.5px;">Didn't give us a number before? Just start fresh, and ask our staff to join your old visits to the new name.</p>`,
+      ${filled ? '' : '<p style="color:var(--muted);font-size:13.5px;">Didn\'t give us a number before? Just start fresh, and ask our staff to join your old visits to the new name.</p>'}`,
       `<button class="btn btn-main" id="r-go">Connect this phone</button>`, () => {
+        if(prefill.phone) $('#r-phone').value = prefill.phone;
+        if(prefill.nickname) $('#r-name').value = prefill.nickname;
+        if(filled) (prefill.nickname ? $('#r-go') : $('#r-name')).focus();
         $('#r-go').onclick = async () => {
           const btn = $('#r-go'), err = $('#r-err');
           btn.disabled = true; err.textContent = '';
           try{
             const r = await cloud.rpc('qr_relink', {p_token: token, p_phone: $('#r-phone').value.trim(), p_nickname: $('#r-name').value.trim()});
-            if(r.error){ err.textContent = errText(r); btn.disabled = false; return; }
+            if(r.error){ err.textContent = errFor(r, 'relink'); btn.disabled = false; return; }
             S.customer = r.customer; S.justRegistered = false;
             closeSheet();
             await loadOrders();
-            toast(`Welcome back, ${r.customer.nickname}!`);
             render();
-          }catch(e){ err.textContent = errText(e); btn.disabled = false; }
+            toast(`Welcome back, ${r.customer.nickname}!`);
+          }catch(e){ err.textContent = errFor(e, 'relink'); btn.disabled = false; }
         };
       });
   }
@@ -519,9 +576,29 @@
   }
 
   /* ---------------- order ticket ---------------- */
+  // The ticket refreshes every few seconds while the order is open. Each part is only
+  // replaced when it actually changed, so the number field (and its messages) keep what
+  // the customer typed and keep the keyboard open.
+  function patch(el, html){
+    if(el._html === html) return false;
+    el.innerHTML = html; el._html = html;
+    return true;
+  }
   function renderTicket(){
     const o = S.orders.find(x => x.id === S.orderId);
     if(!o){ S.view = 'menu'; renderMenu(); return; }
+    const screen = $('#ticket-screen');
+    if(!screen || screen.dataset.order !== o.id){
+      $('#main').innerHTML = `<div id="ticket-screen" data-order="${esc(o.id)}">
+        <section class="ticket" id="t-ticket" aria-label="Your order"></section>
+        <div class="after-order"><div class="slot" id="t-phone"></div><div class="slot" id="t-hint"></div><div class="slot" id="t-actions"></div></div></div>`;
+    }
+    patch($('#t-ticket'), ticketHtml(o));
+    if(patch($('#t-phone'), phoneCardHtml(o))) wirePhoneCard();
+    if(patch($('#t-hint'), hintHtml())) wireHint();
+    if(patch($('#t-actions'), ticketActionsHtml(o))) wireTicketActions();
+  }
+  function ticketHtml(o){
     const takeaway = o.order_type === 'TAKEAWAY';
     const st = o.status;
     const stepState = (n) => {
@@ -535,10 +612,7 @@
     ];
     const bad = st === 'REJECTED' || st === 'CANCELLED';
     const c = S.customer || {};
-    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.navigator.standalone;
-    let hideHint = false; try{ hideHint = localStorage.getItem('cccc.order.hintDone') === '1'; }catch(e){}
-    $('#main').innerHTML = `
-      <section class="ticket" aria-live="polite">
+    return `
         <div class="ticket-top">
           <div class="ticket-label">${st === 'COMPLETED' ? 'Enjoy!' : 'Your order number'}</div>
           <div class="ticket-no">${esc(o.order_number)}</div>
@@ -549,38 +623,72 @@
             ${o.reject_reason ? `<p style="color:var(--muted);margin-top:4px;">${esc(o.reject_reason)}</p>` : ''}</div>`
           : `<ol class="steps">${steps.map((s, i) => `<li class="step ${stepState(i + 1)}"><span class="dot">${stepState(i + 1) === 'done' ? '✓' : i + 1}</span><div><b>${s.b}</b><span>${s.s}</span></div></li>`).join('')}</ol>`}
         <div class="ticket-pay"><span>${o.paid_at ? 'Paid — thank you!' : esc(S.menu.payment_note || 'Please pay at the counter.')}</span><b>${money(o.total)}</b></div>
-        <ul class="ticket-items">${(o.items || []).map(it => `<li><span>${it.quantity}× ${esc(it.name)}${(it.modifiers || []).length ? `<br><span class="mods">${esc(it.modifiers.map(m => m.label).join(', '))}</span>` : ''}</span><span>${money(it.line_total)}</span></li>`).join('')}</ul>
-      </section>
-      <div class="after-order">
-        ${(!bad && S.customer && !S.customer.phone_hint) ? `<div class="card-quiet" id="phone-card"><h4>Keep your visits</h4>
-          <p>Add your number so you keep your stamps if you change phones.</p>
-          <div class="inline-form"><input class="input" id="pc-phone" inputmode="tel" placeholder="0917 123 4567" aria-label="Mobile number"><button class="btn btn-main" id="pc-save" style="width:auto;">Save</button></div>
-          <div class="form-error" id="pc-err" style="margin:8px 0 0;"></div></div>` : ''}
-        ${(isIOS && !hideHint) ? `<div class="card-quiet"><h4>Save this page</h4><p>On iPhone, tap Share, then “Add to Home Screen”, so this phone keeps remembering you.</p><button class="textlink" id="hint-ok">Got it</button></div>` : ''}
-        <button class="btn btn-main" id="order-more">${bad ? 'Back to the menu' : 'Order something else'}</button>
-        ${st === 'PENDING' ? '<button class="btn btn-quiet" id="cancel-order">Cancel this order</button>' : ''}
-      </div>`;
+        <ul class="ticket-items">${(o.items || []).map(it => `<li><span>${it.quantity}× ${esc(it.name)}${(it.modifiers || []).length ? `<br><span class="mods">${esc(it.modifiers.map(m => m.label).join(', '))}</span>` : ''}</span><span>${money(it.line_total)}</span></li>`).join('')}</ul>`;
+  }
+
+  function phoneCardHtml(o){
+    const bad = o.status === 'REJECTED' || o.status === 'CANCELLED';
+    if(bad || !S.customer || S.customer.phone_hint) return '';
+    return `<div class="card-quiet" id="phone-card"><h4>Keep your visits</h4>
+      <p>Add your number so you keep your stamps if you change phones.</p>
+      <div class="inline-form"><input class="input" id="pc-phone" inputmode="tel" autocomplete="tel" placeholder="0917 123 4567" aria-label="Mobile number"><button class="btn btn-main" id="pc-save" style="width:auto;">Save</button></div>
+      <div class="form-error" id="pc-err" role="alert" style="margin:8px 0 0;"></div>
+      <div id="pc-help"></div></div>`;
+  }
+  function wirePhoneCard(){
+    const save = $('#pc-save');
+    if(!save) return;
+    const input = $('#pc-phone'), err = $('#pc-err'), help = $('#pc-help');
+    input.oninput = () => { help.innerHTML = ''; };
+    save.onclick = async () => {
+      const phone = input.value.trim();
+      err.textContent = ''; help.innerHTML = '';
+      if(!phone){ err.textContent = MSG.BAD_PHONE; input.focus(); return; }
+      save.disabled = true;
+      try{
+        const r = await cloud.rpc('qr_set_phone', {p_token: token, p_phone: phone});
+        if(r.error){
+          err.textContent = errFor(r, 'phone'); save.disabled = false;
+          if(r.error === 'PHONE_TAKEN') showPhoneTaken(help, () => ({phone, nickname: S.customer ? S.customer.nickname : ''}), false);
+          return;
+        }
+        S.customer = r.customer; render(); toast('Number saved');
+      }catch(e){ err.textContent = errFor(e, 'phone'); save.disabled = false; }
+    };
+  }
+
+  function hintHtml(){
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.navigator.standalone;
+    let hideHint = false; try{ hideHint = localStorage.getItem('cccc.order.hintDone') === '1'; }catch(e){}
+    return (isIOS && !hideHint) ? `<div class="card-quiet"><h4>Save this page</h4><p>On iPhone, tap Share, then “Add to Home Screen”, so this phone keeps remembering you.</p><button class="textlink" id="hint-ok">Got it</button></div>` : '';
+  }
+  function wireHint(){
+    const hint = $('#hint-ok');
+    if(hint) hint.onclick = () => { try{ localStorage.setItem('cccc.order.hintDone', '1'); }catch(e){} render(); };
+  }
+
+  function ticketActionsHtml(o){
+    const bad = o.status === 'REJECTED' || o.status === 'CANCELLED';
+    const alert = S.ticketAlert && S.ticketAlert.id === o.id ? S.ticketAlert.text : '';
+    return `<button class="btn btn-main" id="order-more">${bad ? 'Back to the menu' : 'Order something else'}</button>
+      ${o.status === 'PENDING' ? '<button class="btn btn-quiet" id="cancel-order">Cancel this order</button>' : ''}
+      ${alert ? `<div class="inline-alert" role="alert">${esc(alert)}</div>` : ''}`;
+  }
+  function wireTicketActions(){
     $('#order-more').onclick = () => { S.view = 'menu'; document.title = 'Order — ' + shop(); render(); window.scrollTo({top: 0}); };
     const cancel = $('#cancel-order');
     if(cancel) cancel.onclick = async () => {
-      cancel.disabled = true;
+      const id = S.orderId;
+      cancel.disabled = true; S.ticketAlert = null;
+      const failed = (text) => { S.ticketAlert = {id, text}; if(cancel.isConnected) cancel.disabled = false; };
       try{
-        const r = await cloud.rpc('qr_cancel_order', {p_token: token, p_order_id: o.id});
-        if(r.error){ toast(errText(r), true); cancel.disabled = false; await loadOrders(); render(); return; }
-        Object.assign(o, r.order); toast('Order cancelled'); render();
-      }catch(e){ toast(errText(e), true); cancel.disabled = false; }
+        const r = await cloud.rpc('qr_cancel_order', {p_token: token, p_order_id: id});
+        if(r.error){ failed(errText(r)); await loadOrders(); render(); return; }
+        const cur = S.orders.find(x => x.id === id);
+        if(cur) Object.assign(cur, r.order);
+        render(); toast('Order cancelled');
+      }catch(e){ failed(errText(e)); render(); }
     };
-    const save = $('#pc-save');
-    if(save) save.onclick = async () => {
-      save.disabled = true;
-      try{
-        const r = await cloud.rpc('qr_set_phone', {p_token: token, p_phone: $('#pc-phone').value.trim()});
-        if(r.error){ $('#pc-err').textContent = errText(r); save.disabled = false; return; }
-        S.customer = r.customer; toast('Number saved'); render();
-      }catch(e){ $('#pc-err').textContent = errText(e); save.disabled = false; }
-    };
-    const hint = $('#hint-ok');
-    if(hint) hint.onclick = () => { try{ localStorage.setItem('cccc.order.hintDone', '1'); }catch(e){} render(); };
   }
 
   start().catch(e => { console.error(e); renderEmpty('Something went wrong', 'Please reload the page.', true); });

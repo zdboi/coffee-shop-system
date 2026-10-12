@@ -5,8 +5,12 @@
      that is applied on screen immediately, saved in a local queue, and
      uploaded by fo_sync(). If the internet drops, selling continues and
      the queue uploads when it comes back.
-   * Staff sign in with a PIN checked by the server (or, offline, against
-     a copy saved on this counter the last time they signed in online).
+   * Staff sign in with a PIN checked by the server. Offline, CASHIERS can
+     sign in against a copy saved on this counter the last time they signed
+     in online (manager/admin PINs are never saved on a counter).
+   * A counter joins the shop only with a pairing code (Back Office → Devices).
+   * Manager approvals (refund, void, discount, closing someone else's shift)
+     carry a one-time token from the server, so they need internet.
    * New: QR Orders board, customer attach, sold-out toggles.
    ===================================================================== */
 
@@ -57,6 +61,12 @@ async function bootstrap(){
   const pairCode = params.get('pair') || '';
   const sess = await cloud.ensureSession();
   if(!sess){ showSetup(pairCode); return; }
+  // Counters join only with a pairing code (a counter login). An owner email login
+  // left on this counter by an older version is not used any more.
+  if(!cloud.isAnonymous()){
+    showSetup(pairCode, 'This counter now connects with a pairing code only. Get a code from the owner (Back Office → Devices → Pair a counter).');
+    return;
+  }
 
   let loaded = false;
   try{
@@ -67,7 +77,8 @@ async function bootstrap(){
       loaded = await loadFromSnapshot();
       if(!loaded){ showSetup(pairCode, 'No internet. This counter needs internet the first time it starts.'); return; }
     } else if(/NOT_A_MEMBER/.test(e.message)){
-      showSetup(pairCode, cloud.isAnonymous() ? '' : 'This login is not linked to a shop.');
+      const wasPaired = !!(await LocalDB.get('fo.snapshot'));
+      showSetup(pairCode, wasPaired ? 'This counter is no longer connected to the shop (it may have been removed in Back Office → Devices). Pair it again with a new code. Sales saved on this counter upload after pairing.' : '');
       return;
     } else {
       console.error(e);
@@ -76,15 +87,7 @@ async function bootstrap(){
     }
   }
 
-  if(!state.device){
-    if(!cloud.isAnonymous()){
-      // Owner email login on a new device: register it as a counter.
-      try{
-        await cloud.rpc('fo_register_device', {p_device_key: deviceKey(), p_device_name: 'Owner device'});
-        await loadFromServer();
-      }catch(e){ showSetup(pairCode, friendlyError(e)); return; }
-    } else { showSetup(pairCode); return; }
-  }
+  if(!state.device){ showSetup(pairCode); return; }
 
   applyCustomTheme();
   show('boot-screen', false); show('setup-screen', false);
@@ -131,6 +134,7 @@ async function applyBootstrap(d){
   // Operations still waiting to upload are re-applied so they don't vanish from the screen.
   const pending = await LocalDB.outboxAll();
   pending.forEach(op => applyOpLocally(op, true));
+  await prunePinVerifiers();
 }
 
 /* ---- snapshot of the current state, for offline restarts ---- */
@@ -178,69 +182,54 @@ function nextShiftNumber(){
 }
 
 /* =====================================================================
-   SETUP (pair this counter / owner login)
+   SETUP (pair this counter — the only way a counter joins the shop)
    ===================================================================== */
 function showSetup(prefillCode, message){
   show('boot-screen', false); show('app', false); show('pin-gate', false);
   const wrap = document.getElementById('setup-screen');
   wrap.style.display = 'flex';
   wrap.innerHTML = `
-    <div class="auth-card wide">
+    <div class="auth-card setup-card">
       <div class="pin-logo">☕</div>
       <h2>Set up this counter</h2>
-      <p class="text-light" style="margin:4px 0 18px;">Connect this tablet or computer to your shop once. After that, staff just enter their PIN.</p>
+      <p class="text-light" style="margin:4px 0 16px;">Connect this tablet or computer to your shop once. After that, staff just enter their PIN.</p>
       ${message?`<div class="notice warn">${escapeHtml(message)}</div>`:''}
-      <div class="auth-split">
-        <div class="auth-col">
-          <h3>Pair with a code <span class="badge badge-green">Recommended</span></h3>
-          <p class="hint">On the owner's login, open <b>Back Office → Devices → Pair a counter</b> to get a 6-letter code.</p>
-          <div class="form-row"><label>Counter name</label><input id="su-devname" value="${escapeHtml(localStorage.getItem('cccc.device.name')||'Front Counter')}"></div>
-          <div class="form-row"><label>Pairing code</label><input id="su-code" value="${escapeHtml(prefillCode)}" autocapitalize="characters" autocomplete="off" maxlength="6" class="code-input" placeholder="ABC123"></div>
-          <button class="btn btn-primary" id="su-pair" style="width:100%;justify-content:center;">Pair this counter</button>
-        </div>
-        <div class="auth-col">
-          <h3>Owner sign-in</h3>
-          <p class="hint">For the owner's own laptop or phone. Uses your Supabase email login.</p>
-          <div class="form-row"><label>Email</label><input id="su-email" type="email" autocomplete="username"></div>
-          <div class="form-row"><label>Password</label><input id="su-pass" type="password" autocomplete="current-password"></div>
-          <button class="btn btn-outline" id="su-login" style="width:100%;justify-content:center;">Sign in</button>
-        </div>
-      </div>
+      <ol class="setup-steps">
+        <li>On the owner's login, open <b>Back Office → Devices → Pair a counter</b>.</li>
+        <li>Type the 6-character code below (it works for 15 minutes).</li>
+      </ol>
+      <div class="form-row"><label for="su-devname">Counter name</label><input id="su-devname" maxlength="30" value="${escapeHtml(localStorage.getItem('cccc.device.name')||'Front Counter')}"></div>
+      <div class="form-row"><label for="su-code">Pairing code</label><input id="su-code" value="${escapeHtml(prefillCode)}" autocapitalize="characters" autocomplete="off" maxlength="6" class="code-input" placeholder="ABC123"></div>
+      <button class="btn btn-primary btn-big" id="su-pair">Pair this counter</button>
       <div id="su-error" class="pin-error"></div>
     </div>`;
   const err = (m)=>{ document.getElementById('su-error').textContent = m || ''; };
-  document.getElementById('su-pair').onclick = async (ev)=>{
-    const btn = ev.currentTarget;
+  const pair = async ()=>{
+    const btn = document.getElementById('su-pair');
+    if(btn.disabled) return;
     const code = document.getElementById('su-code').value.trim().toUpperCase();
     const name = document.getElementById('su-devname').value.trim() || 'Counter';
     if(code.length < 6){ err('Enter the 6-character code.'); return; }
-    btn.disabled = true; err('');
+    btn.disabled = true; btn.textContent = 'Pairing…'; err('');
+    const failed = (m)=>{ err(m); btn.disabled = false; btn.textContent = 'Pair this counter'; };
     try{
+      // A counter is always its own anonymous login (never an owner email login).
       if(!cloud.session || !cloud.isAnonymous()){ await cloud.signOut(); await cloud.signInAnonymously(); }
       const r = await cloud.rpc('redeem_device_pairing', {p_code: code, p_device_key: deviceKey(), p_device_name: name});
-      if(r && r.error){ err(friendlyError({message: r.error})); btn.disabled = false; return; }
+      if(r && r.error){ failed(friendlyError(r)); return; }
       localStorage.setItem('cccc.device.name', name);
       toast('Counter paired');
       location.replace(location.pathname);
-    }catch(e){ err(friendlyError(e)); btn.disabled = false; }
+    }catch(e){ failed(e.offline ? 'No internet. Pairing needs internet — check the connection and try again.' : friendlyError(e)); }
   };
-  document.getElementById('su-login').onclick = async (ev)=>{
-    const btn = ev.currentTarget;
-    const email = document.getElementById('su-email').value.trim();
-    const pass = document.getElementById('su-pass').value;
-    if(!email || !pass){ err('Enter your email and password.'); return; }
-    btn.disabled = true; err('');
-    try{
-      await cloud.signInWithPassword(email, pass);
-      await cloud.rpc('fo_register_device', {p_device_key: deviceKey(), p_device_name: 'Owner device'});
-      location.replace(location.pathname);
-    }catch(e){ err(friendlyError(e)); btn.disabled = false; }
-  };
+  document.getElementById('su-pair').onclick = pair;
+  document.getElementById('su-code').addEventListener('keydown', (e)=>{ if(e.key==='Enter') pair(); });
 }
 
 /* =====================================================================
    PIN GATE / SESSION
    ===================================================================== */
+const APPROVAL_OFFLINE_TEXT = 'Manager approval needs internet. Try again when the counter is back online.';
 let pinBuffer = '';
 let pinMode = 'login';         // 'login' | 'override'
 let pinOverrideResolve = null;
@@ -288,83 +277,128 @@ function showPinGate(mode){
     foot.innerHTML = `<a href="../back/" class="pin-link">Back Office →</a>`;
   } else {
     document.getElementById('pin-title').textContent = `${pinOverrideMinRole.charAt(0)+pinOverrideMinRole.slice(1).toLowerCase()} PIN required`;
-    document.getElementById('pin-sub').textContent = 'Ask a manager to enter their PIN to approve.';
+    document.getElementById('pin-sub').textContent = hasRole(pinOverrideMinRole)
+      ? 'Enter your PIN again to approve. This needs internet.'
+      : 'Ask a manager to enter their PIN to approve. This needs internet.';
     foot.innerHTML = `<a href="#" class="pin-link" id="pin-cancel">← Cancel</a>`;
-    document.getElementById('pin-cancel').onclick = (e)=>{
-      e.preventDefault();
-      document.getElementById('pin-gate').style.display='none';
-      pinMode = 'login';
-      if(pinOverrideResolve){ const r = pinOverrideResolve; pinOverrideResolve = null; r(null); }
-    };
+    document.getElementById('pin-cancel').onclick = (e)=>{ e.preventDefault(); finishOverride(null); };
   }
   document.getElementById('pin-gate').style.display='flex';
 }
+// Closes the approval PIN pad and hands the approver (or null = cancelled) to whoever asked.
+function finishOverride(approver){
+  document.getElementById('pin-gate').style.display='none';
+  pinMode = 'login';
+  pinBuffer = ''; renderPinDisplay(); showPinError('');
+  const r = pinOverrideResolve; pinOverrideResolve = null;
+  if(r) r(approver);
+}
+// Words for a refused PIN. friendlyError() also shows until when the pad is locked
+// after too many wrong PINs (staff_pin_login sends locked_until).
+function pinErrorText(r, minRole){
+  if(r.text) return r.text;
+  if(r.error==='ROLE_TOO_LOW') return `This needs a ${String(minRole||'MANAGER').toLowerCase()} PIN`;
+  return friendlyError(r);         // the whole server answer, e.g. {error:'TOO_MANY_ATTEMPTS', locked_until}
+}
 
 async function submitPin(){
+  if(pinBusy) return;
   if(pinBuffer.length < 4){ showPinError('PIN must be at least 4 digits'); return; }
   const pin = pinBuffer;
+  const mode = pinMode;
+  const minRole = pinOverrideMinRole;
   pinBusy = true; showPinError('Checking…');
   try{
-    const minRole = pinMode==='override' ? pinOverrideMinRole : null;
-    const r = await verifyPin(pin, pinMode==='override' ? 'OVERRIDE' : 'LOGIN', minRole);
-    if(r.error){
-      pinBuffer=''; renderPinDisplay();
-      showPinError(r.error==='ROLE_TOO_LOW' ? `This needs a ${pinOverrideMinRole.toLowerCase()} PIN` : friendlyError({message: r.error}));
+    if(mode==='override'){
+      const r = await approvalPin(pin, minRole);
+      if(pinMode!=='override' || !pinOverrideResolve) return;      // cancelled while checking
+      if(r.offline){ finishOverride(null); toast(APPROVAL_OFFLINE_TEXT, 'warn'); return; }
+      if(r.error){ pinBuffer=''; renderPinDisplay(); showPinError(pinErrorText(r, minRole)); return; }
+      finishOverride(r.approver);
       return;
     }
-    if(pinMode==='override'){
-      document.getElementById('pin-gate').style.display='none';
-      pinMode = 'login';
-      if(pinOverrideResolve){ const res = pinOverrideResolve; pinOverrideResolve = null; res(r.staff); }
-      return;
-    }
+    const r = await verifyPin(pin);
+    if(r.error){ pinBuffer=''; renderPinDisplay(); showPinError(pinErrorText(r)); return; }
     await signIn(r.staff, r.token, r.expires_at, !!r.offline);
   }finally{
     pinBusy = false;
   }
 }
 
-// Online: the server checks the PIN. Offline: compare with the copy saved on this counter.
-async function verifyPin(pin, purpose, minRole){
+// Sign-in. Online: the server checks the PIN. Offline: CASHIERS only, against the
+// copy saved on this counter when they last signed in online.
+async function verifyPin(pin){
   if(isOnline()){
     try{
-      const r = await cloud.rpc('staff_pin_login', {p_pin: pin, p_purpose: purpose, p_min_role: minRole}, {timeout: 8000});
-      if(r && r.error) return {error: r.error};
+      const r = await cloud.rpc('staff_pin_login', {p_pin: pin, p_purpose: 'LOGIN', p_min_role: null}, {timeout: 8000});
+      if(r && r.error) return {error: r.error, locked_until: r.locked_until};
       cachePinVerifier(pin, r.staff);
       return {staff: r.staff, token: r.token, expires_at: r.expires_at};
     }catch(e){
-      if(!e.offline) return {error: friendlyError(e)};
+      if(!e.offline) return {error: 'ERROR', text: friendlyError(e)};
     }
   }
   const staff = await offlineVerifyPin(pin);
-  if(!staff) return {error: 'Incorrect PIN (offline: only staff who signed in on this counter recently can sign in)'};
-  if(minRole && ROLE_RANK[staff.role] < ROLE_RANK[minRole]) return {error: 'ROLE_TOO_LOW'};
+  if(!staff) return {error: 'WRONG_PIN', text: 'Incorrect PIN, or this PIN needs internet. Offline, only cashiers who signed in on this counter in the last 14 days can sign in.'};
   return {staff, offline: true};
 }
 
+// Manager approval: checked by the server only — never against copies on this counter.
+// The answer's one-time token goes with the action to fo_sync, which checks it again.
+// Returns {approver:{id,name,role,token}} | {error, locked_until} | {offline:true}.
+async function approvalPin(pin, minRole){
+  try{
+    const r = await cloud.rpc('staff_pin_login', {p_pin: pin, p_purpose: 'OVERRIDE', p_min_role: minRole || 'MANAGER'}, {timeout: 8000});
+    if(r && r.error) return {error: r.error, locked_until: r.locked_until};
+    if(!r || !r.token || !r.staff) return {error: 'ERROR', text: 'The approval could not be checked. Please try again.'};
+    return {approver: {id: r.staff.id, name: r.staff.name, role: r.staff.role, token: r.token}};
+  }catch(e){
+    if(e.offline) return {offline: true};
+    return {error: 'ERROR', text: friendlyError(e)};
+  }
+}
+
+/* ---- Offline PIN copies: CASHIERS only (security decision 4) ----
+   A salted, slow hash of a cashier's PIN, saved when they sign in online, so they
+   can sign in while the internet is down. Manager/admin PINs are never saved. */
+const PIN_COPY_DAYS = 14;
 async function pbkdf2Hex(pin, salt){
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', enc.encode(pin), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt: enc.encode(salt), iterations: 60000, hash:'SHA-256'}, key, 256);
   return [...new Uint8Array(bits)].map(b=>b.toString(16).padStart(2,'0')).join('');
 }
+function isActiveCashier(staffId){
+  const st = state.staff.find(s=>s.id===staffId);
+  return !!(st && st.active!==false && st.role==='CASHIER');
+}
+function pinCopyIsFresh(v){ return Date.now() - new Date(v.cached_at).getTime() < PIN_COPY_DAYS*24*3600*1000; }
 async function cachePinVerifier(pin, staff){
   try{
     const list = (await LocalDB.get('fo.pinVerifiers')) || [];
-    const hash = await pbkdf2Hex(pin, staff.id + ':' + deviceKey());
-    const next = list.filter(v=>v.staff_id!==staff.id);
-    next.push({staff_id: staff.id, name: staff.name, role: staff.role, hash, cached_at: new Date().toISOString()});
-    await LocalDB.set('fo.pinVerifiers', next);
-  }catch(e){ console.warn('could not cache PIN for offline use', e); }
+    const next = list.filter(v=>v && v.staff_id!==staff.id);        // also drops a copy left from before a promotion
+    if(staff.role==='CASHIER'){
+      const hash = await pbkdf2Hex(pin, staff.id + ':' + deviceKey());
+      next.push({staff_id: staff.id, role: 'CASHIER', hash, cached_at: new Date().toISOString()});
+    }
+    if(next.length || list.length) await LocalDB.set('fo.pinVerifiers', next);
+  }catch(e){ console.warn('could not save the PIN copy for offline use', e); }
+}
+// On start-up (and after each menu refresh): keep copies only for active cashiers.
+async function prunePinVerifiers(){
+  try{
+    const list = (await LocalDB.get('fo.pinVerifiers')) || [];
+    const keep = list.filter(v => v && isActiveCashier(v.staff_id) && pinCopyIsFresh(v));
+    if(keep.length !== list.length) await LocalDB.set('fo.pinVerifiers', keep);
+  }catch(e){ console.warn('could not tidy the offline PIN copies', e); }
 }
 async function offlineVerifyPin(pin){
   const list = (await LocalDB.get('fo.pinVerifiers')) || [];
-  const fresh = list.filter(v => Date.now() - new Date(v.cached_at).getTime() < 14*24*3600*1000);
-  for(const v of fresh){
-    const st = state.staff.find(s=>s.id===v.staff_id);
-    if(st && st.active===false) continue;
+  for(const v of list){
+    if(!v || !isActiveCashier(v.staff_id) || !pinCopyIsFresh(v)) continue;
     if(await pbkdf2Hex(pin, v.staff_id + ':' + deviceKey()) === v.hash){
-      return {id: v.staff_id, name: st ? st.name : v.name, role: st ? st.role : v.role};
+      const st = state.staff.find(s=>s.id===v.staff_id);
+      return {id: st.id, name: st.name, role: st.role};
     }
   }
   return null;
@@ -396,19 +430,67 @@ function resumeStaffSession(){
     return true;
   }catch(e){ return false; }
 }
+// Lock / switch user. The screen locks straight away; ending the login on the
+// server happens in the background (see endStaffLogin).
 function lockSession(){
   const token = cloud.getStaffToken();
-  if(token && isOnline()) cloud.rpc('staff_logout', {p_token: token}).catch(()=>{});
   cloud.setStaffToken(null);
   try{ sessionStorage.removeItem(STAFF_SESSION_STORAGE); }catch(e){}
   posState.currentUser = null;
   posState.cart = []; posState.discount = null; posState.customer = null; posState.qrOrder = null; posState.resumingHeldSaleId = null;
   show('app', false);
   showPinGate('login');
+  if(token) endStaffLogin(token).catch(e=>console.warn('could not end the staff login', e));
 }
-// Ask for a Manager (or Admin) PIN without losing the current cart. Resolves to the approver or null.
+
+/* ---- Ending a staff login on the server (staff_logout) ----
+   A manager's own login can be the approval for a refund / void / discount that is
+   still waiting to upload; ending it first would make that upload fail. So: upload
+   what's waiting first, then end the login only if nothing still waiting needs it.
+   Logins that can't be ended yet (offline, or still needed) are remembered on this
+   counter and ended after a later upload. */
+const PENDING_LOGOUTS_KEY = 'fo.pendingLogouts';
+let pendingLogoutsLoad = null;
+let logoutRun = null;
+function pendingLogouts(){
+  if(!pendingLogoutsLoad) pendingLogoutsLoad = LocalDB.get(PENDING_LOGOUTS_KEY).then(l=>Array.isArray(l)?l:[]).catch(()=>[]);
+  return pendingLogoutsLoad;     // one shared list, changed in memory and saved after each change
+}
+function savePendingLogouts(list){ return LocalDB.set(PENDING_LOGOUTS_KEY, list.slice()).catch(()=>{}); }
+async function endStaffLogin(token){
+  const list = await pendingLogouts();
+  if(!list.includes(token)){ list.push(token); await savePendingLogouts(list); }
+  await Sync.run();                  // upload first
+  await finishPendingLogouts();
+}
+async function finishPendingLogouts(){
+  while(logoutRun) await logoutRun;
+  logoutRun = (async ()=>{
+    const list = await pendingLogouts();
+    if(!list.length || !isOnline()) return;
+    const waiting = JSON.stringify((await LocalDB.outboxAll()).map(o=>o.data));
+    for(const t of list.slice()){
+      if(waiting.includes(t)) continue;                       // a queued approval still needs this login
+      try{ await cloud.rpc('staff_logout', {p_token: t}, {timeout: 8000}); }
+      catch(e){ if(e.offline) break; }                         // offline: try again after the next upload
+      const i = list.indexOf(t); if(i>=0) list.splice(i, 1);
+      await savePendingLogouts(list);
+    }
+  })().catch(()=>{}).finally(()=>{ logoutRun = null; });
+  return logoutRun;
+}
+
+// Manager (or admin) approval for a refund, void, discount or closing someone else's
+// shift — without losing the current cart. Resolves to {id, name, role, token} or null.
+// The token goes with the action to the server, which checks it (security decision 3),
+// so approvals need internet.
 function requireOverride(minRole='MANAGER'){
-  if(hasRole(minRole)) return Promise.resolve(posState.currentUser);
+  if(!isOnline()){ toast(APPROVAL_OFFLINE_TEXT, 'warn'); return Promise.resolve(null); }
+  const me = posState.currentUser;
+  const myToken = cloud.getStaffToken();
+  // A manager signed in online approves with their own login (signed in offline = no login token: ask for the PIN).
+  if(me && hasRole(minRole) && myToken) return Promise.resolve({id: me.id, name: me.name, role: me.role, token: myToken});
+  if(pinOverrideResolve){ const prev = pinOverrideResolve; pinOverrideResolve = null; prev(null); }
   return new Promise((resolve)=>{
     pinOverrideMinRole = minRole;
     pinOverrideResolve = resolve;
@@ -428,7 +510,8 @@ function applyOpLocally(op, replay){
       break;
     case 'shift_close': {
       const sh = state.shifts.find(s=>s.id===d.id);
-      if(sh && sh.status!=='CLOSED') Object.assign(sh, d, {status:'CLOSED'});
+      if(sh && sh.status!=='CLOSED') Object.assign(sh, d, {status:'CLOSED', approval_token: undefined});
+      if(sh) delete sh.approval_token;
       break;
     }
     case 'cash_movement':
@@ -483,8 +566,13 @@ const Sync = {
     return op;
   },
   kick(){ clearTimeout(this.timer); this.timer = setTimeout(()=>this.run(), 250); },
-  async run(){
-    if(this.busy) return;
+  // Upload what's waiting. While an upload is already running, returns that one
+  // (so callers like "Lock" can wait for it to finish).
+  run(){
+    if(!this.current) this.current = this._run().finally(()=>{ this.current = null; });
+    return this.current;
+  },
+  async _run(){
     if(navigator.onLine === false){ await this.refreshCounts(); return; }
     this.busy = true;
     try{
@@ -524,6 +612,7 @@ const Sync = {
       this.busy = false;
       await this.refreshCounts();
       saveSnapshotSoon();
+      finishPendingLogouts();          // staff logins that were waiting for these uploads
     }
   },
   async refreshCounts(){
@@ -574,7 +663,9 @@ async function showFailedOps(){
     onMount:(root)=>{
       root.querySelector('[data-close]').onclick = closeModal;
       const dl = root.querySelector('#fo-dl-failed');
-      if(dl) dl.onclick = ()=> downloadFile(`${fileNameSlug()}-failed-uploads-${todayISO()}.json`, JSON.stringify(list, null, 2), 'application/json');
+      // Approval tokens stay on this counter (needed for Retry) but are left out of the download.
+      const noTokens = list.map(f=>Object.assign({}, f, {data: Object.assign({}, f.data, {approval_token: undefined, discount_approval_token: undefined})}));
+      if(dl) dl.onclick = ()=> downloadFile(`${fileNameSlug()}-failed-uploads-${todayISO()}.json`, JSON.stringify(noTokens, null, 2), 'application/json');
       root.querySelectorAll('[data-retry]').forEach(b=> b.onclick = async ()=>{
         const f = list.find(x=>String(x.seq)===b.dataset.retry);
         await LocalDB.failedRemove(f.seq);
@@ -976,7 +1067,8 @@ async function openDiscountPicker(){
       if(value<=0){ toast('Enter a discount value','error'); return; }
       const type = root.querySelector('#disc-type').value;
       if(type==='percent' && value>100){ toast('A percentage discount cannot be over 100%','error'); return; }
-      posState.discount = {type, value, appliedBy: approver.name, approvedById: approver.id};
+      // approvalToken: the server checks it when this sale uploads (one approval = one sale).
+      posState.discount = {type, value, appliedBy: approver.name, approvedById: approver.id, approvalToken: approver.token};
       closeModal(); renderCartPanel();
       queueAudit('Discount applied', `${value}${type==='percent'?'%':' fixed'} — approved by ${approver.name}`);
     };
@@ -986,9 +1078,10 @@ async function openDiscountPicker(){
 /* ================= Customers (loyalty) ================= */
 function openCustomerPicker(){
   if(!isOnline()){ toast('Finding customers needs the internet. You can still finish the sale without one.', 'warn'); return; }
+  const SEARCH_HINT = 'Name, last 4 digits or full number';
   openModal({title:'Add customer', body:`
-    <div class="form-row"><label>Search name or phone</label><input id="cp-q" placeholder="e.g. Zed or 0917…" autocomplete="off"></div>
-    <div id="cp-results" class="cp-results"><p class="hint">Type at least 2 letters.</p></div>
+    <div class="form-row"><label for="cp-q">Find a customer</label><input id="cp-q" placeholder="${SEARCH_HINT}" autocomplete="off"></div>
+    <div id="cp-results" class="cp-results"><p class="hint">${SEARCH_HINT}.</p></div>
     <details class="cp-new"><summary>+ New customer</summary>
       <div class="form-grid" style="margin-top:10px;">
         <div class="form-row"><label>Nickname</label><input id="cp-name" maxlength="30"></div>
@@ -1002,26 +1095,45 @@ function openCustomerPicker(){
     root.querySelector('[data-cancel]').onclick = closeModal;
     const results = root.querySelector('#cp-results');
     const pick = (c)=>{ posState.customer = {id:c.id, nickname:c.nickname}; closeModal(); renderCartPanel(); toast(`${c.nickname} added to this sale`); };
+    // Too many look-ups by phone number from this counter (the server limits them so
+    // hidden digits can't be guessed): searching by name still works.
+    const isLimited = (code)=> /TOO_MANY_ATTEMPTS/.test(String(code||''));
+    let lastQ = '';
     const search = debounce(async (q)=>{
-      if(q.length<2){ results.innerHTML = '<p class="hint">Type at least 2 letters.</p>'; return; }
+      lastQ = q;
+      if(q.length<2){ results.innerHTML = `<p class="hint">${SEARCH_HINT}.</p>`; return; }
       results.innerHTML = '<p class="hint">Searching…</p>';
       try{
         const list = await cloud.rpc('search_customers', {p_q: q, p_limit: 15});
-        if(!list.length){ results.innerHTML = '<p class="hint">No match. Add them as a new customer below.</p>'; return; }
-        results.innerHTML = list.map(c=>`<button class="cp-row" data-id="${c.id}"><b>${escapeHtml(c.nickname)}</b><span class="text-light">${c.phone?escapeHtml(c.phone):'no phone'} · ${c.visit_count} visit${c.visit_count==1?'':'s'}</span></button>`).join('');
+        if(q !== lastQ) return;                                 // a newer search is on its way
+        if(!list || !list.length){ results.innerHTML = '<p class="hint">No match. Add them as a new customer below.</p>'; return; }
+        // Phone numbers come from the server already masked (e.g. 0917 ••• 4567); shown as received.
+        results.innerHTML = list.map(c=>`<button class="cp-row" data-id="${escapeHtml(c.id)}"><b>${escapeHtml(c.nickname)}</b><span class="text-light">${c.phone?escapeHtml(c.phone):'no phone'} · ${Number(c.visit_count)||0} visit${Number(c.visit_count)===1?'':'s'}</span></button>`).join('');
         results.querySelectorAll('[data-id]').forEach(b=> b.onclick = ()=> pick(list.find(c=>c.id===b.dataset.id)));
-      }catch(e){ results.innerHTML = `<p class="hint">${escapeHtml(friendlyError(e))}</p>`; }
+      }catch(e){
+        if(q !== lastQ) return;
+        const extra = e.offline ? ' Finding customers needs internet — you can still finish the sale without one.'
+          : isLimited(e.message) ? ' You can still search by name.' : '';
+        results.innerHTML = `<p class="hint">${escapeHtml(friendlyError(e) + extra)}</p>`;
+      }
     }, 300);
     root.querySelector('#cp-q').oninput = (e)=> search(e.target.value.trim());
-    root.querySelector('#cp-create').onclick = async ()=>{
+    root.querySelector('#cp-create').onclick = async (ev)=>{
+      const btn = ev.currentTarget;
       const name = root.querySelector('#cp-name').value.trim();
       if(!name){ toast('Enter a nickname','error'); return; }
+      btn.disabled = true;
       try{
         const r = await cloud.rpc('fo_add_customer', {p_nickname: name, p_phone: root.querySelector('#cp-phone').value.trim() || null});
-        if(r.error){ toast(friendlyError({message:r.error}), 'error'); return; }
+        if(r.error){
+          toast(friendlyError(r) + (isLimited(r.error) ? ' Save them without a number for now, or try again later.' : ''), 'error');
+          return;
+        }
         if(r.existing) toast(`That number belongs to ${r.customer.nickname} — added them`, 'warn');
         pick(r.customer);
-      }catch(e){ toast(friendlyError(e), 'error'); }
+      }catch(e){
+        toast(e.offline ? 'Saving a customer needs internet. You can still finish the sale without one.' : friendlyError(e), 'error');
+      }finally{ btn.disabled = false; }
     };
     setTimeout(()=>root.querySelector('#cp-q').focus(), 50);
   }});
@@ -1188,7 +1300,9 @@ async function completeSale(paymentInfo){
         transaction_date: todayISO(), notes: l.kind==='modifier' ? `Modifier "${l.label}" — ${sale.transaction_number}` : `Sold: ${sale.transaction_number}`, created_at: now});
     });
   });
-  await Sync.queue('sale', {sale, items, payment, inventory});
+  const saleOp = {sale, items, payment, inventory};
+  if(posState.discount) saleOp.discount_approval_token = posState.discount.approvalToken || null;
+  await Sync.queue('sale', saleOp);
   queueAudit('Sale completed', `${sale.transaction_number} — ${fmtMoney(sale.grand_total)} (${paymentInfo.method})${q?' · QR '+q.order_number:''}`, saleId);
   const customerName = posState.customer ? posState.customer.nickname : null;
   clearCart();
@@ -1458,11 +1572,14 @@ function openCashManagementModal(){
 async function openCloseShiftFlow(){
   const shift = activeShift();
   if(!shift) return;
+  // Closing your own shift needs nothing extra. Closing another cashier's shift needs a
+  // manager approval (closer = the approving manager, with the token the server checks).
   let closer = posState.currentUser;
   if(shift.cashier_id !== posState.currentUser.id){
     closer = await requireOverride('MANAGER');
     if(!closer) return;
   }
+  const closeApprovalToken = closer.id !== shift.cashier_id ? (closer.token || null) : null;
   const m = shiftMetrics(shift);
   let declared = NaN;
   const body = `
@@ -1503,12 +1620,14 @@ async function openCloseShiftFlow(){
         const note = root.querySelector('#cs-notes').value.trim();
         if(Math.abs(variance) > 20 && !note){ toast('Please enter a reason for this variance', 'error'); return; }
         const now = new Date().toISOString();
-        await Sync.queue('shift_close', {
+        const closeOp = {
           id: shift.id, closed_at: now, declared_cash: declared, expected_cash: m.expectedCash, cash_variance: variance,
           gross_sales: m.grossSales, net_sales: m.netSales, cash_sales: m.cashGross, card_sales: m.cardGross, other_sales: m.otherGross,
           refunds_total: m.refundsOnly, voids_total: m.voidsOnly, transaction_count: m.transactionCount,
           notes: (shift.notes||'') + (note ? ' | Variance note: '+note : ''), closed_by: closer.id, closed_by_name: closer.name, updated_at: now,
-        });
+        };
+        if(closeApprovalToken) closeOp.approval_token = closeApprovalToken;
+        await Sync.queue('shift_close', closeOp);
         queueAudit('Shift closed', `${shift.shift_number} — variance ${fmtMoney(variance)}`, shift.id);
         closeModal();
         toast('Shift closed');
@@ -1666,18 +1785,24 @@ async function openRefundVoidFlow(sale, items, kind, ds){
     foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-danger" id="rv-confirm">${isVoid?'Confirm Void':'Confirm Refund'}</button>`,
     onMount:(root)=>{
       root.querySelector('[data-cancel]').onclick = closeModal;
-      root.querySelector('#rv-confirm').onclick = async ()=>{
+      root.querySelector('#rv-confirm').onclick = async (ev)=>{
+        const btn = ev.currentTarget;
+        if(btn.disabled) return;
         const reason = root.querySelector('#rv-reason').value.trim();
         let refundItems = [], refundAmount = 0;
+        // What is left to refund on this sale (the server refuses more than this).
+        const alreadyRefunded = ((ds||state).refunds||[]).filter(r=>r.sale_id===sale.id).reduce((s,r)=>s+(Number(r.amount)||0), 0);
+        const leftToRefund = Math.max(0, Math.round((Number(sale.grand_total) - alreadyRefunded)*100)/100);
         if(isVoid){
           refundItems = items.map(it=>({sale_item_id:it.id, quantity:Number(it.quantity), recipe_id:it.recipe_id, modifiers:it.modifiers||[]}));
           refundAmount = Number(sale.grand_total);
         } else {
-          let bad = false;
+          let bad = false, everything = true;
           root.querySelectorAll('[data-item]').forEach(row=>{
             const qty = Number(row.querySelector('.rv-qty').value)||0;
             const it = items.find(x=>x.id===row.dataset.item);
             if(qty > Number(it.quantity)) bad = true;
+            if(qty < Number(it.quantity)) everything = false;
             if(qty>0){
               refundItems.push({sale_item_id:it.id, quantity:qty, recipe_id:it.recipe_id, modifiers:it.modifiers||[]});
               refundAmount += (Number(it.line_total)/Number(it.quantity))*qty;
@@ -1685,7 +1810,11 @@ async function openRefundVoidFlow(sale, items, kind, ds){
           });
           if(bad){ toast('Refund quantity cannot be more than what was sold','error'); return; }
           if(refundItems.length===0){ toast('Select at least one item to refund','error'); return; }
+          // Every item back = everything the customer paid (after discount, incl. tax/service);
+          // otherwise the items' prices, never more than what is left.
+          refundAmount = everything ? leftToRefund : Math.min(refundAmount, leftToRefund);
         }
+        btn.disabled = true;
         const now = new Date().toISOString();
         const currentShift = activeShift();
         const refund = {id: uid(), sale_id: sale.id, shift_id: currentShift ? currentShift.id : null,
@@ -1699,8 +1828,9 @@ async function openRefundVoidFlow(sale, items, kind, ds){
               transaction_date: todayISO(), notes: `${isVoid?'Void':'Refund'}${l.kind==='modifier'?' modifier "'+l.label+'"':''} of ${sale.transaction_number}`, created_at: now});
           });
         });
+        // sale_status is only for this screen (the server works out the sale's status itself).
         const saleStatus = isVoid ? 'VOIDED' : (refund.type==='FULL_REFUND' ? 'REFUNDED' : 'PARTIALLY_REFUNDED');
-        await Sync.queue('refund', {refund, inventory, sale_status: saleStatus});
+        await Sync.queue('refund', {refund, inventory, sale_status: saleStatus, approval_token: approver.token || null});
         if(ds && ds!==state){ ds.refunds.push(refund); const s = ds.sales.find(x=>x.id===sale.id); if(s) s.status = saleStatus; }
         queueAudit(isVoid?'Sale voided':'Refund', `${sale.transaction_number} — ${fmtMoney(refund.amount)}${reason?' — '+reason:''} (approved by ${approver.name})`, sale.id);
         closeModal();

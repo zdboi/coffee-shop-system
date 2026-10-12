@@ -58,33 +58,84 @@ function statCard(label, value, sub){
 function emptyBlock(text){ return `<div class="card empty-state" style="box-shadow:var(--shadow);"><div style="padding:10px 0;">${text}</div></div>`; }
 function emptyLine(text){ return `<div class="text-light" style="padding:14px 0;font-size:13.5px;">${text}</div>`; }
 
-// Turns server / network errors into sentences a cashier can act on.
+// Turns server / network errors into sentences a cashier (or the owner) can act on.
+// The server sends a CODE as the error message, sometimes followed by extra text
+// ("TABLE_NOT_ALLOWED: sales"); friendlyError() looks up the code at the start.
 const ERROR_TEXT = {
+  // PIN login / counter
   WRONG_PIN: 'Incorrect PIN.',
-  TOO_MANY_ATTEMPTS: 'Too many wrong attempts. Wait 5 minutes and try again.',
+  TOO_MANY_ATTEMPTS: 'Too many tries. Please wait a few minutes and try again.',
   ROLE_TOO_LOW: 'That PIN does not have permission for this.',
   ADMIN_ONLY: 'Only an admin can do this.',
+  ADMIN_ONLY_PIN: 'An admin PIN is required.',
   OWNER_ONLY: 'Only the owner\'s email login can do this.',
   NOT_A_MEMBER: 'This login is not linked to a shop.',
+  NOT_ALLOWED: 'This login is not allowed to do this. If this is a counter, pair it again in Back Office → Devices.',
+  BAD_PURPOSE: 'The PIN check could not be done. Reload the page and try again.',
+  UNKNOWN_STAFF: 'That staff member is not in this shop any more. Ask the owner to check Back Office → Staff.',
   BAD_CODE: 'That pairing code is wrong or has expired. Make a new one in Back Office → Devices.',
   PIN_IN_USE: 'Another staff member already uses that PIN. Choose a different one.',
   PIN_FORMAT: 'PIN must be 4 to 6 digits.',
   DEVICE_NOT_REGISTERED: 'This counter is not registered (it may have been removed in Back Office → Devices).',
+  DEVICE_MISMATCH: 'This counter\'s login does not match its pairing. Pair it again in Back Office → Devices.',
+  UNKNOWN_DEVICE: 'That counter was not found (it may have been removed already). Refresh the page and try again.',
+  // Manager approval (refunds, voids, discounts, closing someone else's shift)
+  APPROVAL_REQUIRED: 'This needs a manager\'s approval. Ask a manager to enter their PIN.',
+  APPROVAL_INVALID: 'The manager approval expired or was already used. Ask the manager to enter their PIN again.',
+  // Refunds and voids
+  REFUND_TOO_LARGE: 'The refund is more than what is left to refund on this sale. Check the amount and try again.',
+  RETURN_TOO_LARGE: 'More items are being returned than were sold (some may already be refunded). Check the quantities.',
+  SALE_NOT_REFUNDABLE: 'This sale cannot be refunded: it is not finished yet, or it was already fully refunded.',
+  SALE_NOT_FOUND: 'The sale for this refund is not on the server (it may not have uploaded). Please tell the owner.',
+  BAD_AMOUNT: 'That amount is not valid. Enter an amount of ₱0 or more.',
+  BAD_REFUND_TYPE: 'This refund has an unknown type, so it was not saved. Please tell the owner.',
+  BAD_REFUND: 'This refund is missing information, so it was not saved. Please tell the owner.',
+  // Sales and stock
+  BAD_SALE: 'This sale is missing information, so it was not saved. Please tell the owner.',
+  BAD_SALE_STATUS: 'This sale has an unknown status, so it was not saved. Please tell the owner.',
+  SALE_TOTALS_MISMATCH: 'The sale total does not match its items, so the server did not save it. Please tell the owner.',
+  UNKNOWN_INGREDIENT: 'An ingredient in this item no longer exists. Ask the owner to check the item\'s recipe in Back Office.',
+  UNKNOWN_RECIPE: 'An item in this sale is no longer on the menu. Ask the owner to check the menu in Back Office.',
+  SHIFT_NOT_FOUND: 'This shift is not on the server (it may not have uploaded). Please tell the owner.',
+  FORBIDDEN_ROW: 'This could not be saved because it clashes with a record that already exists. Please tell the owner.',
+  // QR orders / customers
   NOT_PAID: 'Take payment for this order first.',
   BAD_STATE: 'This order was already updated on another screen. Refreshing.',
   BAD_PHONE: 'Enter a Philippine mobile number, e.g. 0917 123 4567.',
-  ADMIN_ONLY_PIN: 'An admin PIN is required.',
 };
+// The error code at the very start of a message: "APPROVAL_INVALID", "TABLE_NOT_ALLOWED: sales" ...
+// Matches whole codes only, so "BAD_REFUND_TYPE" is never read as "BAD_REFUND".
+function errorCode(text){
+  const m = /^\s*(?:ERROR:\s*)?([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*)(?![A-Za-z0-9_])/.exec(String(text == null ? '' : text));
+  return m ? m[1] : null;
+}
+// "Too many wrong tries" with the time the lock ends (staff_pin_login sends locked_until).
+function lockedUntilText(lockedUntil){
+  const t = lockedUntil ? new Date(lockedUntil) : null;
+  if(!t || isNaN(t)) return null;
+  const mins = Math.ceil((t.getTime() - Date.now()) / 60000);
+  if(mins <= 0) return 'Too many wrong PINs. You can try again now.';
+  const wait = mins === 1 ? 'about 1 minute' : mins < 120 ? 'about ' + mins + ' minutes' : 'about ' + Math.round(mins / 60) + ' hours';
+  return 'Too many wrong PINs. Try again at ' + fmtTime(t) + ' (' + wait + '), or ask the owner to unlock this counter in Back Office → Devices.';
+}
+// Accepts a CloudError / Error, a plain string, a server result such as
+// {error:'TOO_MANY_ATTEMPTS', locked_until:'…'} or an fo_sync result {status:'error', message:'…'}.
 function friendlyError(e){
-  if(!e) return 'Something went wrong.';
-  if(e.offline) return e.message;
-  const raw = (e.code && ERROR_TEXT[e.code]) ? e.code : (e.message || String(e));
-  if(ERROR_TEXT[raw]) return ERROR_TEXT[raw];
-  for(const k of Object.keys(ERROR_TEXT)){ if(raw.indexOf(k) === 0) return ERROR_TEXT[k]; }
+  if(e == null || e === '') return 'Something went wrong.';
+  if(e.offline) return e.message || 'No internet connection.';
+  let raw = typeof e === 'string' ? e : (e.message || e.error || e.msg || '');
+  if(raw && typeof raw === 'object') raw = raw.message || raw.error || '';
+  raw = String(raw || '');
+  const code = (e.code && ERROR_TEXT[e.code]) ? e.code : errorCode(raw);
+  if(code === 'TOO_MANY_ATTEMPTS' && e.locked_until){
+    const t = lockedUntilText(e.locked_until);
+    if(t) return t;
+  }
+  if(code && ERROR_TEXT[code]) return ERROR_TEXT[code];
   if(/row-level security/i.test(raw)) return 'You do not have permission to change this.';
   if(/foreign key/i.test(raw)) return 'This record is still used elsewhere (e.g. in sales history), so it cannot be deleted.';
   if(/duplicate key/i.test(raw)) return 'That already exists.';
-  return raw;
+  return raw || 'Something went wrong.';
 }
 
 function debounce(fn, ms){ let t; return function(){ const a=arguments, self=this; clearTimeout(t); t=setTimeout(()=>fn.apply(self,a), ms); }; }

@@ -25,9 +25,13 @@
   }
 
   function authErrorMessage(data, status){
+    const errCode = data && typeof data === 'object' ? (data.error_code || '') : '';
+    if(errCode === 'over_email_send_rate_limit') return 'Too many emails were sent. Please wait up to an hour, then try again.';
     if(status === 429) return 'Too many attempts from this network. Please wait a few minutes and try again.';
     if(!data) return 'Login failed (' + status + ')';
     if(typeof data === 'string') return data;
+    if(errCode === 'same_password') return 'Your new password must be different from your old one.';
+    if(errCode === 'reauthentication_needed') return 'For your safety, sign out and sign in again, then change your password.';
     const msg = data.msg || data.error_description || data.message || data.error || ('Login failed (' + status + ')');
     if(/anonymous sign-ins are disabled/i.test(msg)) return 'Anonymous sign-ins are turned off in Supabase (Authentication → Sign In / Providers → Anonymous).';
     if(/email not confirmed/i.test(msg)) return 'Please confirm your email first (check your inbox), then sign in.';
@@ -39,6 +43,65 @@
     const text = await res.text();
     if(!text) return null;
     try{ return JSON.parse(text); }catch(e){ return text; }
+  }
+
+  // Keys Supabase Auth puts in the page address after an email link
+  // (password reset, sign-up confirmation, magic link, invite, email change).
+  const AUTH_URL_KEYS = ['access_token', 'refresh_token', 'expires_in', 'expires_at', 'token_type', 'type',
+    'provider_token', 'provider_refresh_token', 'error', 'error_code', 'error_description'];
+
+  function linkErrorText(code, description){
+    if(code === 'otp_expired' || /expired|invalid/i.test(description || ''))
+      return 'This email link has expired or was already used. Ask for a new email and use the newest link.';
+    return description || 'This email link did not work. Ask for a new email and try again.';
+  }
+
+  // Reads the login (or the error) Supabase put in a page address. Pure: does not
+  // touch the page. hash = location.hash, search = location.search.
+  // Returns null (nothing there), {type, session, from:'hash'} or
+  // {type, error, error_code, error_description, from:'hash'|'search'}.
+  function parseAuthRedirect(hash, search){
+    const h = new URLSearchParams(String(hash || '').replace(/^#/, ''));
+    const q = new URLSearchParams(String(search || '').replace(/^\?/, ''));
+    const access = h.get('access_token');
+    if(access){
+      const expiresIn = Number(h.get('expires_in'));
+      const expiresAt = Number(h.get('expires_at'));
+      return {
+        type: h.get('type') || null,
+        from: 'hash',
+        session: {
+          access_token: access,
+          refresh_token: h.get('refresh_token') || null,
+          expires_at: expiresAt > 0 ? Math.floor(expiresAt)
+            : Math.floor(Date.now()/1000) + (expiresIn > 0 ? Math.floor(expiresIn) : 3600),
+          user: null,
+        },
+      };
+    }
+    const isErr = p => !!(p.get('error') || p.get('error_code') || p.get('error_description'));
+    const src = isErr(h) ? 'hash' : (q.get('error_code') || q.get('error_description')) ? 'search' : null;
+    if(!src) return null;
+    const p = src === 'hash' ? h : q;
+    const code = p.get('error_code') || p.get('error') || 'link_error';
+    return {type: p.get('type') || null, from: src, error: linkErrorText(code, p.get('error_description')),
+            error_code: code, error_description: p.get('error_description') || null};
+  }
+
+  // Removes the login / error from the address bar (so it is not bookmarked,
+  // shared or left in the history). Other parts of the address are kept.
+  function clearAuthFromAddress(from){
+    try{
+      if(!window.history || !history.replaceState) return;
+      let search = location.search;
+      if(from === 'search'){
+        const q = new URLSearchParams(search.replace(/^\?/, ''));
+        AUTH_URL_KEYS.forEach(k => q.delete(k));
+        search = q.toString() ? '?' + q.toString() : '';
+      }
+      const hash = from === 'hash' ? '' : location.hash;
+      history.replaceState(history.state, document.title, location.pathname + search + hash);
+    }catch(e){ /* very old browser: the address keeps the fragment, nothing else breaks */ }
   }
 
   function createClient(options){
@@ -91,10 +154,14 @@
       };
     }
 
-    async function authRequest(path, body, bearer){
-      const headers = {'apikey': CFG.SUPABASE_ANON_KEY, 'Content-Type': 'application/json'};
+    // method defaults to POST; GET sends no body.
+    async function authRequest(path, body, bearer, method){
+      method = method || 'POST';
+      const headers = {'apikey': CFG.SUPABASE_ANON_KEY};
+      if(method !== 'GET') headers['Content-Type'] = 'application/json';
       if(bearer) headers.Authorization = 'Bearer ' + bearer;
-      const res = await rawFetch(CFG.SUPABASE_URL + '/auth/v1' + path, {method: 'POST', headers, body: JSON.stringify(body || {})});
+      const res = await rawFetch(CFG.SUPABASE_URL + '/auth/v1' + path,
+        {method, headers, body: method === 'GET' ? undefined : JSON.stringify(body || {})});
       const data = await parseBody(res);
       if(!res.ok){
         throw new CloudError(authErrorMessage(data, res.status), {status: res.status, code: data && (data.error_code || data.error || data.code)});
@@ -226,6 +293,47 @@
         const path = '/recover' + (redirectTo ? '?redirect_to=' + enc(redirectTo) : '');
         return authRequest(path, {email});
       },
+      // Call once when the page loads (Back Office). When the owner arrives from an
+      // email link (e.g. "Reset password"), Supabase puts a login in the page address:
+      //   #access_token=…&refresh_token=…&expires_in=3600&expires_at=…&type=recovery
+      // This saves it as this client's session, removes it from the address bar and returns
+      //   null                      nothing in the address
+      //   {type, session}           logged in; type = 'recovery' for a password reset
+      //   {type, error, error_code} the link failed (e.g. expired) - error is a plain sentence
+      async sessionFromUrl(){
+        const parsed = parseAuthRedirect(location.hash, location.search);
+        if(!parsed) return null;
+        clearAuthFromAddress(parsed.from);
+        if(parsed.error) return {type: parsed.type, error: parsed.error, error_code: parsed.error_code};
+        const s = parsed.session;
+        try{
+          s.user = await authRequest('/user', null, s.access_token, 'GET');
+        }catch(e){
+          // A token the server refuses is not kept. Offline / server trouble: keep it,
+          // the user details are filled in by the next refresh.
+          if(!e.offline && (e.status === 401 || e.status === 403)){
+            return {type: parsed.type, error: linkErrorText('otp_expired'), error_code: e.code || 'bad_jwt'};
+          }
+        }
+        writeSession(s);
+        return {type: parsed.type, session};
+      },
+      // Sets a new password for the logged-in user (after sessionFromUrl() returned
+      // type 'recovery', or from a "Change password" screen). Returns the updated user.
+      async updatePassword(newPassword){
+        if(typeof newPassword !== 'string' || !newPassword) throw new CloudError('Enter a new password.', {code: 'NO_PASSWORD'});
+        if(!session) throw new CloudError('Your login has ended. Please sign in again.', {status: 401, code: 'NO_SESSION'});
+        const send = async () => authRequest('/user', {password: newPassword}, await accessToken(), 'PUT');
+        let user;
+        try{ user = await send(); }
+        catch(e){
+          if(e.status !== 401 || !session) throw e;
+          await refreshSession();
+          user = await send();
+        }
+        if(user && user.id && session) writeSession(Object.assign({}, session, {user}));
+        return user;
+      },
       async signOut(){
         const token = session ? session.access_token : null;
         writeSession(null);
@@ -283,5 +391,5 @@
     return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);
   }
 
-  window.Cloud = {createClient, CloudError, uuid};
+  window.Cloud = {createClient, CloudError, uuid, parseAuthRedirect};
 })();
