@@ -79,6 +79,10 @@ const ERROR_TEXT = {
   DEVICE_NOT_REGISTERED: 'This counter is not registered (it may have been removed in Back Office → Devices).',
   DEVICE_MISMATCH: 'This counter\'s login does not match its pairing. Pair it again in Back Office → Devices.',
   UNKNOWN_DEVICE: 'That counter was not found (it may have been removed already). Refresh the page and try again.',
+  PIN_AMBIGUOUS: 'Two staff members share this PIN. Ask the owner to give one of them a new PIN in Back Office → Staff.',
+  // Pairing a counter
+  NOT_SIGNED_IN: 'This tablet\'s counter login was not ready. Reload the page and enter the pairing code again.',
+  DEVICE_KEY_TAKEN: 'This tablet is already paired with a different shop. Ask that shop\'s owner to remove it in Back Office → Devices, then pair it again.',
   // Manager approval (refunds, voids, discounts, closing someone else's shift)
   APPROVAL_REQUIRED: 'This needs a manager\'s approval. Ask a manager to enter their PIN.',
   APPROVAL_INVALID: 'The manager approval expired or was already used. Ask the manager to enter their PIN again.',
@@ -101,7 +105,10 @@ const ERROR_TEXT = {
   // QR orders / customers
   NOT_PAID: 'Take payment for this order first.',
   BAD_STATE: 'This order was already updated on another screen. Refreshing.',
+  NOT_FOUND: 'This QR order was not found (it may have been removed). Refresh the list and try again.',
+  QR_ORDER_ALREADY_PAID: 'This QR order was already paid on another counter.',
   BAD_PHONE: 'Enter a Philippine mobile number, e.g. 0917 123 4567.',
+  NAME_REQUIRED: 'Enter the customer\'s name.',
 };
 // The error code at the very start of a message: "APPROVAL_INVALID", "TABLE_NOT_ALLOWED: sales" ...
 // Matches whole codes only, so "BAD_REFUND_TYPE" is never read as "BAD_REFUND".

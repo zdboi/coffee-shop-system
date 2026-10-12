@@ -363,6 +363,99 @@ function computeSaleTotals(lines, discount, settings){
   return {subtotal, discountAmt, tax, serviceCharge, grandTotal: Math.round(grandTotal*100)/100};
 }
 
+/* ================= Refunds: how much money goes back =================
+   Owner decision 2026-10-12: a partial refund gives back what the customer actually
+   paid for the returned items — their share after the sale's discount, plus tax and
+   service charge. The counter and the Back Office both use refundAmountForItems();
+   the database checks the same rule (_refund_items_cap in 004_cccc_online_qr.sql). */
+
+// A peso amount rounded to centavos the way the database rounds (half away from zero).
+// Binary noise is removed first, so 1.005 (stored as 1.00499999…) gives 1.01, not 1.00.
+function roundMoney(n){
+  n = Number(n);
+  if(!isFinite(n) || n === 0) return 0;
+  if(Math.abs(n) >= 1e13) return n;   // beyond ₱10 trillion a number has no centavos left to round
+  const parts = Math.abs(n).toPrecision(15).split('e');
+  const cents = Math.round(Number(parts[0] + 'e' + ((Number(parts[1]) || 0) + 2)));
+  const out = cents / 100;
+  return (n < 0 && out) ? -out : out;
+}
+
+// What is still left to give back on a sale: grand total minus the refunds already
+// made on it (never below 0), in centavos. priorAmount: a number (₱) or {amount}.
+function refundLeft(sale, priorAmount){
+  const prior = (priorAmount && typeof priorAmount === 'object') ? priorAmount.amount : priorAmount;
+  const g = Number(sale && sale.grand_total) || 0;
+  return roundMoney(Math.max(0, g - Math.max(0, Number(prior) || 0)));
+}
+
+// The "prior" argument of refundAmountForItems() for one sale, from refund rows
+// ({sale_id, amount, items:[{sale_item_id, quantity}]}). exceptRefundId leaves one out.
+// Returns {amount: ₱ already given back, quantities: {[sale_item_id]: qty already returned}}.
+function refundPriorFor(saleId, refunds, exceptRefundId){
+  const out = {amount: 0, quantities: {}};
+  (refunds || []).forEach(r => {
+    if(!r || r.sale_id !== saleId || (exceptRefundId && r.id === exceptRefundId)) return;
+    out.amount += Math.max(0, Number(r.amount) || 0);
+    let list = r.items;
+    if(typeof list === 'string'){ try{ list = JSON.parse(list); }catch(e){ list = null; } }
+    (Array.isArray(list) ? list : []).forEach(it => {
+      const q = Math.max(0, Number(it && it.quantity) || 0);
+      if(!it || it.sale_item_id == null || !q) return;
+      out.quantities[it.sale_item_id] = (out.quantities[it.sale_item_id] || 0) + q;
+    });
+  });
+  out.amount = roundMoney(out.amount);
+  return out;
+}
+
+// Unit price of a sale line (falls back to line_total / quantity for old rows), never below 0.
+function saleItemUnitPrice(it){
+  if(!it) return 0;
+  let u = (it.unit_price === null || it.unit_price === undefined || it.unit_price === '') ? NaN : Number(it.unit_price);
+  if(!isFinite(u)){ const q = Number(it.quantity); u = q ? Number(it.line_total) / q : 0; }
+  return (isFinite(u) && u > 0) ? u : 0;
+}
+
+// How much money a refund of these lines gives back (₱, rounded to centavos).
+//   sale:        {subtotal, grand_total}
+//   items:       the sale's sale_items rows [{id, unit_price, quantity, line_total}]
+//   refundItems: lines being returned now [{sale_item_id, quantity}]
+//   prior:       {amount: ₱ already refunded on this sale, quantities: {[sale_item_id]: qty already returned}}
+//                (optional; refundPriorFor() builds it from refund rows)
+// S = subtotal, G = grand total, L = unit price × quantity of the lines returned now
+// (a line counts only up to what is not returned yet; lines of another sale count 0).
+//   left = max(0, G − prior.amount)
+//   every item of the sale fully returned after this refund -> left
+//   otherwise -> min(left, round(L × G / S, 2))          (S = 0 -> 0)
+// So a void or a refund of everything gives back exactly what is left, and several
+// partial refunds of a sale add up to its grand total.
+function refundAmountForItems(sale, items, refundItems, prior){
+  prior = prior || {};
+  const priorQty = prior.quantities || {};
+  const left = refundLeft(sale, prior.amount);
+  const now = {};
+  (refundItems || []).forEach(ri => {
+    if(!ri || ri.sale_item_id == null) return;
+    now[ri.sale_item_id] = (now[ri.sale_item_id] || 0) + Math.max(0, Number(ri.quantity) || 0);
+  });
+  let returnedValue = 0, everything = true;
+  (items || []).forEach(it => {
+    if(!it) return;
+    const sold = Math.max(0, Number(it.quantity) || 0);
+    const before = Math.max(0, Number(priorQty[it.id]) || 0);
+    const q = now[it.id] || 0;
+    returnedValue += saleItemUnitPrice(it) * Math.min(q, Math.max(0, sold - before));
+    if(before + q < sold - 0.0001) everything = false;
+  });
+  if(everything) return left;
+  // S and G count in centavos: a subtotal saved as 634.3600000000001 is ₱634.36.
+  const S = roundMoney(sale && sale.subtotal);
+  if(S <= 0) return 0;
+  const G = Math.max(0, roundMoney(sale && sale.grand_total));
+  return Math.min(left, roundMoney(returnedValue * G / S));
+}
+
 const PAYMENT_METHODS = [
   {id:'CASH', label:'Cash', ic:'💵'},
   {id:'GCASH', label:'GCash', ic:'📱'},
@@ -581,8 +674,39 @@ function paymentMethodForSale(saleId){
   return pay ? pay.method : null;
 }
 
+// The same words for sales figures on every screen and report (2026-10-12). Keys match
+// the fields of shiftMetrics(); salesSummaryRows() gives them in display order.
+const SALES_LABELS = {
+  itemSales: 'Item sales (before discounts)',
+  discounts: 'Discounts',
+  taxAndService: 'Tax & service',
+  sales: 'Sales',
+  refunds: 'Refunds',
+  netSales: 'Net sales',
+  voids: 'Voids',
+};
+const SALES_HINTS = {
+  itemSales: 'Menu prices × quantities of finished sales, before discounts, tax and service.',
+  discounts: 'Taken off the item sales.',
+  taxAndService: 'Added on top of the item sales.',
+  sales: 'What customers paid for finished sales. Voided sales are not counted.',
+  refunds: 'Money given back to customers. Voids are not included (a voided sale is simply not counted).',
+  netSales: 'Sales minus refunds.',
+  voids: 'Sales cancelled in full. Already left out of Sales.',
+};
+
 // The full accounting picture for one shift (same maths as the original POS, incl. the
 // void double-count fix). `data` lets reports pass their own loaded records; otherwise state.
+// Sales figures (finished sales = not HELD, not VOIDED):
+//   itemSales     = Σ subtotals                  ("Item sales (before discounts)")
+//   discounts     = Σ discounts
+//   taxAndService = Σ tax + Σ service charge
+//   sales         = Σ grand totals               ("Sales": what customers paid)
+//   refunds       = refunds made in this shift (voids not included)
+//   netSales      = sales − refunds
+// Older names kept for compatibility: grossSales (= itemSales; also what the shifts
+// table's gross_sales column holds), discountTotal, taxTotal, serviceTotal, refundsOnly,
+// voidsOnly.
 function shiftMetrics(shift, data){
   if(!shift) return null;
   data = data || state;
@@ -633,7 +757,11 @@ function shiftMetrics(shift, data){
 
   return {
     transactionCount: nonVoided.length, voidedCount,
-    grossSales, discountTotal, taxTotal, serviceTotal, netSales,
+    // clear names (use these with SALES_LABELS)
+    itemSales: grossSales, discounts: discountTotal, taxAndService: taxTotal + serviceTotal,
+    sales: grossGrandTotal, refunds: refundsOnly, voids: voidsOnly, netSales,
+    // older names, unchanged
+    grossSales, discountTotal, taxTotal, serviceTotal,
     cashGross, cardGross, otherGross, netCashFromSales,
     refundsOnly, voidsOnly,
     payIns, payOuts, payInCount: shiftCashMovements.filter(m=>m.type==='PAY_IN').length,
@@ -641,6 +769,36 @@ function shiftMetrics(shift, data){
     openingCash, expectedCash, declaredCash, variance,
     cashMovements: shiftCashMovements.slice().sort((a,b)=> new Date(b.at)-new Date(a.at)),
   };
+}
+
+// The sales lines of a shift report, in order, with the shared words:
+//   [{key, label, hint, amount, sign:''|'-'|'+', total:bool}]
+// m = shiftMetrics(shift, data). Pass the shift too: for a CLOSED shift the figures
+// saved when it closed are used (gross_sales, refunds_total, net_sales; Sales =
+// net_sales + refunds_total), like the X/Z reports do; discounts and tax & service are
+// not saved on the shift, so they always come from m.
+function salesSummaryRows(m, shift){
+  if(!m) return [];
+  const closed = !!(shift && shift.status === 'CLOSED');
+  const saved = (k) => {
+    if(!closed || shift[k] === null || shift[k] === undefined || shift[k] === '') return null;
+    const n = Number(shift[k]);
+    return isFinite(n) ? n : null;
+  };
+  const savedNet = saved('net_sales'), savedRefunds = saved('refunds_total'), savedItems = saved('gross_sales');
+  const v = {
+    itemSales: savedItems !== null ? savedItems : m.itemSales,
+    discounts: m.discounts,
+    taxAndService: m.taxAndService,
+    sales: (savedNet !== null && savedRefunds !== null) ? savedNet + savedRefunds : m.sales,
+    refunds: savedRefunds !== null ? savedRefunds : m.refunds,
+    netSales: savedNet !== null ? savedNet : m.netSales,
+  };
+  const sign = {discounts: '-', taxAndService: '+', refunds: '-'};
+  return ['itemSales', 'discounts', 'taxAndService', 'sales', 'refunds', 'netSales'].map(key => ({
+    key, label: SALES_LABELS[key], hint: SALES_HINTS[key], amount: Number(v[key]) || 0,
+    sign: sign[key] || '', total: key === 'sales' || key === 'netSales',
+  }));
 }
 
 function shiftDuration(shift){
@@ -685,14 +843,15 @@ function receiptHtml(sale, items, payments, opts){
         ${it.notes?`<tr><td colspan="3" class="modline">“${escapeHtml(it.notes)}”</td></tr>`:''}`).join('')}
     </table>
     <hr>
+    <!-- Customer receipt words: Subtotal = "Item sales (before discounts)", Total = what the customer paid ("Sales"). -->
     <div class="row"><span>Subtotal</span><span>${fmtMoney(sale.subtotal)}</span></div>
     ${Number(sale.discount_amount)>0?`<div class="row"><span>Discount</span><span>-${fmtMoney(sale.discount_amount)}</span></div>`:''}
     ${Number(sale.tax_amount)>0?`<div class="row"><span>Tax</span><span>${fmtMoney(sale.tax_amount)}</span></div>`:''}
-    ${Number(sale.service_charge_amount)>0?`<div class="row"><span>Service Charge</span><span>${fmtMoney(sale.service_charge_amount)}</span></div>`:''}
-    <div class="row" style="font-weight:700;font-size:14px;margin-top:4px;"><span>TOTAL</span><span>${fmtMoney(sale.grand_total)}</span></div>
+    ${Number(sale.service_charge_amount)>0?`<div class="row"><span>Service charge</span><span>${fmtMoney(sale.service_charge_amount)}</span></div>`:''}
+    <div class="row" style="font-weight:700;font-size:14px;margin-top:4px;"><span>Total</span><span>${fmtMoney(sale.grand_total)}</span></div>
     <hr>
-    <div class="row"><span>Payment (${escapeHtml(pay.method||'—')})</span><span>${fmtMoney(pay.amount||sale.grand_total)}</span></div>
-    ${pay.method==='CASH'?`<div class="row"><span>Cash Received</span><span>${fmtMoney(pay.tendered)}</span></div><div class="row"><span>Change</span><span>${fmtMoney(pay.change)}</span></div>`:''}
+    <div class="row"><span>Payment (${escapeHtml((PAYMENT_METHODS.find(x=>x.id===pay.method)||{}).label||pay.method||'—')})</span><span>${fmtMoney(pay.amount||sale.grand_total)}</span></div>
+    ${pay.method==='CASH'?`<div class="row"><span>Cash received</span><span>${fmtMoney(pay.tendered)}</span></div><div class="row"><span>Change</span><span>${fmtMoney(pay.change)}</span></div>`:''}
     ${pay.reference?`<div class="row small"><span>Ref#</span><span>${escapeHtml(pay.reference)}</span></div>`:''}
     <hr>
     <div class="center small">${escapeHtml(s.receipt_footer||'Thank you!')}</div>

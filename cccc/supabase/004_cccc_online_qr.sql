@@ -28,6 +28,15 @@
 --      * Answers that reveal whether a phone number is registered are
 --        rate-limited per login; wrong PINs lock the counter for longer
 --        and longer.
+--   7. Owner decisions of 2026-10-12 (second round):
+--      * Refund caps hold for EVERY login, the owner's Back Office included
+--        (checked by the database itself, see section 8b). A partial refund
+--        gives back what the customer actually paid for those items.
+--      * A QR order can be paid only once (QR_ORDER_ALREADY_PAID).
+--      * A refused counter pairing leaves nothing behind.
+--      * A PIN that matches two staff members is refused (PIN_AMBIGUOUS).
+--      * A manager signed in on the counter may approve their own actions
+--        offline with their sign-in token, checked when the action uploads.
 -- =============================================================================
 begin;
 
@@ -671,8 +680,209 @@ begin
     end case;
     v_n := v_n + 1;
   end loop;
+  -- Refund caps (section 8b) are checked HERE, once every change of this call is
+  -- in, so the refund, its stock lines and the sale's new status may come in any
+  -- order. A refund that breaks a cap undoes the whole call (REFUND_TOO_LARGE,
+  -- RETURN_TOO_LARGE, SALE_NOT_REFUNDABLE, SALE_NOT_FOUND or BAD_AMOUNT).
+  set constraints public.refunds_cap_check_ins, public.refunds_cap_check_upd, public.stock_cap_check_ins,
+    public.stock_cap_check_upd, public.stock_cap_check_del, public.sales_cap_check_upd immediate;
   return jsonb_build_object('applied', v_n);
 end $$;
+
+-- -----------------------------------------------------------------------------
+-- 8b. Refund caps — the same rules for the counter AND the owner's Back Office
+-- -----------------------------------------------------------------------------
+-- The database checks every refund and every "stock put back" line itself, so
+-- no screen can get it wrong:
+--   * a refund can't give back more than what is left of the sale
+--     (sale total minus the sale's other refunds; 1 centavo rounding allowed);
+--   * a refund that lists items can't give back more than the customer paid
+--     for those items (see _refund_items_cap below; 2 centavos allowed);
+--   * a voided / fully refunded / unfinished (HELD) sale can't be refunded;
+--   * per ingredient, all refunds of a sale together can't put back more stock
+--     than that sale took out.
+-- How: "constraint triggers" that wait until the end of the save. The Back
+-- Office's apply_changes() runs them at its end (after all its changes); fo_sync
+-- runs them right after each row, so one bad counter action fails on its own.
+
+-- A number from text, or null when it isn't one (never raises an error).
+create or replace function public._to_num(p text) returns numeric
+language sql immutable as $$
+  select case when btrim(p) ~ '^-?(\d{1,15}\.?\d{0,15}|\.\d{1,15})([eE][-+]?\d{1,3})?$' then btrim(p)::numeric end
+$$;
+
+-- A UUID from text, or null when it isn't one (never raises an error).
+create or replace function public._to_uuid(p text) returns uuid
+language sql immutable as $$
+  select case when p ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p::uuid end
+$$;
+
+-- The most a refund that LISTS ITEMS may give back (owner decision 2026-10-12;
+-- the same rule as refundAmountForItems() in cccc/shared/logic.js):
+--   S = the sale's subtotal, G = its grand total,
+--   L = unit price x quantity of the items returned NOW,
+--   left = G minus what the sale's OTHER refunds already gave back (never below 0).
+--   * After this refund every item of the sale is fully returned -> left
+--     (the customer gets back everything they paid that is still left).
+--   * Otherwise -> the items' share of what was paid: min(left, round(L x G / S, 2)),
+--     i.e. after the sale's discount and with its tax / service charge. 0 when S = 0.
+-- An item counts only up to the quantity of that sale line not returned yet, and
+-- items that are not lines of THIS sale count as 0.
+-- Returns null when the refund lists no items (then only "left" applies).
+create or replace function public._refund_items_cap(p_sale public.sales, p_refund_id uuid, p_items jsonb, p_left numeric)
+returns numeric language plpgsql stable security definer set search_path = public as $$
+declare v_l numeric := 0; v_all boolean := true; r record;
+begin
+  if jsonb_typeof(p_items) is distinct from 'array' or jsonb_array_length(p_items) = 0 then return null; end if;
+  for r in
+    select greatest(coalesce(si.quantity, 0), 0) as sold,
+           greatest(coalesce(si.unit_price, si.line_total / nullif(si.quantity, 0), 0), 0) as unit,
+           -- returned by the sale's other refunds
+           coalesce((select sum(greatest(coalesce(public._to_num(it->>'quantity'), 0), 0))
+                     from public.refunds o,
+                          jsonb_array_elements(case when jsonb_typeof(o.items) = 'array' then o.items else '[]'::jsonb end) it
+                     where o.sale_id = p_sale.id and o.id <> p_refund_id and it->>'sale_item_id' = si.id::text), 0) as before,
+           -- returned now
+           coalesce((select sum(greatest(coalesce(public._to_num(it->>'quantity'), 0), 0))
+                     from jsonb_array_elements(p_items) it
+                     where it->>'sale_item_id' = si.id::text), 0) as now
+    from public.sale_items si
+    where si.sale_id = p_sale.id
+  loop
+    v_l := v_l + r.unit * least(r.now, greatest(r.sold - r.before, 0));
+    if r.before + r.now < r.sold - 0.0001 then v_all := false; end if;
+  end loop;
+  if v_all then return p_left; end if;
+  if coalesce(p_sale.subtotal, 0) <= 0 then return 0; end if;
+  return least(p_left, round(v_l * greatest(coalesce(p_sale.grand_total, 0), 0) / p_sale.subtotal, 2));
+end $$;
+
+-- Checks ONE refund row against its sale. Locks the sale, so two refunds of the
+-- same sale saved at the same moment are checked one after the other.
+create or replace function public._check_refund(p_refund_id uuid) returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  r public.refunds%rowtype; s public.sales%rowtype;
+  v_prev numeric; v_others integer; v_void boolean; v_left numeric; v_cap numeric;
+begin
+  select * into r from public.refunds where id = p_refund_id;
+  if not found then return; end if;     -- removed again later in the same save
+  select * into s from public.sales where id = r.sale_id and business_id = r.business_id for update;
+  if not found then raise exception 'SALE_NOT_FOUND'; end if;
+  if r.amount is null or r.amount < 0 then raise exception 'BAD_AMOUNT'; end if;
+  select coalesce(sum(amount), 0), count(*), coalesce(bool_or(type = 'VOID'), false)
+    into v_prev, v_others, v_void
+    from public.refunds where sale_id = s.id and id <> r.id;
+  -- not finished yet, already voided, or nothing left to give back
+  if s.status = 'HELD' or v_void or (v_others > 0 and v_prev >= coalesce(s.grand_total, 0) - 0.01) then
+    raise exception 'SALE_NOT_REFUNDABLE';
+  end if;
+  v_left := greatest(coalesce(s.grand_total, 0) - v_prev, 0);
+  if r.amount > v_left + 0.01 then raise exception 'REFUND_TOO_LARGE'; end if;
+  v_cap := public._refund_items_cap(s, r.id, r.items, v_left);
+  if v_cap is not null and r.amount > v_cap + 0.02 then raise exception 'REFUND_TOO_LARGE'; end if;
+end $$;
+
+-- Per ingredient: everything the sale's refunds put back <= what the sale took out.
+-- (A refund's stock lines carry the refund's id in reference_id; the sale's own
+-- lines carry the sale's id.)
+create or replace function public._check_sale_returns(p_sale_id uuid) returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare v_biz uuid;
+begin
+  if p_sale_id is null then return; end if;
+  select business_id into v_biz from public.sales where id = p_sale_id for update;
+  if v_biz is null then return; end if;
+  if exists (
+    select 1
+    from (select it.ingredient_id, sum(abs(it.quantity)) as put_back
+          from public.inventory_transactions it
+          join public.refunds r on it.reference_id = r.id::text
+          where r.sale_id = p_sale_id and it.business_id = v_biz and it.transaction_type = 'SALE_REVERSAL'
+          group by it.ingredient_id) b
+    left join (select ingredient_id, sum(abs(quantity)) as taken
+               from public.inventory_transactions
+               where business_id = v_biz and reference_id = p_sale_id::text and transaction_type = 'SALE_USAGE'
+               group by ingredient_id) t on t.ingredient_id = b.ingredient_id
+    where b.put_back > coalesce(t.taken, 0) + 0.001) then
+    raise exception 'RETURN_TOO_LARGE';
+  end if;
+end $$;
+
+-- When a sale's total or status changes, its refunds must still fit.
+create or replace function public._check_sale_refund_total(p_sale_id uuid) returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare s public.sales%rowtype; v_sum numeric; v_n integer;
+begin
+  select * into s from public.sales where id = p_sale_id;
+  if not found then return; end if;
+  select coalesce(sum(amount), 0), count(*) into v_sum, v_n from public.refunds where sale_id = s.id;
+  if v_n = 0 then return; end if;
+  if s.status = 'HELD' then raise exception 'SALE_NOT_REFUNDABLE'; end if;
+  if v_sum > coalesce(s.grand_total, 0) + 0.01 then raise exception 'REFUND_TOO_LARGE'; end if;
+end $$;
+
+-- Which sale a stock line belongs to: its own sale (SALE_USAGE) or the sale of
+-- the refund it belongs to (SALE_REVERSAL). Null for any other stock line.
+create or replace function public._stock_line_sale(p public.inventory_transactions) returns uuid
+language sql stable security definer set search_path = public as $$
+  select case p.transaction_type
+    when 'SALE_USAGE' then (select s.id from public.sales s
+                            where s.id = public._to_uuid(p.reference_id) and s.business_id = p.business_id)
+    when 'SALE_REVERSAL' then (select r.sale_id from public.refunds r
+                               where r.id = public._to_uuid(p.reference_id) and r.business_id = p.business_id)
+  end
+$$;
+
+-- One trigger function for the three tables.
+create or replace function public._refund_caps_trigger() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_table_name = 'refunds' then
+    perform public._check_refund(new.id);
+    perform public._check_sale_returns(new.sale_id);
+  elsif tg_table_name = 'inventory_transactions' then
+    if tg_op in ('UPDATE', 'DELETE') then perform public._check_sale_returns(public._stock_line_sale(old)); end if;
+    if tg_op in ('INSERT', 'UPDATE') then perform public._check_sale_returns(public._stock_line_sale(new)); end if;
+  elsif tg_table_name = 'sales' then
+    perform public._check_sale_refund_total(new.id);
+  end if;
+  return null;
+end $$;
+
+-- "deferrable initially deferred" = checked when the save ends, not after each row.
+drop trigger if exists refunds_cap_check_ins on public.refunds;
+create constraint trigger refunds_cap_check_ins after insert on public.refunds
+  deferrable initially deferred for each row execute function public._refund_caps_trigger();
+drop trigger if exists refunds_cap_check_upd on public.refunds;
+create constraint trigger refunds_cap_check_upd after update on public.refunds
+  deferrable initially deferred for each row
+  when (old.sale_id is distinct from new.sale_id or old.amount is distinct from new.amount or old.type is distinct from new.type
+        or old.items is distinct from new.items or old.business_id is distinct from new.business_id)
+  execute function public._refund_caps_trigger();
+-- stock put back (new lines), any change to a sale's / refund's stock lines, and
+-- removing a sale's own stock lines
+drop trigger if exists stock_cap_check_ins on public.inventory_transactions;
+create constraint trigger stock_cap_check_ins after insert on public.inventory_transactions
+  deferrable initially deferred for each row when (new.transaction_type = 'SALE_REVERSAL')
+  execute function public._refund_caps_trigger();
+drop trigger if exists stock_cap_check_upd on public.inventory_transactions;
+create constraint trigger stock_cap_check_upd after update on public.inventory_transactions
+  deferrable initially deferred for each row
+  when ((old.transaction_type in ('SALE_USAGE', 'SALE_REVERSAL') or new.transaction_type in ('SALE_USAGE', 'SALE_REVERSAL'))
+        and (old.quantity is distinct from new.quantity or old.transaction_type is distinct from new.transaction_type
+             or old.reference_id is distinct from new.reference_id or old.ingredient_id is distinct from new.ingredient_id
+             or old.business_id is distinct from new.business_id))
+  execute function public._refund_caps_trigger();
+drop trigger if exists stock_cap_check_del on public.inventory_transactions;
+create constraint trigger stock_cap_check_del after delete on public.inventory_transactions
+  deferrable initially deferred for each row when (old.transaction_type = 'SALE_USAGE')
+  execute function public._refund_caps_trigger();
+drop trigger if exists sales_cap_check_upd on public.sales;
+create constraint trigger sales_cap_check_upd after update on public.sales
+  deferrable initially deferred for each row
+  when (old.grand_total is distinct from new.grand_total or old.status is distinct from new.status)
+  execute function public._refund_caps_trigger();
 
 -- -----------------------------------------------------------------------------
 -- 9. Staff PINs and sessions
@@ -685,11 +895,20 @@ $$;
 
 -- PIN login. Returns {token, expires_at, staff:{id,name,role}} or {error:'...'}.
 --   p_purpose 'LOGIN'    = staff member signs in on this counter (16 hours).
+--                          A MANAGER / ADMIN's sign-in token also approves their
+--                          own discounts, refunds, voids and shift closes on this
+--                          counter, even offline (checked when the action uploads,
+--                          only while the sign-in has not expired or been ended).
 --   p_purpose 'OVERRIDE' = one-time manager approval for ONE refund / void /
 --                          discount (needs a MANAGER or ADMIN PIN). fo_sync()
---                          accepts it for up to 24 hours, once.
+--                          accepts it once, until it expires (24 hours, so an
+--                          action that uploads late still goes through).
 --   p_min_role = lowest role allowed (e.g. 'MANAGER').
 -- Too many wrong PINs: {error:'TOO_MANY_ATTEMPTS', locked_until:<time>}.
+-- A PIN that belongs to TWO active staff members (e.g. an old-app PIN imported
+-- for one person is the same as someone else's PIN) signs nobody in:
+-- {error:'PIN_AMBIGUOUS'} (it does not say who). The owner fixes it by giving one
+-- of them a new PIN in the Back Office (Staff & PINs).
 create or replace function public.staff_pin_login(p_pin text, p_purpose text default 'LOGIN', p_min_role text default null)
 returns jsonb language plpgsql volatile security definer set search_path = public, extensions as $$
 declare
@@ -698,6 +917,7 @@ declare
   v_purpose text := upper(coalesce(nullif(btrim(p_purpose), ''), 'LOGIN'));
   v_min_role text := upper(coalesce(nullif(btrim(p_min_role), ''), 'CASHIER'));
   s record; v_id uuid; v_name text; v_role text; v_token text; v_ttl interval; v_locked timestamptz;
+  v_matches integer := 0; v_legacy boolean := false;
 begin
   if v_uid is null or v_biz is null then return jsonb_build_object('error', 'NOT_A_MEMBER'); end if;
   if v_purpose not in ('LOGIN', 'OVERRIDE') then return jsonb_build_object('error', 'BAD_PURPOSE'); end if;
@@ -708,21 +928,30 @@ begin
     return jsonb_build_object('error', 'TOO_MANY_ATTEMPTS', 'locked_until', v_locked);
   end if;
   if p_pin is null or p_pin !~ '^\d{4,6}$' then return jsonb_build_object('error', 'WRONG_PIN'); end if;
+  -- Compare the PIN with EVERY active staff member of this shop (not only until
+  -- the first match), so a PIN shared by two people is noticed.
   for s in
     select st.id, st.name, st.role, sp.pin_hash, sp.legacy_sha256
     from public.staff st join public.staff_pins sp on sp.staff_id = st.id
     where st.business_id = v_biz and st.active
   loop
-    if s.pin_hash is not null and s.pin_hash = crypt(p_pin, s.pin_hash) then
-      v_id := s.id; v_name := s.name; v_role := s.role; exit;
-    end if;
-    if s.pin_hash is null and s.legacy_sha256 is not null
-       and s.legacy_sha256 = encode(digest('coffeepos:' || p_pin, 'sha256'), 'hex') then
-      update public.staff_pins set pin_hash = crypt(p_pin, gen_salt('bf', 8)), legacy_sha256 = null, updated_at = now()
-        where staff_id = s.id;
-      v_id := s.id; v_name := s.name; v_role := s.role; exit;
+    if (s.pin_hash is not null and s.pin_hash = crypt(p_pin, s.pin_hash))
+       or (s.pin_hash is null and s.legacy_sha256 is not null
+           and s.legacy_sha256 = encode(digest('coffeepos:' || p_pin, 'sha256'), 'hex')) then
+      v_matches := v_matches + 1;
+      v_id := s.id; v_name := s.name; v_role := s.role; v_legacy := s.pin_hash is null;
     end if;
   end loop;
+  if v_matches > 1 then
+    -- The PIN is right, but for more than one person: sign nobody in, upgrade
+    -- nothing, and don't say who. (Not counted as a wrong PIN.)
+    return jsonb_build_object('error', 'PIN_AMBIGUOUS');
+  end if;
+  if v_matches = 1 and v_legacy then
+    -- old offline-app PIN (unique in this shop): store it as bcrypt from now on
+    update public.staff_pins set pin_hash = crypt(p_pin, gen_salt('bf', 8)), legacy_sha256 = null, updated_at = now()
+      where staff_id = v_id;
+  end if;
   insert into public.auth_attempts(subject, kind, success) values (v_uid, 'PIN', v_id is not null);
   delete from public.auth_attempts where at < now() - interval '2 days';
   if v_id is null then
@@ -736,7 +965,7 @@ begin
     return jsonb_build_object('error', 'ROLE_TOO_LOW', 'staff', jsonb_build_object('id', v_id, 'name', v_name, 'role', v_role));
   end if;
   v_token := encode(gen_random_bytes(32), 'hex');
-  v_ttl := case when v_purpose = 'OVERRIDE' then interval '10 minutes' else interval '16 hours' end;
+  v_ttl := case when v_purpose = 'OVERRIDE' then interval '24 hours' else interval '16 hours' end;
   insert into public.staff_sessions(staff_id, business_id, device_user_id, token_hash, purpose, expires_at)
     values (v_id, v_biz, v_uid, encode(digest(v_token, 'sha256'), 'hex'), v_purpose, now() + v_ttl);
   delete from public.staff_sessions where expires_at < now() - interval '2 days';
@@ -831,31 +1060,48 @@ begin
 end $$;
 
 -- Called on the counter tablet right after it logs in anonymously.
+-- Every check comes FIRST; only when all pass is anything written. So a refused
+-- pairing (wrong code, counter key of another shop...) leaves no shop membership,
+-- no counter row, and the code stays usable for the right tablet.
 create or replace function public.redeem_device_pairing(p_code text, p_device_key text, p_device_name text default null)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare
   v_uid uuid := auth.uid(); v_pc public.device_pairing_codes%rowtype; v_role text; v_dev public.devices%rowtype;
-  v_store uuid; v_name text;
+  v_store uuid; v_name text; v_old_login uuid;
 begin
   if v_uid is null then return jsonb_build_object('error', 'NOT_SIGNED_IN'); end if;
   if coalesce(length(p_device_key), 0) < 16 then return jsonb_build_object('error', 'BAD_DEVICE_KEY'); end if;
   if public._too_many_attempts(v_uid, 'PAIR', 5, interval '10 minutes') then return jsonb_build_object('error', 'TOO_MANY_ATTEMPTS'); end if;
+  -- "for update": two tablets typing the same code at the same moment can't both use it
   select * into v_pc from public.device_pairing_codes
-    where code = upper(btrim(p_code)) and used_at is null and expires_at > now();
+    where code = upper(btrim(p_code)) and used_at is null and expires_at > now()
+    for update;
   if not found then
     insert into public.auth_attempts(subject, kind, success) values (v_uid, 'PAIR', false);
     return jsonb_build_object('error', 'BAD_CODE');
   end if;
   select role into v_role from public.profiles where id = v_uid;
   if v_role is not null and v_role <> 'DEVICE' then return jsonb_build_object('error', 'ALREADY_A_USER'); end if;
+  select * into v_dev from public.devices where device_key = p_device_key for update;
+  if found and v_dev.business_id <> v_pc.business_id then
+    insert into public.auth_attempts(subject, kind, success) values (v_uid, 'PAIR', false);
+    return jsonb_build_object('error', 'DEVICE_KEY_TAKEN');
+  end if;
+
+  -- All checks passed: from here on, write.
   v_name := coalesce(public._clean_name(p_device_name), v_pc.device_name, 'Counter');
   perform set_config('cccc.trusted_write', 'on', true);
   insert into public.profiles(id, business_id, name, role) values (v_uid, v_pc.business_id, v_name, 'DEVICE')
     on conflict (id) do update set business_id = excluded.business_id, name = excluded.name, role = 'DEVICE';
   select id into v_store from public.stores where business_id = v_pc.business_id order by created_at limit 1;
-  select * into v_dev from public.devices where device_key = p_device_key;
-  if found and v_dev.business_id <> v_pc.business_id then return jsonb_build_object('error', 'DEVICE_KEY_TAKEN'); end if;
-  if found then
+  if v_dev.id is not null then
+    -- Re-pairing this counter (same key) with a new login: the counter's OLD login
+    -- loses its access, so no stray login keeps reading the shop's data.
+    v_old_login := v_dev.auth_user_id;
+    if v_old_login is not null and v_old_login <> v_uid then
+      delete from public.staff_sessions where device_user_id = v_old_login;
+      delete from public.profiles where id = v_old_login and role = 'DEVICE' and business_id = v_dev.business_id;
+    end if;
     update public.devices set auth_user_id = v_uid, device_name = v_name, active = true, paired_at = now(), last_seen_at = now()
       where id = v_dev.id returning * into v_dev;
   else
@@ -863,6 +1109,8 @@ begin
       values (v_pc.business_id, v_store, public._next_device_tag(v_pc.business_id), v_name, 'COUNTER', v_uid, p_device_key, true, now(), now())
       returning * into v_dev;
   end if;
+  -- One login = one counter: any other counter row still linked to this login is switched off.
+  update public.devices set auth_user_id = null, active = false where auth_user_id = v_uid and id <> v_dev.id;
   update public.device_pairing_codes set used_at = now(), used_by = v_uid where code = v_pc.code;
   insert into public.auth_attempts(subject, kind, success) values (v_uid, 'PAIR', true);
   return jsonb_build_object('device', to_jsonb(v_dev));
@@ -1074,13 +1322,19 @@ end $$;
 --   p_token    = the approval token sent with the action
 -- The token must be a PIN session of THAT staff member, who must be an active
 -- MANAGER or ADMIN of this shop. It must have been issued to THIS counter login,
--- at most 24 hours ago (uploads can be late), and not cancelled. Two kinds:
---   * OVERRIDE token (a manager typed their PIN to approve): works ONCE. It is
---     marked used here, so it can never approve a second action.
---   * LOGIN token of the approver (a manager approving their own action while
---     signed in on this counter): not used up.
+-- and be still valid NOW, when the action uploads: not expired, not ended
+-- (signed out / PIN changed / counter removed), and issued at most 24 hours ago.
+-- When the action was made on the counter does not matter (the counter's clock
+-- can't be trusted). Two kinds:
+--   * OVERRIDE token (a manager typed their PIN to approve; lives 24 hours so a
+--     late upload still works): works ONCE. It is marked used here, so it can
+--     never approve a second action.
+--   * LOGIN token of the approver (security decision 3: a manager signed in on
+--     this counter approving their own action, also offline; lives 16 hours):
+--     not used up. The counter must upload such actions BEFORE ending that
+--     sign-in, or they are refused.
 -- Errors: APPROVAL_REQUIRED (no approver or no token sent), UNKNOWN_STAFF,
---         ROLE_TOO_LOW, APPROVAL_INVALID (wrong / used / too old / cancelled /
+--         ROLE_TOO_LOW, APPROVAL_INVALID (wrong / used / expired / ended /
 --         from another counter / approver switched off).
 create or replace function public._use_approval(p_biz uuid, p_device_user uuid, p_approver uuid,
   p_token text, p_used_for text)
@@ -1102,6 +1356,7 @@ begin
      or v_sess.business_id <> p_biz
      or v_sess.device_user_id is distinct from p_device_user
      or v_sess.revoked_at is not null
+     or v_sess.expires_at <= now()
      or v_sess.created_at < now() - interval '24 hours'
      or not v_s.active
      or v_sess.purpose not in ('LOGIN', 'OVERRIDE')
@@ -1232,10 +1487,14 @@ declare
   v_sale jsonb; v_id uuid; v_old text; v_r jsonb; v_cust uuid; v_qr uuid; v_amount numeric;
   v_shift public.shifts%rowtype; v_ref jsonb; v_status text;
   v_appr public.staff; v_sale_row public.sales%rowtype; v_prev numeric; v_type text; v_new_status text;
-  v_closer_name text; v_reason text;
+  v_closer_name text; v_reason text; v_qo public.qr_orders%rowtype;
 begin
   -- fo_sync only lets a paired counter call us with its own device row
   if p_dev.auth_user_id is distinct from auth.uid() then raise exception 'DEVICE_MISMATCH'; end if;
+  -- Refund caps (section 8b) are checked right after each row here, so a counter
+  -- action that breaks one fails on its own (the next actions still run).
+  set constraints public.refunds_cap_check_ins, public.refunds_cap_check_upd, public.stock_cap_check_ins,
+    public.stock_cap_check_upd, public.stock_cap_check_del, public.sales_cap_check_upd immediate;
   case p_type
   when 'shift_open' then
     perform public._require_staff(p_biz, (p_d->>'cashier_id')::uuid, 1);
@@ -1278,8 +1537,25 @@ begin
     v_status := v_sale->>'status';
     if v_status is null or v_status not in ('HELD','COMPLETED') then raise exception 'BAD_SALE_STATUS'; end if;
     select status into v_old from public.sales where id = v_id and business_id = p_biz for update;
+    -- the same sale sent again (e.g. a retry after a lost answer): nothing to do
     if v_old in ('COMPLETED','VOIDED','REFUNDED','PARTIALLY_REFUNDED') then return 'skipped'; end if;
     perform public._require_staff(p_biz, (v_sale->>'cashier_id')::uuid, 1);
+    -- A QR order is paid ONCE. If it is already linked to ANOTHER sale (paid at a
+    -- second counter, or twice offline), this sale is refused: QR_ORDER_ALREADY_PAID.
+    -- (Paying it again is fine only if that earlier sale was voided.)
+    -- "for update" makes two counters paying the same order at once wait for each other.
+    -- A QR order of another shop (or one that doesn't exist) is simply not linked.
+    v_qr := nullif(v_sale->>'qr_order_id', '')::uuid;
+    if v_qr is not null then
+      select * into v_qo from public.qr_orders where id = v_qr and business_id = p_biz for update;
+      if not found then
+        v_sale := v_sale || jsonb_build_object('qr_order_id', null);
+        v_qr := null;
+      elsif v_status = 'COMPLETED' and v_qo.sale_id is not null and v_qo.sale_id <> v_id
+            and exists (select 1 from public.sales where id = v_qo.sale_id and status <> 'VOIDED') then
+        raise exception 'QR_ORDER_ALREADY_PAID';
+      end if;
+    end if;
     -- A finished sale with a discount needs a manager approval that the server checks.
     if v_status = 'COMPLETED' and coalesce((v_sale->>'discount_amount')::numeric, 0) > 0 then
       v_appr := public._use_approval(p_biz, p_dev.auth_user_id, nullif(v_sale->>'discount_approved_by', '')::uuid,
@@ -1319,10 +1595,9 @@ begin
         perform public._write_row('inventory_transactions', v_r || jsonb_build_object('business_id', p_biz,
           'reference_id', v_id::text, 'transaction_type', 'SALE_USAGE'), 'id', 'error', p_biz);
       end loop;
-      v_qr := nullif(v_sale->>'qr_order_id', '')::uuid;
       if v_qr is not null then
         update public.qr_orders
-          set sale_id = v_id, paid_at = coalesce(paid_at, now()),
+          set sale_id = v_id, paid_at = case when sale_id = v_id then coalesce(paid_at, now()) else now() end,
               status = case when status = 'PENDING' then 'PREPARING' else status end,
               accepted_at = coalesce(accepted_at, now())
           where id = v_qr and business_id = p_biz;
@@ -1374,6 +1649,11 @@ begin
     if v_amount > coalesce(v_sale_row.grand_total, 0) - v_prev + 0.01 then raise exception 'REFUND_TOO_LARGE'; end if;
     perform public._write_row('refunds', v_ref || jsonb_build_object('business_id', p_biz, 'sale_id', v_sale_row.id,
       'amount', v_amount, 'approved_by', v_appr.id, 'approved_by_name', v_appr.name), 'id', 'error', p_biz);
+    -- A refund that lists items gives back at most what the customer paid for
+    -- them (after the discount, with tax / service charge): REFUND_TOO_LARGE.
+    -- Same rule as the Back Office (section 8b). VOID / FULL_REFUND of everything
+    -- = the whole amount left; a refund without items is capped only by that.
+    perform public._check_refund(v_id);
     -- Stock put back: inserted only (never overwrites another row) ...
     for v_r in select value from jsonb_array_elements(coalesce(p_d->'inventory', '[]'::jsonb)) loop
       perform public._require_ingredient(p_biz, v_r);
@@ -1381,21 +1661,8 @@ begin
         'reference_id', v_id::text, 'transaction_type', 'SALE_REVERSAL'), 'id', 'error', p_biz);
     end loop;
     -- ... and, per ingredient, all refunds of this sale together can't put back
-    -- more than this sale took out.
-    if exists (
-      select 1
-      from (select it.ingredient_id, sum(abs(it.quantity)) as put_back
-            from public.inventory_transactions it
-            join public.refunds r on it.reference_id = r.id::text
-            where r.sale_id = v_sale_row.id and it.business_id = p_biz and it.transaction_type = 'SALE_REVERSAL'
-            group by it.ingredient_id) b
-      left join (select ingredient_id, sum(abs(quantity)) as taken
-                 from public.inventory_transactions
-                 where business_id = p_biz and reference_id = v_sale_row.id::text and transaction_type = 'SALE_USAGE'
-                 group by ingredient_id) s on s.ingredient_id = b.ingredient_id
-      where b.put_back > coalesce(s.taken, 0) + 0.001) then
-      raise exception 'RETURN_TOO_LARGE';
-    end if;
+    -- more than this sale took out (RETURN_TOO_LARGE).
+    perform public._check_sale_returns(v_sale_row.id);
     -- New status of the sale, from ALL its refunds: VOID -> VOIDED; refunded in
     -- full -> REFUNDED; otherwise PARTIALLY_REFUNDED.
     v_new_status := case when v_type = 'VOID' then 'VOIDED'
@@ -1896,6 +2163,8 @@ begin
       and p.proname = any(public_fns || member_fns || array['_too_many_attempts','_pin_locked_until','_phone_lookup_allowed',
         '_mask_phone','_customer_for_staff','_use_approval','_require_ingredient','_check_sale_totals','_menu_unit_price',
         '_sale_review_reason','_next_device_tag','_next_numbers',
+        '_to_num','_to_uuid','_refund_items_cap','_check_refund','_check_sale_returns','_check_sale_refund_total',
+        '_stock_line_sale','_refund_caps_trigger',
         '_require_staff','_fo_apply','_type_label','_public_modifier_groups','_recipe_makeable','_qr_table','_qr_customer_json',
         'handle_new_user_signup','protect_profile_columns','touch_updated_at'])
   loop

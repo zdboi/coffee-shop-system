@@ -50,6 +50,24 @@
   const AUTH_URL_KEYS = ['access_token', 'refresh_token', 'expires_in', 'expires_at', 'token_type', 'type',
     'provider_token', 'provider_refresh_token', 'error', 'error_code', 'error_description'];
 
+  // The only email links that may sign someone in from the page address: password
+  // reset and sign-up confirmation (the Back Office has no invite or change-email
+  // screen; add 'invite' / 'email_change' here only when one is built). Any other
+  // login in the address (magic link, provider sign-in, no type) is ignored.
+  const EMAIL_LINK_TYPES = ['recovery', 'signup'];
+  const OTHER_ACCOUNT_TEXT = 'You are signed in as another account. Sign out first, then open the email link again.';
+
+  // The user id inside a login token (not verified - only used to REFUSE a switch).
+  function tokenUserId(token){
+    try{
+      const part = String(token || '').split('.')[1];
+      if(!part || typeof atob !== 'function') return null;
+      const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
+      const claims = JSON.parse(atob(b64 + '==='.slice((b64.length + 3) % 4)));
+      return claims && typeof claims.sub === 'string' && claims.sub ? claims.sub : null;
+    }catch(e){ return null; }
+  }
+
   function linkErrorText(code, description){
     if(code === 'otp_expired' || /expired|invalid/i.test(description || ''))
       return 'This email link has expired or was already used. Ask for a new email and use the newest link.';
@@ -296,15 +314,21 @@
       // Call once when the page loads (Back Office). When the owner arrives from an
       // email link (e.g. "Reset password"), Supabase puts a login in the page address:
       //   #access_token=…&refresh_token=…&expires_in=3600&expires_at=…&type=recovery
-      // This saves it as this client's session, removes it from the address bar and returns
+      // It always removes the login / error from the address bar. Only 'recovery' and
+      // 'signup' links are used, and never to replace the login of a DIFFERENT user who
+      // is already signed in on this client. Returns
       //   null                      nothing in the address
       //   {type, session}           logged in; type = 'recovery' for a password reset
       //   {type, error, error_code} the link failed (e.g. expired) - error is a plain sentence
+      //   {type, conflict:true, error}  another account is signed in here; nothing changed
+      //                             (error = "You are signed in as another account. …")
+      //   {type, ignored:true}      a login of another kind (e.g. magic link); not used
       async sessionFromUrl(){
         const parsed = parseAuthRedirect(location.hash, location.search);
         if(!parsed) return null;
         clearAuthFromAddress(parsed.from);
         if(parsed.error) return {type: parsed.type, error: parsed.error, error_code: parsed.error_code};
+        if(EMAIL_LINK_TYPES.indexOf(parsed.type) < 0) return {type: parsed.type, ignored: true};
         const s = parsed.session;
         try{
           s.user = await authRequest('/user', null, s.access_token, 'GET');
@@ -313,6 +337,16 @@
           // the user details are filled in by the next refresh.
           if(!e.offline && (e.status === 401 || e.status === 403)){
             return {type: parsed.type, error: linkErrorText('otp_expired'), error_code: e.code || 'bad_jwt'};
+          }
+        }
+        // Someone is already signed in on this client (this tab or another): the link may
+        // only refresh THAT person's login. A different (or unknown) user is refused.
+        const current = readSession() || session;
+        if(current && (current.access_token || current.refresh_token)){
+          const linkUser = (s.user && s.user.id) || tokenUserId(s.access_token);
+          const currentUser = (current.user && current.user.id) || tokenUserId(current.access_token);
+          if(!linkUser || !currentUser || linkUser !== currentUser){
+            return {type: parsed.type, conflict: true, error: OTHER_ACCOUNT_TEXT};
           }
         }
         writeSession(s);
@@ -391,5 +425,5 @@
     return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);
   }
 
-  window.Cloud = {createClient, CloudError, uuid, parseAuthRedirect};
+  window.Cloud = {createClient, CloudError, uuid, parseAuthRedirect, EMAIL_LINK_TYPES: EMAIL_LINK_TYPES.slice()};
 })();
