@@ -2,7 +2,8 @@
 const { chromium } = require('/opt/npm-tools/node_modules/playwright');
 const BASE = 'http://localhost:' + (process.env.FAKE_PORT || 8787);   // FAKE_PORT=8791 to use your own stand-in
 async function sql(q){ const r = await fetch(BASE + '/__sql', {method:'POST', body: `select to_jsonb((${q}))`}); const t = await r.text(); if(!r.ok) throw new Error(t); return JSON.parse(t); }
-function ok(cond, msg){ if(!cond) throw new Error('FAILED: ' + msg); console.log('ok  ' + msg); }
+let checks = 0;
+function ok(cond, msg){ checks++; if(!cond) throw new Error('FAILED: ' + msg); console.log('ok  ' + msg); }
 async function until(fn, msg, ms){ const end = Date.now() + (ms||20000); while(Date.now() < end){ try{ if(await fn()) return true; }catch(e){} await new Promise(r=>setTimeout(r, 300)); } throw new Error('TIMEOUT waiting for: ' + msg); }
 async function typePin(page, pin){ for(const d of pin) await page.click(`#pin-pad button[data-k="${d}"]`); await page.click('#pin-enter'); }
 
@@ -11,8 +12,7 @@ async function typePin(page, pin){ for(const d of pin) await page.click(`#pin-pa
   const ctx = await browser.newContext({viewport: {width: 1280, height: 860}});
   const page = await ctx.newPage();
   const errors = [];
-  page.on('pageerror', e => errors.push('pageerror: ' + e.message));
-  page.on('console', m => { if(m.type() === 'error' && !/favicon|Failed to load resource/.test(m.text())) errors.push('console: ' + m.text()); });
+  require('./lib/h').attach(page, errors, 'FO');   // page errors, console errors, HTTP >= 400, dialogs
   ctx.on('page', p => { p.waitForLoadState().then(()=>p.close()).catch(()=>{}); });   // receipt popups
 
   await page.goto(BASE + '/cccc/front/');
@@ -122,4 +122,5 @@ async function typePin(page, pin){ for(const d of pin) await page.click(`#pin-pa
   ok(errors.length === 0, 'no browser errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
   await browser.close();
   console.log('FRONT OFFICE E2E PASSED');
-})().catch(async e => { console.error(e); process.exit(1); });
+  console.log(`SUMMARY fo.e2e: ${checks} checks, 0 failed`);
+})().catch(async e => { console.error(e); console.log(`SUMMARY fo.e2e: ${checks} checks, 1 failed (stopped at the first failure)`); process.exit(1); });

@@ -50,13 +50,20 @@ plain-language, step-by-step instructions.
    (or any admin) rights; a DEVICE login has admin rank 0 whatever PIN is entered.
 3. **Manager approvals are verified by the server.** Refunds, voids and discounts carry a one-time
    approval token from `staff_pin_login(pin, 'OVERRIDE', 'MANAGER')`; `fo_sync` checks it belongs to the
-   named approver (MANAGER/ADMIN, same shop) and marks it used. These actions therefore need internet.
+   named approver (MANAGER/ADMIN, same shop) and marks it used. These actions need internet, with one
+   exception (owner decision 2026-10-12): a MANAGER/ADMIN who is the one signed in at the counter (with a
+   LOGIN token from an online sign-in) may approve their own actions offline; the counter sends that
+   LOGIN token and the server checks it when the op uploads. A cashier still can't get approval offline,
+   and manager PINs are still never checked against offline copies.
 4. **Offline PIN copies on counters are for CASHIER staff only.** Never cache manager/admin PINs.
 5. **Counters never see full customer phone numbers** (masked, e.g. `0917 ••• 4567`). Only the
    owner's Back Office login reads full numbers.
 6. **Refund caps:** a refund can't exceed what's left of the sale, and returned stock can't exceed
-   what that sale deducted. Child rows (items, payments, stock lines) can never overwrite rows of
-   another sale.
+   what that sale deducted, for every login including the owner's Back Office (enforced by the
+   server, not only the screen). Child rows (items, payments, stock lines) can never overwrite rows of
+   another sale. A partial refund gives back what the customer actually paid for those items: their
+   share after the sale's discount, plus tax and service charge (owner decision 2026-10-12); one shared
+   function computes it for the counter and the Back Office.
 7. **Only `qr_relink` links a phone to an existing customer.** Any answer that reveals whether a
    number is registered is rate-limited per login.
 

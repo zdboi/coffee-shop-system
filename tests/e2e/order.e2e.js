@@ -37,6 +37,8 @@ const isFont = (u) => /fonts\.(googleapis|gstatic)\.com/.test(u || '');
   const errors = [];
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
   page.on('console', m => { if(m.type() === 'error' && !isFont(m.location().url)) errors.push('console: ' + m.text() + ' @ ' + m.location().url); });
+  page.on('dialog', d => { errors.push('unexpected dialog: ' + d.message()); d.dismiss().catch(() => {}); });
+  page.on('response', r => { if(r.status() >= 400 && !isFont(r.url()) && !/favicon/.test(r.url())) errors.push('HTTP ' + r.status() + ' ' + r.url()); });
   page.on('requestfailed', r => { const f = r.failure() ? r.failure().errorText : ''; if(!isFont(r.url()) && !/ERR_ABORTED/.test(f)) errors.push('request failed: ' + r.url() + ' ' + f); });
   const placeBodies = [];
   page.on('request', r => { if(r.url().includes('/rest/v1/rpc/qr_place_order')) placeBodies.push(r.postData() || ''); });
@@ -61,8 +63,10 @@ const isFont = (u) => /fonts\.(googleapis|gstatic)\.com/.test(u || '');
   ok(/tick the box/i.test(await page.textContent('#w-err')), 'consent box is required');
   await page.check('#w-consent');
   await page.click('#w-go');
-  const registered = await until(async () => await page.isVisible('.member-name'), 10000);
-  ok(registered && (await page.textContent('.member-name')).includes('Zed'), 'registered: member card shows Zed');
+  // The welcome preview already shows the typed name in .member-name before qr_register
+  // returns, so wait for the signed-in state ("Not Zed?" shown, name form gone) first.
+  const registered = await until(async () => await page.isVisible('#not-me') && !(await page.isVisible('#w-name')), 10000);
+  ok(registered && (await page.textContent('.member-name')).includes('Zed'), 'registered: member card shows Zed ("Not Zed?" shown, name form gone)');
   const cust = await sql(`select jsonb_build_object('n', count(*), 'phone', max(phone), 'consent', bool_and(consent_at is not null), 'src', max(source)) from customers where nickname = 'Zed'`);
   ok(cust.n === 1 && cust.phone === '+639171234567' && cust.consent && cust.src === 'QR', 'customer saved: nickname, phone +639171234567, consent time, source QR', JSON.stringify(cust));
   ok((await sql(`select count(*) from customer_devices`)) === 1, 'this phone linked to the customer');
@@ -125,5 +129,6 @@ const isFont = (u) => /fonts\.(googleapis|gstatic)\.com/.test(u || '');
   await browser.close();
   const failed = results.filter(r => !r.ok).length;
   console.log(`\nBUILD C ORDER PAGE E2E: ${results.length} checks, ${results.length - failed} ok, ${failed} FAILED   (screenshots: ${SHOTS})`);
+  console.log(`SUMMARY order.e2e: ${results.length} checks, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 })().catch(async e => { console.error(e); process.exit(1); });

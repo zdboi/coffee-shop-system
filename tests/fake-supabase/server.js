@@ -145,6 +145,21 @@ const server = http.createServer(async (req, res) => {
       }
       if(p === '/auth/v1/logout') return send(res, 204, '');
       if(p === '/auth/v1/recover') return send(res, 200, {});
+      // the signed-in user (GET), or change their password (PUT {password}) - like Supabase Auth
+      if(p === '/auth/v1/user' && (req.method === 'GET' || req.method === 'PUT')){
+        const c = claimsFrom(req);
+        if(!c || c.expired) return send(res, 401, {code: 401, error_code: c && c.expired ? 'bad_jwt' : 'no_authorization', msg: 'invalid JWT'});
+        if(req.method === 'PUT' && body.password !== undefined){
+          if(String(body.password).length < 6) return send(res, 422, {code: 422, error_code: 'weak_password', msg: 'Password should be at least 6 characters.'});
+          const same = await runSql(`select '@@R@@' || coalesce((select (encrypted_password = extensions.crypt(${lit(body.password)}, encrypted_password))::text from auth.users where id = ${lit(c.sub)}), 'false');`);
+          if(same.data === 'true') return send(res, 422, {code: 422, error_code: 'same_password', msg: 'New password should be different from the old password.'});
+          const u = await runSql(`update auth.users set encrypted_password = extensions.crypt(${lit(body.password)}, extensions.gen_salt('bf')) where id = ${lit(c.sub)}; select '@@R@@' || 'done';`);
+          if(u.error) return send(res, 500, {msg: u.error});
+        }
+        const r = await runSql(`select '@@R@@' || coalesce((select json_build_object('id', id, 'email', email, 'is_anonymous', coalesce(is_anonymous, false), 'aud', 'authenticated', 'role', 'authenticated', 'updated_at', now())::text from auth.users where id = ${lit(c.sub)}), 'null');`);
+        if(r.error || r.data === 'null') return send(res, 404, {code: 404, error_code: 'user_not_found', msg: 'User not found'});
+        return send(res, 200, r.data);
+      }
       return send(res, 404, {msg: 'not found'});
     }
     // ---------- REST ----------

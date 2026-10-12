@@ -1,0 +1,65 @@
+// Builds fixtures/old-backup.json in the ORIGINAL offline apps' format (Inventory/logic.js buildBackupPayload +
+// POS/pos-app.js shapes), used by part3_import.js. Run:  node tests/e2e/bo/fixtures/make-old-backup.js
+const crypto = require('crypto');
+const pin = (p) => crypto.createHash('sha256').update('coffeepos:' + p).digest('hex');
+const d = (s) => new Date(s).toISOString();
+const data = {
+  categories: [{id: 'cat_1', name: 'Coffee'}, {id: 'cat_2', name: 'Syrups & Sauces'}, {id: 'cat_3', name: 'House-Made / Produced'}],
+  suppliers: [{id: 'sup_1', name: 'Local Supplier', contact: '', phone: '', email: '', address: '', notes: 'Default supplier'}, {id: 'sup_2', name: 'Bean Bros', contact: 'Ana', phone: '0917 000 1111', email: '', address: 'Cavite', notes: ''}],
+  ingredients: [
+    {id: 'ing_beans', name: 'House Blend Beans', categoryId: 'cat_1', supplierId: 'sup_2', base_unit: 'g', reorder_level: 500, notes: '', active: true, created_at: d('2026-01-02'), updated_at: d('2026-01-02')},
+    {id: 'ing_sugar', name: 'Brown Sugar', categoryId: 'cat_2', supplierId: 'sup_1', base_unit: 'g', reorder_level: 200, notes: '', active: true, created_at: d('2026-01-02'), updated_at: d('2026-01-02')},
+    {id: 'ing_syrup', name: 'Brown Sugar Syrup', categoryId: 'cat_3', supplierId: null, base_unit: 'ml', reorder_level: 100, notes: 'Auto-created', is_produced_item: true, source_recipe_id: 'rec_syrup', shelf_life_days: 7, storage_notes: 'Fridge', active: true, created_at: d('2026-01-03'), updated_at: d('2026-01-03')},
+  ],
+  recipes: [
+    {id: 'rec_syrup', name: 'Brown Sugar Syrup', recipe_type: 'SAUCES_SYRUPS', category: '', selling_price: 0, notes: '', is_production_recipe: true, expected_yield: 500, yield_unit: 'ml', production_instructions: 'Simmer', produced_ingredient_id: 'ing_syrup', active: true, created_at: d('2026-01-03'), updated_at: d('2026-01-03')},
+    {id: 'rec_bsl', name: 'Brown Sugar Latte', recipe_type: 'DRINKS', category: 'Iced', selling_price: 140, notes: '', is_production_recipe: false, active: true, created_at: d('2026-01-04'), updated_at: d('2026-01-04'),
+      modifierGroups: [{id: 'grp_size', name: 'Size', required: true, multiSelect: false, options: [{id: 'opt_reg', label: 'Regular', priceDelta: 0}, {id: 'opt_lg', label: 'Large', priceDelta: 25, ingredientId: 'ing_syrup', ingredientQtyDelta: 10}]}]},
+  ],
+  recipeIngredients: [
+    {id: 'ri_1', recipeId: 'rec_syrup', ingredientId: 'ing_sugar', quantity: 300, unit: 'g'},
+    {id: 'ri_2', recipeId: 'rec_bsl', ingredientId: 'ing_beans', quantity: 18, unit: 'g'},
+    {id: 'ri_3', recipeId: 'rec_bsl', ingredientId: 'ing_syrup', quantity: 30, unit: 'ml'},
+    {id: 'ri_bad', recipeId: 'rec_gone', ingredientId: 'ing_beans', quantity: 1, unit: 'g'},
+  ],
+  purchases: [
+    {id: 'pur_1', ingredientId: 'ing_beans', supplierId: 'sup_2', purchase_date: '2026-01-05', invoice_number: 'INV-9', quantity: 1, purchase_unit: 'kg', base_quantity: 1000, total_price: 800, price_per_base_unit: 0.8, notes: '', created_at: d('2026-01-05')},
+    {id: 'pur_2', ingredientId: 'ing_sugar', supplierId: 'sup_1', purchase_date: '2026-01-05', invoice_number: '', quantity: 2, purchase_unit: 'kg', base_quantity: 2000, total_price: 180, price_per_base_unit: 0.09, notes: '', created_at: d('2026-01-05')},
+  ],
+  productionBatches: [{id: 'bat_1', recipeId: 'rec_syrup', producedIngredientId: 'ing_syrup', batch_number: 'BSS-20260106-001', production_date: '2026-01-06', expected_yield: 500, actual_yield: 480, yield_unit: 'ml', raw_cost_total: 27, actual_cost_per_unit: 0.05625, waste_reason: 'Evaporation', notes: '', created_at: d('2026-01-06')}],
+  waste: [{id: 'wst_1', ingredientId: 'ing_beans', quantity: 20, unit: 'g', reason: 'Spillage', date: '2026-01-07', notes: '', created_at: d('2026-01-07')}],
+  inventoryTransactions: [
+    {id: 'txn_1', ingredientId: 'ing_beans', transaction_type: 'PURCHASE', quantity: 1000, reference_id: 'pur_1', transaction_date: '2026-01-05', notes: 'Purchase #INV-9', created_at: d('2026-01-05')},
+    {id: 'txn_2', ingredientId: 'ing_sugar', transaction_type: 'PURCHASE', quantity: 2000, reference_id: 'pur_2', transaction_date: '2026-01-05', notes: 'Purchase', created_at: d('2026-01-05')},
+    {id: 'txn_3', ingredientId: 'ing_sugar', transaction_type: 'PRODUCTION_USE', quantity: 300, reference_id: 'bat_1', transaction_date: '2026-01-06', notes: 'Used in batch', created_at: d('2026-01-06')},
+    {id: 'txn_4', ingredientId: 'ing_syrup', transaction_type: 'PRODUCTION', quantity: 480, reference_id: 'bat_1', transaction_date: '2026-01-06', notes: 'Batch', created_at: d('2026-01-06')},
+    {id: 'txn_5', ingredientId: 'ing_beans', transaction_type: 'WASTE', quantity: 20, reference_id: 'wst_1', transaction_date: '2026-01-07', notes: 'Spillage', created_at: d('2026-01-07')},
+    {id: 'txn_6', ingredientId: 'ing_beans', transaction_type: 'SALE_USAGE', quantity: 18, reference_id: 'sale_1', transaction_date: '2026-01-08', notes: 'Sold', created_at: d('2026-01-08T02:00:00Z')},
+    {id: 'txn_7', ingredientId: 'ing_syrup', transaction_type: 'SALE_USAGE', quantity: 40, reference_id: 'sale_1', transaction_date: '2026-01-08', notes: 'Sold', created_at: d('2026-01-08T02:00:00Z')},
+    {id: 'txn_8', ingredientId: 'ing_beans', transaction_type: 'ADJUSTMENT', quantity: -12, reference_id: null, transaction_date: d('2026-01-09T03:00:00Z'), notes: 'Count', created_at: d('2026-01-09T03:00:00Z')},
+  ],
+  users: [
+    {id: 'user_admin', name: 'Zed', role: 'ADMIN', pin_hash: pin('9090'), active: true, created_at: d('2026-01-01')},
+    {id: 'user_lia', name: 'Lia Barista', role: 'CASHIER', pin_hash: pin('4321'), active: true, created_at: d('2026-01-01')},
+  ],
+  shifts: [{id: 'shift_1', shift_number: 'SHIFT-AB12-2026-0001', cashier_id: 'user_lia', cashier_name: 'Lia Barista', opened_at: d('2026-01-08T00:00:00Z'), closed_at: d('2026-01-08T09:00:00Z'), status: 'CLOSED',
+    opening_cash: 1000, declared_cash: 1165, expected_cash: 1165, cash_variance: 0, gross_sales: 165, net_sales: 165, cash_sales: 165, card_sales: 0, other_sales: 0, refunds_total: 0, voids_total: 0, transaction_count: 1, notes: '', created_at: d('2026-01-08T00:00:00Z'), updated_at: d('2026-01-08T09:00:00Z')}],
+  sales: [
+    {id: 'sale_1', transaction_number: 'POS-AB12-2026-000001', transaction_date: d('2026-01-08T02:00:00Z'), status: 'COMPLETED', cashier: 'Lia Barista', shift_id: 'shift_1', subtotal: 165, discount_type: null, discount_value: 0, discount_amount: 0, tax_amount: 0, service_charge_amount: 0, grand_total: 165, notes: '', sync_status: 'local', created_at: d('2026-01-08T02:00:00Z')},
+    {id: 'sale_held', transaction_number: 'POS-AB12-2026-000002', transaction_date: d('2026-01-08T03:00:00Z'), status: 'HELD', cashier: 'Lia Barista', shift_id: 'shift_1', subtotal: 140, grand_total: 140, created_at: d('2026-01-08T03:00:00Z')},
+  ],
+  saleItems: [
+    {id: 'sit_1', saleId: 'sale_1', recipeId: 'rec_bsl', name: 'Brown Sugar Latte', quantity: 1, unit_price: 165, modifiers: [{group: 'Size', label: 'Large', priceDelta: 25, ingredientId: 'ing_syrup', ingredientQtyDelta: 10}], line_total: 165},
+    {id: 'sit_held', saleId: 'sale_held', recipeId: 'rec_bsl', name: 'Brown Sugar Latte', quantity: 1, unit_price: 140, modifiers: [], line_total: 140},
+  ],
+  payments: [{id: 'pay_1', saleId: 'sale_1', method: 'CASH', amount: 165, tendered: 200, change: 35, reference: '', status: 'COMPLETED', created_at: d('2026-01-08T02:00:00Z')}],
+  refunds: [],
+  cashMovements: [{id: 'cash_1', shift_id: 'shift_1', type: 'PAY_IN', amount: 0.01, reason: 'Coins', performed_by: 'user_lia', performed_by_name: 'Lia Barista', at: d('2026-01-08T01:00:00Z'), created_at: d('2026-01-08T01:00:00Z')}],
+  auditLog: [{id: 'audit_1', action: 'Sale completed', actor: 'Lia Barista', details: 'POS-AB12-2026-000001 — ₱165.00 (CASH)', reference_id: 'sale_1', at: d('2026-01-08T02:00:00Z')}],
+  settings: {key: 'app', costingMethod: 'weighted_average', lowStockDefaultThreshold: 10, foodCostWarningPct: 35, business_name: 'Old Shop Name', app_name: 'Brew Ledger', logo: null, tax_pct: 0, service_charge_pct: 0, receipt_footer: 'Salamat!'},
+};
+// the cash movement amount above is odd on purpose? no: keep the shift balanced
+data.cashMovements[0].amount = 0; 
+const payload = {app: 'Coffee Shop System (Inventory + POS)', version: 4, exported_at: d('2026-01-10'), app_name_at_export: 'Brew Ledger', data};
+require('fs').writeFileSync(__dirname + '/old-backup.json', JSON.stringify(payload, null, 1));
+console.log('wrote old-backup.json', Object.entries(data).map(([k, v]) => k + ':' + (Array.isArray(v) ? v.length : 1)).join(' '));

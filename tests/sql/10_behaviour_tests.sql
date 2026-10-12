@@ -94,13 +94,20 @@ select test.ok((public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER')->'staff'->
 reset role;
 select test.login('00000000-0000-0000-0000-0000000000d1', :'cashier_token');
 set role authenticated;
-select test.ok(public.app_rank() = 1, 'cashier token -> rank 1');
+select test.ok(public.app_rank() = 0, 'cashier token -> still rank 0 (no elevation)');
 reset role;
 select test.login('00000000-0000-0000-0000-0000000000d1', :'admin_token');
 set role authenticated;
-select test.ok(public.app_rank() = 3, 'admin PIN on the counter -> rank 3 (Back Office allowed)');
+select test.ok(public.app_rank() = 0, 'admin PIN on the counter -> rank 0 (no Back Office rights)');
+\set ON_ERROR_STOP off
 select public.apply_changes('[{"op":"upsert","table":"dining_tables","row":{"id":"77777777-0000-0000-0000-000000000005","label":"Table 5","kind":"DINE_IN","sort_order":5}}]');
-select test.ok((select count(*) from dining_tables where label='Table 5') = 1, 'admin PIN session can edit Back Office data');
+\set ON_ERROR_STOP on
+select test.ok((select count(*) from dining_tables where label='Table 5') = 0, 'admin PIN session cannot edit Back Office data');
+reset role;
+select test.login('00000000-0000-0000-0000-0000000000a1');
+set role authenticated;
+select public.apply_changes('[{"op":"upsert","table":"dining_tables","row":{"id":"77777777-0000-0000-0000-000000000005","label":"Table 5","kind":"DINE_IN","sort_order":5}}]');
+select test.ok((select count(*) from dining_tables where label='Table 5') = 1, 'owner email login can edit Back Office data (Table 5 added)');
 reset role;
 -- token stolen onto another login does nothing
 select test.login('00000000-0000-0000-0000-0000000000c1', :'admin_token');
@@ -147,9 +154,10 @@ select test.ok((public.fo_sync('device-key-0001-abcdef', jsonb_build_array(jsonb
    'discount approved by a cashier is rejected');
 select test.ok((select count(*) from sales where id='99999999-0000-0000-0000-000000000002') = 0, 'rejected op left no partial rows');
 -- void by manager restores stock
+select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as void_token \gset
 select test.ok((public.fo_sync('device-key-0001-abcdef', jsonb_build_array(jsonb_build_object('op_id','a0000000-0000-0000-0000-000000000005','type','refund','data', jsonb_build_object(
    'refund', jsonb_build_object('id','dddddddd-0000-0000-0000-000000000001','sale_id','99999999-0000-0000-0000-000000000001','shift_id','88888888-0000-0000-0000-000000000001','type','VOID','amount',165,'reason','test','approved_by','66666666-0000-0000-0000-000000000002','approved_by_name','Manny','date',now()),
-   'sale_status','VOIDED',
+   'sale_status','VOIDED', 'approval_token', :'void_token',
    'inventory', jsonb_build_array(jsonb_build_object('id','eeeeeeee-0000-0000-0000-000000000001','ingredient_id','22222222-0000-0000-0000-000000000001','quantity',18,'transaction_date','2026-10-09')))))) ->0->>'status') = 'ok', 'void synced');
 select test.ok((select status from sales where id='99999999-0000-0000-0000-000000000001') = 'VOIDED', 'sale marked VOIDED');
 select test.ok((select stock from v_ingredient_stock where ingredient_id='22222222-0000-0000-0000-000000000001') = 1000, 'void returned beans to stock');

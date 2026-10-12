@@ -68,14 +68,17 @@ select test.ok((public.fo_sync('device-key-0001-abcdef', jsonb_build_array(jsonb
    'sale', jsonb_build_object('id','99999999-0000-0000-0000-000000000010','transaction_number','POS-A-2026-000003','transaction_date',now(),'status','COMPLETED','source','QR',
      'cashier_id','66666666-0000-0000-0000-000000000001','cashier_name','Cathy','shift_id','88888888-0000-0000-0000-000000000001',
      'subtotal',450,'discount_amount',0,'tax_amount',0,'service_charge_amount',45,'grand_total',495,'qr_order_id',:'order_id','customer_id',:'cust'),
-   'items','[]'::jsonb,
+   'items', jsonb_build_array(jsonb_build_object('recipe_id','33333333-0000-0000-0000-000000000001','name','Iced Latte','quantity',2,'unit_price',225,'line_total',450,
+      'modifiers','[{"group":"Size","label":"16oz","price_delta":20},{"group":"Add-ons","label":"Extra shot","price_delta":30},{"group":"Add-ons","label":"Oat milk","price_delta":25}]'::jsonb)),
    'payment', jsonb_build_object('id','bbbbbbbb-0000-0000-0000-000000000010','method','GCASH','amount',495,'reference','123','status','CONFIRMED'),
    'inventory','[]'::jsonb))))->0->>'status') = 'ok', 'QR order paid at the counter');
 select test.ok((select paid_at is not null and sale_id = '99999999-0000-0000-0000-000000000010' from qr_orders where id = :'order_id'), 'order marked paid + linked to sale');
 select test.ok((public.qr_update_order(:'order_id', 'READY', 'Cathy')->'order'->>'status') = 'READY', 'ready');
 select test.ok((public.qr_update_order(:'order_id', 'COMPLETE', 'Cathy')->'order'->>'status') = 'COMPLETED', 'completed');
+reset role;
 select test.ok((select visit_count = 1 and total_spent = 495 from customers where id = :'cust'), 'customer visit + spend tracked');
-select test.ok(jsonb_array_length(public.search_customers('zed')) = 1 and jsonb_array_length(public.search_customers('1234')) = 1 and jsonb_array_length(public.search_customers('xyz')) = 0, 'customer search by name / phone digits');
+set role authenticated;
+select test.ok(jsonb_array_length(public.search_customers('zed')) = 1 and jsonb_array_length(public.search_customers('4567')) = 1 and jsonb_array_length(public.search_customers('1234')) = 0 and jsonb_array_length(public.search_customers('xyz')) = 0, 'customer search by name / phone digits');
 select test.ok((public.fo_add_customer('Walk-in Wendy', '0918-000-1111')->'customer'->>'source') = 'COUNTER', 'walk-in customer added at counter');
 select test.ok((public.fo_add_customer('Someone', '09180001111')->>'existing')::boolean, 'same phone finds the existing customer');
 select test.ok(jsonb_array_length(public.sales_report(now() - interval '1 day', now() + interval '1 day')->'sales') = 2, 'sales_report');
