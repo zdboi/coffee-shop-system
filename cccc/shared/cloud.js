@@ -55,7 +55,7 @@
   // screen; add 'invite' / 'email_change' here only when one is built). Any other
   // login in the address (magic link, provider sign-in, no type) is ignored.
   const EMAIL_LINK_TYPES = ['recovery', 'signup'];
-  const OTHER_ACCOUNT_TEXT = 'You are signed in as another account. Sign out first, then open the email link again.';
+  const OTHER_ACCOUNT_TEXT = 'You are signed in as another account. Sign out first, then ask for a new email link.';
 
   // The user id inside a login token (not verified - only used to REFUSE a switch).
   function tokenUserId(token){

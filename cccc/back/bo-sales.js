@@ -43,7 +43,10 @@ function salesSummary(ds, sales, refunds){
 let calTipEl = null;
 let CAL_TIPS = [];
 function calTipAdd(value, lines){ CAL_TIPS.push({value, lines: lines || []}); return CAL_TIPS.length - 1; }
-function calTip(i, ev){
+// The label is centred on the bar / cell it describes (not on the pointer), so it always sits over the
+// hour or day it names. Near the edges it is nudged inside the chart's card; if that would move it off
+// its own bar, it stays on its bar and is only kept inside the window.
+function calTip(i, ev, anchor){
   if(i == null || !CAL_TIPS[i]){ if(calTipEl) calTipEl.style.display = 'none'; return; }
   if(!calTipEl){ calTipEl = document.createElement('div'); calTipEl.className = 'cal-tip'; calTipEl.setAttribute('role', 'tooltip'); document.body.appendChild(calTipEl); }
   const tip = CAL_TIPS[i];
@@ -51,18 +54,29 @@ function calTip(i, ev){
   const v = document.createElement('span'); v.className = 'tv'; v.textContent = tip.value; calTipEl.appendChild(v);
   tip.lines.forEach(l => { const d = document.createElement('div'); d.textContent = l; calTipEl.appendChild(d); });
   calTipEl.style.display = 'block';
-  const r = ev && ev.target && ev.target.getBoundingClientRect ? ev.target.getBoundingClientRect() : null;
-  let x = ev && ev.clientX != null && ev.type !== 'focus' ? ev.clientX : (r ? r.left + r.width / 2 : 0);
-  let y = ev && ev.clientY != null && ev.type !== 'focus' ? ev.clientY : (r ? r.top : 0);
+  const el = anchor || (ev && ev.currentTarget) || (ev && ev.target);
+  const a = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+  const pointer = ev && ev.clientX != null && ev.type !== 'focus';
   const w = calTipEl.offsetWidth, h = calTipEl.offsetHeight;
-  x = Math.min(window.innerWidth - w - 8, Math.max(8, x + 12));
+  const vw = window.innerWidth;
+  const cx = a ? a.left + a.width / 2 : (pointer ? ev.clientX : 0);
+  let x = cx - w / 2;
+  const card = el && el.closest ? el.closest('.cal-card') : null;
+  const box = card ? card.getBoundingClientRect() : null;
+  if(box){
+    const nudged = Math.max(box.left + 4, Math.min(box.right - w - 4, x));
+    // keep the nudge only while the label is still over its own bar / cell
+    if(!a || (nudged + w / 2 >= a.left && nudged + w / 2 <= a.right)) x = nudged;
+  }
+  x = Math.max(8, Math.min(vw - w - 8, x));
+  let y = pointer ? ev.clientY : (a ? a.top : 0);
   y = y - h - 12 < 8 ? y + 18 : y - h - 12;
   calTipEl.style.left = x + 'px'; calTipEl.style.top = y + 'px';
 }
 function calWireTips(root){
   root.querySelectorAll('[data-tip]').forEach(n => {
     const i = Number(n.getAttribute('data-tip'));
-    const showTip = (ev) => calTip(i, ev);
+    const showTip = (ev) => calTip(i, ev, n);
     n.addEventListener('pointermove', showTip);
     n.addEventListener('focus', showTip);
     n.addEventListener('pointerleave', () => calTip(null));
@@ -130,9 +144,13 @@ function calTableTwin(headers, rows){
     <thead><tr>${headers.map((h, i) => `<th${i ? ' class="num"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>
     <tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td${i ? ' class="num"' : ''}>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></details>`;
 }
+// "Sales ₱X − refunds ₱Y": the same words as the counter's reports (SALES_LABELS in the shared logic).
+function salesMinusRefundsText(sales, refunds){
+  return `${SALES_LABELS.sales} ${fmtMoney(sales)} − ${SALES_LABELS.refunds.toLowerCase()} ${fmtMoney(refunds)}`;
+}
 function calKpis(sum){
   return `<div class="grid grid-4 cal-kpis">
-    ${statCard('Net sales', fmtMoney(sum.net), sum.refunds > 0 ? `${fmtMoney(sum.gross)} before ${fmtMoney(sum.refunds)} refunds` : 'no refunds')}
+    ${statCard(SALES_LABELS.netSales, fmtMoney(sum.net), sum.refunds > 0 ? salesMinusRefundsText(sum.gross, sum.refunds) : 'no refunds')}
     ${statCard('Transactions', sum.count.toLocaleString('en-PH'), sum.qr ? `${sum.qr} from QR orders` : 'voided sales not counted')}
     ${statCard('Average sale', fmtMoney(sum.avg), sum.discounts > 0 ? `${fmtMoney(sum.discounts)} in discounts` : '')}
     ${statCard('Items sold', sum.items.toLocaleString('en-PH'), '')}
@@ -223,14 +241,14 @@ function calRenderMonth(body, ds, range, r){
       <span class="d">${Number(k.slice(8))}</span>${v ? `<span><span class="v">${esc(calCompact(net))}</span><br><span class="n">${v.count} sale${v.count === 1 ? '' : 's'}</span></span>` : ''}</button>`;
     if(inMonth) rows.push([k, v ? v.count : 0, (v ? v.gross : 0).toFixed(2), (v ? v.ref : 0).toFixed(2), net.toFixed(2)]);
   }
-  CAL.lastTable = {name: 'daily-' + range.fromKey.slice(0, 7), headers: ['Date', 'Transactions', 'Sales before refunds', 'Refunds', 'Net sales'], rows};
+  CAL.lastTable = {name: 'daily-' + range.fromKey.slice(0, 7), headers: ['Date', 'Transactions', SALES_LABELS.sales, SALES_LABELS.refunds, SALES_LABELS.netSales], rows};
   body.innerHTML = `${calKpis(sum)}
     <div class="card cal-card">
       <h3>Daily sales</h3>
       <div class="cal-sub">${best ? `Best day: ${esc(keyLabel(best[0], {weekday: 'long', month: 'short', day: 'numeric'}))} (${fmtMoney(best[1].gross - best[1].ref)}). ` : ''}Darker = more sales. Tap a day to see it hour by hour.</div>
       <div class="cal-month">${cells}</div>
       <div class="cal-scale">Less ${[0.0001, 0.25, 0.5, 0.75, 1].map(t => `<span class="sw" style="background:${calShade(t).bg}"></span>`).join('')} More</div>
-      ${calTableTwin(['Date', 'Transactions', 'Before refunds', 'Refunds', 'Net sales'], rows.filter(x => x[1] || Number(x[3])).map(x => [keyLabel(x[0], {weekday: 'short', month: 'short', day: 'numeric'}), x[1], fmtMoney(x[2]), fmtMoney(x[3]), fmtMoney(x[4])]))}
+      ${calTableTwin(['Date', 'Transactions', SALES_LABELS.sales, SALES_LABELS.refunds, SALES_LABELS.netSales], rows.filter(x => x[1] || Number(x[3])).map(x => [keyLabel(x[0], {weekday: 'short', month: 'short', day: 'numeric'}), x[1], fmtMoney(x[2]), fmtMoney(x[3]), fmtMoney(x[4])]))}
     </div>`;
 }
 function calRenderWeek(body, ds, range, r){
@@ -268,9 +286,9 @@ function calRenderWeek(body, ds, range, r){
   heat += '</tbody></table></div>';
   CAL.lastTable = {name: 'week-by-hour-' + range.fromKey, headers: ['Hour', ...days], rows};
   body.innerHTML = `${calKpis(sum)}
-    <div class="card cal-card"><h3>Net sales by day</h3><div class="cal-sub">Tap a day to see it hour by hour.</div>
-      <div class="cal-chart">${calColumns(points, 'Net sales by day')}</div>
-      ${calTableTwin(['Day', 'Transactions', 'Net sales'], points.map(p => [p.label, p.count, fmtMoney(p.value)]))}</div>
+    <div class="card cal-card"><h3>${esc(SALES_LABELS.netSales)} by day</h3><div class="cal-sub">${esc(SALES_LABELS.netSales)} = ${esc(SALES_LABELS.sales.toLowerCase())} minus ${esc(SALES_LABELS.refunds.toLowerCase())}. Tap a day to see it hour by hour.</div>
+      <div class="cal-chart">${calColumns(points, SALES_LABELS.netSales + ' by day')}</div>
+      ${calTableTwin(['Day', 'Transactions', SALES_LABELS.netSales], points.map(p => [p.label, p.count, fmtMoney(p.value)]))}</div>
     <div class="card cal-card"><h3>Busiest hours this week</h3><div class="cal-sub">Sales by hour and day. Darker = busier — useful for planning staff.</div>${sales.length ? heat : '<div class="cal-empty">No sales this week.</div>'}</div>`;
 }
 function calItemMatrix(ds, sales){
@@ -319,17 +337,17 @@ function calDayDetail(ds, sales, refunds, nameSuffix){
   CAL.lastTable = {name: 'items-by-hour' + (nameSuffix || ''), headers: ['Item', ...hours.map(calHourLabel), 'Total qty', 'Revenue'],
     rows: matrix.map(r => [r.name, ...hours.map(h => r.hours[h] || 0), r.total, r.revenue.toFixed(2)])};
   return `${calKpis(sum)}
-    <div class="card cal-card"><h3>Sales by hour</h3><div class="cal-sub">${peak.total > 0 ? `Busiest hour: ${calHourLabel(peak.h)}–${calHourLabel((peak.h + 1) % 24)} (${fmtMoney(peak.total)}, ${plural(peak.count, 'transaction')}).` : 'No sales yet.'} Sales before refunds.</div>
+    <div class="card cal-card"><h3>Sales by hour</h3><div class="cal-sub">${peak.total > 0 ? `Busiest hour: ${calHourLabel(peak.h)}–${calHourLabel((peak.h + 1) % 24)} (${fmtMoney(peak.total)}, ${plural(peak.count, 'transaction')}).` : 'No sales yet.'} The chart shows ${esc(SALES_LABELS.sales)}: ${esc(SALES_HINTS.sales.charAt(0).toLowerCase() + SALES_HINTS.sales.slice(1))}</div>
       <div class="cal-chart">${calColumns(points, 'Sales by hour')}</div>
       ${calTableTwin(['Hour', 'Transactions', 'Sales'], points.filter(p => p.count).map(p => [p.label, p.count, fmtMoney(p.value)]))}</div>
-    <div class="card cal-card"><h3>Items by hour</h3><div class="cal-sub">How many of each item sold in each hour (before refunds).</div>${calMatrixHtml(matrix, hours)}</div>
+    <div class="card cal-card"><h3>Items by hour</h3><div class="cal-sub">How many of each item sold in each hour (refunds are not taken off).</div>${calMatrixHtml(matrix, hours)}</div>
     <div class="card cal-card"><h3>Payment methods</h3>${Object.keys(pay).length ? `<div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Method</th><th class="num">Transactions</th><th class="num">Total</th></tr></thead><tbody>${Object.entries(pay).sort((a, b) => b[1].total - a[1].total).map(([m, v]) => `<tr><td>${esc(payLabel(m))}</td><td class="num">${v.n}</td><td class="num">${fmtMoney(v.total)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="cal-empty">No payments.</div>'}</div>`;
 }
 function calRenderDay(body, ds, range, r){
   const sales = salesIn(ds, r.from, r.to), refunds = refundsIn(ds, r.from, r.to);
   const shifts = ds.shifts.filter(s => inRange(s.opened_at, r.from, r.to)).sort((a, b) => String(a.opened_at).localeCompare(String(b.opened_at)));
   body.innerHTML = calDayDetail(ds, sales, refunds, '-' + range.fromKey) + (shifts.length ? `
-    <div class="card cal-card"><h3>Shifts that day</h3><div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Shift</th><th>Cashier</th><th>Opened</th><th>Closed</th><th class="num">Net sales</th><th class="num">Cash over / short</th><th></th></tr></thead><tbody>
+    <div class="card cal-card"><h3>Shifts that day</h3><div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Shift</th><th>Cashier</th><th>Opened</th><th>Closed</th><th class="num">${esc(SALES_LABELS.netSales)}</th><th class="num">Cash over / short</th><th></th></tr></thead><tbody>
       ${shifts.map(s => { const m = shiftMetrics(s, ds); return `<tr><td>${esc(s.shift_number || '')}</td><td>${esc(s.cashier_name || '')}</td><td>${fmtShopTime(s.opened_at)}</td><td>${s.closed_at ? fmtShopTime(s.closed_at) : '<span class="badge badge-green">Open</span>'}</td><td class="num">${fmtMoney(m.netSales)}</td><td class="num">${s.status === 'CLOSED' ? (num(s.cash_variance) >= 0 ? '+' : '') + fmtMoney(s.cash_variance) : '—'}</td><td><button class="btn btn-ghost btn-sm" data-open-shift="${esc(s.id)}">View</button></td></tr>`; }).join('')}
     </tbody></table></div></div>` : '');
   body.querySelectorAll('[data-open-shift]').forEach(b => b.onclick = () => { CAL.shiftId = b.dataset.openShift; CAL.view = 'shift'; renderCalendar(); });
@@ -369,15 +387,14 @@ function printShiftSummary(shift, m){
   const closed = shift.status === 'CLOSED';
   const v = (k, live) => closed && shift[k] != null ? shift[k] : live;
   openPrintWindow(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Shift report ${esc(shift.shift_number || '')}</title>
-    <style>body{font-family:Georgia,serif;max-width:420px;margin:24px auto;color:#241209;font-size:13px;} .row{display:flex;justify-content:space-between;padding:3px 0;} hr{border:none;border-top:1px dashed #999;margin:10px 0;} h1{font-size:17px;}</style></head><body>
+    <style>body{font-family:Georgia,serif;max-width:420px;margin:24px auto;color:#241209;font-size:13px;} .row{display:flex;justify-content:space-between;padding:3px 0;} hr{border:none;border-top:1px dashed #999;margin:10px 0;} h1{font-size:17px;} .hint{font-size:11px;color:#6f5c48;}</style></head><body>
     <h1>${esc(businessName() || appDisplayName())} — Shift report</h1>
     <div>${esc(shift.shift_number || '')} · ${esc(shift.cashier_name || '')}</div>
     <div>${esc(fmtShopDateTime(shift.opened_at))} → ${closed ? esc(fmtShopDateTime(shift.closed_at)) : 'still open'}</div><hr>
-    <div class="row"><span>Gross sales</span><b>${fmtMoney(v('gross_sales', m.grossSales))}</b></div>
-    <div class="row"><span>Net sales</span><b>${fmtMoney(v('net_sales', m.netSales))}</b></div>
+    ${salesSummaryRows(m, shift).map(r => `<div class="row"${r.total ? ' style="font-size:14px;"' : ''}><span>${esc(r.label)}</span><${r.total ? 'b' : 'span'}>${r.sign}${fmtMoney(r.amount)}</${r.total ? 'b' : 'span'}></div>`).join('')}
     <div class="row"><span>Transactions</span><b>${esc(v('transaction_count', m.transactionCount))}</b></div>
-    <div class="row"><span>Refunds</span><b>${fmtMoney(v('refunds_total', m.refundsOnly))}</b></div>
-    <div class="row"><span>Voids</span><b>${fmtMoney(v('voids_total', m.voidsOnly))}</b></div><hr>
+    <div class="row"><span>${esc(SALES_LABELS.voids)}</span><b>${fmtMoney(v('voids_total', m.voids))}</b></div>
+    <div class="hint">${esc(SALES_HINTS.voids)}</div><hr>
     <div class="row"><span>Cash</span><b>${fmtMoney(v('cash_sales', m.cashGross))}</b></div>
     <div class="row"><span>Card</span><b>${fmtMoney(v('card_sales', m.cardGross))}</b></div>
     <div class="row"><span>GCash / Maya / other</span><b>${fmtMoney(v('other_sales', m.otherGross))}</b></div><hr>
@@ -567,7 +584,7 @@ async function openSaleModal(saleId){
   const {sale, items, payments, refunds, qr, customer} = b;
   const pay = payments[0] || {};
   const refunded = refunds.reduce((s, r) => s + num(r.amount), 0);
-  const canRefund = (sale.status === 'COMPLETED' || sale.status === 'PARTIALLY_REFUNDED') && num(sale.grand_total) - refunded > 0.009;
+  const canRefund = (sale.status === 'COMPLETED' || sale.status === 'PARTIALLY_REFUNDED') && refundLeft(sale, refunded) > 0.01;     // same rule as the server
   const canVoid = sale.status === 'COMPLETED' && !refunds.length;
   openModal({title: 'Sale ' + esc(sale.transaction_number || ''), wide: true, body: `
     <div class="pill-stack" style="margin-bottom:12px;">${saleStatusBadge(sale.status)}
@@ -615,10 +632,13 @@ async function openOwnerRefund(bundle, kind){
     const refs = [sale.id].concat(refunds.map(r => r.id));
     stockRows = await cloud.select('inventory_transactions', {in: {reference_id: refs}}) || [];
   }catch(e){ toast(friendlyError(e), 'error'); return; }
-  const prevAmount = refunds.reduce((s, r) => s + num(r.amount), 0);
-  const remaining = Math.max(0, Math.round((num(sale.grand_total) - prevAmount) * 100) / 100);
-  const alreadyQty = {};
-  refunds.forEach(r => (r.items || []).forEach(it => { if(it.sale_item_id) alreadyQty[it.sale_item_id] = (alreadyQty[it.sale_item_id] || 0) + num(it.quantity); }));
+  // The refund rule is the shared one (owner decision 2026-10-12): the customer gets back what they paid
+  // for the returned items - their share after the sale's discount, plus tax and service charge. The
+  // server checks the same rule, so the screen can never offer more than it would accept.
+  const prior = refundPriorFor(sale.id, refunds);
+  const prevAmount = prior.amount;
+  const remaining = refundLeft(sale, prior);
+  const alreadyQty = prior.quantities;
   const maxQty = (it) => Math.max(0, num(it.quantity) - (alreadyQty[it.id] || 0));
   openModal({title: isVoid ? 'Void sale ' + esc(sale.transaction_number) : 'Refund sale ' + esc(sale.transaction_number), wide: true, body: `
     ${isVoid ? `<p>This voids <b>${esc(sale.transaction_number)}</b> (${fmtMoney(sale.grand_total)}) and puts all its items back in stock. The sale stays in the history, marked voided.</p>`
@@ -627,7 +647,7 @@ async function openOwnerRefund(bundle, kind){
         ${items.map(it => `<tr data-item="${esc(it.id)}"><td>${esc(it.name)}${(it.modifiers || []).length ? `<div class="text-light" style="font-size:12px;">${it.modifiers.map(m => esc(m.label)).join(', ')}</div>` : ''}</td><td>${fmtNum(it.quantity, 0)}</td><td>${fmtNum(alreadyQty[it.id] || 0, 0)}</td>
           <td><input type="number" min="0" step="1" max="${maxQty(it)}" value="0" class="rv-qty" style="width:80px;" ${maxQty(it) ? '' : 'disabled'} aria-label="Quantity to refund"></td></tr>`).join('')}
       </tbody></table>
-      <div class="form-row" style="margin-top:12px;max-width:260px;"><label for="rv-amount">Amount to give back (₱)</label><input type="number" step="any" min="0" max="${remaining}" id="rv-amount" value="0"><div class="hint">Worked out from the items; you can lower it.</div></div>`}
+      <div class="form-row" style="margin-top:12px;max-width:320px;"><label for="rv-amount">Amount to give back (₱)</label><input type="number" step="any" min="0" max="${remaining}" id="rv-amount" value="0"><div class="hint" id="rv-amount-hint">Worked out from what the customer paid for these items (after the discount, with tax and service charge). You can lower it, not raise it.</div></div>`}
     <div class="form-row"><label for="rv-reason">Reason</label><input id="rv-reason" maxlength="200" placeholder="${isVoid ? 'e.g. Entered by mistake' : 'e.g. Customer changed their order'}"></div>
     <div class="form-row"><label for="rv-shift">Where does the money come from?</label><select id="rv-shift">
       <option value="">Not from a counter drawer (e.g. I paid it back myself)</option>
@@ -642,7 +662,12 @@ async function openOwnerRefund(bundle, kind){
         if(isVoid) return items.map(it => ({it, qty: num(it.quantity)}));
         return [...root.querySelectorAll('[data-item]')].map(row => ({it: items.find(x => x.id === row.dataset.item), qty: Math.floor(num(row.querySelector('.rv-qty').value))})).filter(x => x.qty > 0);
       }
-      function computed(){ return Math.min(remaining, Math.round(chosen().reduce((s, x) => s + num(x.it.line_total) / num(x.it.quantity) * x.qty, 0) * 100) / 100); }
+      // the most these items can give back (shared rule; 0 until something is chosen)
+      function computed(){
+        const sel = chosen();
+        if(!sel.length) return 0;
+        return refundAmountForItems(sale, items, sel.map(x => ({sale_item_id: x.it.id, quantity: x.qty})), prior);
+      }
       function preview(){
         const p = root.querySelector('#rv-preview');
         const sel = chosen();
@@ -650,8 +675,11 @@ async function openOwnerRefund(bundle, kind){
           : (sel.length ? `${plural(sel.reduce((s, x) => s + x.qty, 0), 'item')} back to stock, ${fmtMoney(num(amountInput.value))} back to the customer.` : 'Choose at least one item to refund.');
       }
       if(!isVoid){
-        root.querySelectorAll('.rv-qty').forEach(inp => inp.oninput = () => { amountInput.value = computed().toFixed(2); preview(); });
-        amountInput.oninput = preview;
+        const syncMax = () => { amountInput.max = String(computed()); };
+        root.querySelectorAll('.rv-qty').forEach(inp => inp.oninput = () => { amountInput.value = computed().toFixed(2); syncMax(); preview(); });
+        // the amount can be lowered but never raised above what these items give back
+        amountInput.oninput = () => { if(num(amountInput.value) > computed()) amountInput.value = computed().toFixed(2); preview(); };
+        syncMax();
       }
       preview();
       const go = root.querySelector('#rv-confirm');
@@ -660,15 +688,19 @@ async function openOwnerRefund(bundle, kind){
         const reason = root.querySelector('#rv-reason').value.trim();
         if(!sel.length){ toast('Choose at least one item to refund', 'error'); return; }
         for(const x of sel){ if(x.qty > maxQty(x.it)){ toast(`${x.it.name}: you can refund at most ${fmtNum(maxQty(x.it), 0)}`, 'error'); return; } }
-        const amount = isVoid ? num(sale.grand_total) : Math.round(num(amountInput.value) * 100) / 100;
-        if(!isVoid && (amount < 0 || amount > remaining + 0.001)){ toast(`The amount must be between ₱0 and ${fmtMoney(remaining)}`, 'error'); return; }
+        // a void gives back everything that is left (the whole sale: voids are only offered on sales without refunds)
+        const amount = isVoid ? remaining : roundMoney(amountInput.value);
+        const most = isVoid ? remaining : computed();
+        if(!isVoid && (amount < 0 || amount > most + 0.001)){ toast(`For these items the amount must be between ₱0 and ${fmtMoney(most)}`, 'error'); return; }
         if(!reason){ toast('Enter a reason — it shows in the audit log', 'error'); return; }
         const now = nowISO();
+        // FULL_REFUND / REFUNDED once nothing is left to give back, otherwise a partial refund
+        const nothingLeft = refundLeft(sale, prevAmount + amount) === 0;
         const refund = {id: uid(), sale_id: sale.id, shift_id: root.querySelector('#rv-shift').value || null,
-          type: isVoid ? 'VOID' : (prevAmount + amount >= num(sale.grand_total) - 0.01 ? 'FULL_REFUND' : 'PARTIAL_REFUND'),
+          type: isVoid ? 'VOID' : (nothingLeft ? 'FULL_REFUND' : 'PARTIAL_REFUND'),
           amount, reason, items: sel.map(x => ({sale_item_id: x.it.id, quantity: x.qty, recipe_id: x.it.recipe_id, modifiers: x.it.modifiers || []})),
           approved_by: boActorId(), approved_by_name: boActorName(), date: now, notes: 'Done in the Back Office', created_at: now};
-        const newStatus = isVoid ? 'VOIDED' : (prevAmount + amount >= num(sale.grand_total) - 0.01 ? 'REFUNDED' : 'PARTIALLY_REFUNDED');
+        const newStatus = isVoid ? 'VOIDED' : (nothingLeft ? 'REFUNDED' : 'PARTIALLY_REFUNDED');
         // stock back: what the recipe uses (shared logic), never more than this sale took out
         const left = {};
         stockRows.forEach(t => {

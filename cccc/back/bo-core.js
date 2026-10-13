@@ -167,8 +167,21 @@ const Ops = {
     id: uid(), action, actor_id: boActorId(), actor_name: boActorName(),
     details: details || '', reference_id: referenceId ? String(referenceId) : null, at: nowISO()}}),
 };
+// A finished sale's money is locked by the database (SALE_LOCKED): subtotal, discount, tax, service charge and
+// total never change afterwards. No Back Office screen changes them; this guard keeps it that way (reviews,
+// refunds, statuses, customer links and notes are fine).
+const SALE_MONEY_COLUMNS = ['subtotal', 'discount_type', 'discount_value', 'discount_amount', 'tax_amount', 'service_charge_amount', 'grand_total'];
+function assertSaleMoneyUntouched(ops){
+  (ops || []).forEach(o => {
+    if(o && o.table === 'sales' && (o.op === 'update' || o.op === 'upsert') && o.row && SALE_MONEY_COLUMNS.some(c => c in o.row)){
+      console.error('Blocked a change to the money of a sale', o);
+      const e = new Error('SALE_LOCKED'); e.code = 'SALE_LOCKED'; throw e;
+    }
+  });
+}
 async function applyChanges(ops){
   if(!ops || !ops.length) return {applied: 0};
+  assertSaleMoneyUntouched(ops);
   return cloud.rpc('apply_changes', {p_ops: ops}, {timeout: 90000});
 }
 // Saves, shows a plain error if it fails, then reloads the shop data. Returns true when saved.
@@ -262,6 +275,12 @@ const AUTH_VIEWS = {
       <button type="submit" class="btn btn-primary btn-block">Save new password</button>
     </form>
     <div class="auth-alt"><a class="linklike" id="np-cancel">Cancel and sign out</a></div>`,
+  // An email link was opened while another account is signed in on this browser (nothing was changed).
+  conflict: (msg) => `
+    <h2>This email link was not used</h2>
+    <p class="auth-sub" id="cf-msg">${esc(msg)}</p>
+    <button type="button" class="btn btn-primary btn-block" id="cf-signout">Sign out</button>
+    <div class="auth-alt"><a class="linklike" id="cf-keep">Keep the current sign-in and open the Back Office</a></div>`,
   signup: () => `
     <h2>Create a new shop account</h2>
     <p class="auth-sub">This makes a separate shop with you as its owner. To sign in to your existing shop, go back.</p>
@@ -281,8 +300,8 @@ function showAuth(view, msg, isError){
   wrap.style.display = 'flex';
   wrap.innerHTML = `<div class="auth-card form-card">
       <div class="pin-logo">☕</div>
-      ${(AUTH_VIEWS[view] || AUTH_VIEWS.login)()}
-      <div id="auth-msg" class="auth-msg${isError ? ' err' : ''}" role="status" aria-live="polite">${esc(msg || '')}</div>
+      ${(AUTH_VIEWS[view] || AUTH_VIEWS.login)(msg)}
+      <div id="auth-msg" class="auth-msg${isError ? ' err' : ''}" role="status" aria-live="polite">${view === 'conflict' ? '' : esc(msg || '')}</div>
       <a href="../front/" class="auth-link">Staff: go to the counter (Front Office) →</a>
     </div>`;
   const setMsg = (m, err) => { const n = document.getElementById('auth-msg'); n.textContent = m || ''; n.className = 'auth-msg' + (err ? ' err' : ''); };
@@ -337,6 +356,14 @@ function showAuth(view, msg, isError){
     };
     wrap.querySelector('#np-cancel').onclick = async () => { await cloud.signOut(); showAuth('login'); };
   }
+  const cfOut = wrap.querySelector('#cf-signout');
+  if(cfOut){
+    cfOut.onclick = () => busy(cfOut, async () => {
+      try{ await cloud.signOut(); }catch(err){ /* the login is cleared on this device either way */ }
+      showAuth('login', 'You are signed out. Sign in with your email and password, or open the email link again.');
+    }, 'Signing out…');
+    wrap.querySelector('#cf-keep').onclick = () => { startBackOffice(); };
+  }
   const su = wrap.querySelector('#f-signup');
   if(su) su.onsubmit = async (e) => {
     e.preventDefault();
@@ -383,12 +410,17 @@ async function bootBackOffice(){
   });
   let link = null;
   try{ link = await cloud.sessionFromUrl(); }catch(e){ link = null; }
+  // Email links: a different account is already signed in here -> say so, offer "Sign out" (nothing was changed)
+  if(link && link.conflict){ showAuth('conflict', link.error, true); return; }
   if(link && link.error){ showAuth('login', link.error, true); return; }
+  // a link of another kind (e.g. a magic link) is never used for signing in
+  const ignoredNote = link && link.ignored ? 'That link can\'t be used here. Sign in with your email and password.' : '';
   const sess = await cloud.ensureSession();
-  if(!sess){ showAuth('login'); return; }
+  if(!sess){ showAuth('login', ignoredNote); return; }
   if(link && link.type === 'recovery'){ showAuth('newpass'); return; }
   if(link && link.type === 'signup') toast('Email confirmed');
   await startBackOffice();
+  if(ignoredNote) toast(ignoredNote, 'warn');
 }
 
 async function startBackOffice(){
@@ -729,7 +761,7 @@ async function loadDashboardSales(){
     const sum = salesSummary(ds, salesIn(ds));          // same rule as the calendar: voided sales don't count
     const box = document.getElementById('dash-today');
     if(box){
-      box.innerHTML = statCard('Sales today', fmtMoney(sum.net), sum.refunds > 0 ? `${fmtMoney(sum.gross)} before ${fmtMoney(sum.refunds)} refunds` : '<a class="linklike" data-go="calendar">see the calendar</a>')
+      box.innerHTML = statCard('Sales today', fmtMoney(sum.net), sum.refunds > 0 ? salesMinusRefundsText(sum.gross, sum.refunds) : '<a class="linklike" data-go="calendar">see the calendar</a>')
         + statCard('Transactions', sum.count.toLocaleString('en-PH'), sum.count ? `average ${fmtMoney(sum.avg)}` : 'none yet')
         + statCard('QR orders open', BO.counts.open_qr_orders, '<a class="linklike" data-go="qrOrders">see QR orders</a>')
         + statCard('Customers', BO.counts.customer_count, '<a class="linklike" data-go="customers">see customers</a>');

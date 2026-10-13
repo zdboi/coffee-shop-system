@@ -10,7 +10,9 @@
      in online (manager/admin PINs are never saved on a counter).
    * A counter joins the shop only with a pairing code (Back Office → Devices).
    * Manager approvals (refund, void, discount, closing someone else's shift)
-     carry a one-time token from the server, so they need internet.
+     carry a token the server checks when the action uploads. A manager typing
+     their PIN to approve needs internet. A manager who is signed in (online)
+     may approve their OWN actions even offline, with their sign-in token.
    * New: QR Orders board, customer attach, sold-out toggles.
    ===================================================================== */
 
@@ -31,6 +33,9 @@ const posState = {
   lastBootstrapAt: 0,
   qrSince: null, qrSeen: new Set(),
   todaySales: null,
+  shiftCheckOk: null,    // did the last server check of the open shift succeed? (null = not asked yet)
+  loginExpiresAt: null,  // when the signed-in person's server login ends (a manager's login also approves their own actions)
+  shiftSyncedAt: 0,      // last time the open shift's figures were checked against the server
 };
 
 function hasRole(minRole){
@@ -102,6 +107,8 @@ async function loadFromServer(){
   await applyBootstrap(data);
   posState.lastBootstrapAt = Date.now();
   await LocalDB.set('fo.snapshot', data);
+  // Drawer maths needs the sale behind each of this shift's refunds (a refund of a cash sale from an earlier shift).
+  try{ await fillRefundSales(SHIFT_CHECK_MS); }catch(e){ if(!e.offline) console.warn('could not load a refunded sale', e.message); }
 }
 async function loadFromSnapshot(){
   const data = await LocalDB.get('fo.snapshot');
@@ -185,6 +192,9 @@ function nextShiftNumber(){
    SETUP (pair this counter — the only way a counter joins the shop)
    ===================================================================== */
 function showSetup(prefillCode, message){
+  // Opened from the Back Office QR code (?pair=CODE): the owner already typed this counter's
+  // name there, so the name box starts empty and the server uses the owner's name.
+  const fromLink = !!prefillCode;
   show('boot-screen', false); show('app', false); show('pin-gate', false);
   const wrap = document.getElementById('setup-screen');
   wrap.style.display = 'flex';
@@ -198,7 +208,9 @@ function showSetup(prefillCode, message){
         <li>On the owner's login, open <b>Back Office → Devices → Pair a counter</b>.</li>
         <li>Type the 6-character code below (it works for 15 minutes).</li>
       </ol>
-      <div class="form-row"><label for="su-devname">Counter name</label><input id="su-devname" maxlength="30" value="${escapeHtml(localStorage.getItem('cccc.device.name')||'Front Counter')}"></div>
+      ${fromLink
+        ? `<div class="form-row"><label for="su-devname">Counter name (optional)</label><input id="su-devname" maxlength="30" value="" placeholder="Leave empty to use the name from Back Office"></div>`
+        : `<div class="form-row"><label for="su-devname">Counter name</label><input id="su-devname" maxlength="30" value="${escapeHtml(localStorage.getItem('cccc.device.name')||'Front Counter')}"></div>`}
       <div class="form-row"><label for="su-code">Pairing code</label><input id="su-code" value="${escapeHtml(prefillCode)}" autocapitalize="characters" autocomplete="off" maxlength="6" class="code-input" placeholder="ABC123"></div>
       <button class="btn btn-primary btn-big" id="su-pair">Pair this counter</button>
       <div id="su-error" class="pin-error"></div>
@@ -208,16 +220,17 @@ function showSetup(prefillCode, message){
     const btn = document.getElementById('su-pair');
     if(btn.disabled) return;
     const code = document.getElementById('su-code').value.trim().toUpperCase();
-    const name = document.getElementById('su-devname').value.trim() || 'Counter';
+    // An empty name is sent as "no name": the server then uses the name the owner typed in Back Office.
+    const name = document.getElementById('su-devname').value.trim();
     if(code.length < 6){ err('Enter the 6-character code.'); return; }
     btn.disabled = true; btn.textContent = 'Pairing…'; err('');
     const failed = (m)=>{ err(m); btn.disabled = false; btn.textContent = 'Pair this counter'; };
     try{
       // A counter is always its own anonymous login (never an owner email login).
       if(!cloud.session || !cloud.isAnonymous()){ await cloud.signOut(); await cloud.signInAnonymously(); }
-      const r = await cloud.rpc('redeem_device_pairing', {p_code: code, p_device_key: deviceKey(), p_device_name: name});
+      const r = await cloud.rpc('redeem_device_pairing', {p_code: code, p_device_key: deviceKey(), p_device_name: name || null});
       if(r && r.error){ failed(friendlyError(r)); return; }
-      localStorage.setItem('cccc.device.name', name);
+      if(name) localStorage.setItem('cccc.device.name', name);
       toast('Counter paired');
       location.replace(location.pathname);
     }catch(e){ failed(e.offline ? 'No internet. Pairing needs internet — check the connection and try again.' : friendlyError(e)); }
@@ -230,6 +243,7 @@ function showSetup(prefillCode, message){
    PIN GATE / SESSION
    ===================================================================== */
 const APPROVAL_OFFLINE_TEXT = 'Manager approval needs internet. Try again when the counter is back online.';
+const APPROVAL_ENDED_TEXT = 'Your sign-in has run out, so you cannot approve while offline. Connect to the internet, then lock and sign in again.';
 let pinBuffer = '';
 let pinMode = 'login';         // 'login' | 'override'
 let pinOverrideResolve = null;
@@ -275,6 +289,9 @@ function showPinGate(mode){
       ? 'No staff PINs yet. The owner sets them in <b>Back Office → Staff</b>.'
       : `Enter your PIN · ${escapeHtml(state.device ? state.device.device_name : '')}`;
     foot.innerHTML = `<a href="../back/" class="pin-link">Back Office →</a>`;
+    // Offline and paused after too many wrong PINs: say so (and until when) straight away.
+    const pausedUntil = isOnline() ? 0 : offlinePinLockedUntil();
+    if(pausedUntil) showPinError(offlinePinLockText(pausedUntil));
   } else {
     document.getElementById('pin-title').textContent = `${pinOverrideMinRole.charAt(0)+pinOverrideMinRole.slice(1).toLowerCase()} PIN required`;
     document.getElementById('pin-sub').textContent = hasRole(pinOverrideMinRole)
@@ -338,9 +355,63 @@ async function verifyPin(pin){
       if(!e.offline) return {error: 'ERROR', text: friendlyError(e)};
     }
   }
-  const staff = await offlineVerifyPin(pin);
-  if(!staff) return {error: 'WRONG_PIN', text: 'Incorrect PIN, or this PIN needs internet. Offline, only cashiers who signed in on this counter in the last 14 days can sign in.'};
-  return {staff, offline: true};
+  // Offline: a locked pad refuses without checking anything.
+  const lockedUntil = offlinePinLockedUntil();
+  if(lockedUntil) return {error: 'TOO_MANY_ATTEMPTS', locked_until: new Date(lockedUntil).toISOString(), text: offlinePinLockText(lockedUntil)};
+  const found = await offlineVerifyPin(pin);
+  // The same PIN fits two cashiers on this counter: sign nobody in (the owner gives one a new PIN).
+  if(found.length > 1) return {error: 'PIN_AMBIGUOUS'};
+  if(!found.length){
+    const wrong = noteOfflinePinFailure();
+    if(wrong.until) return {error: 'TOO_MANY_ATTEMPTS', locked_until: new Date(wrong.until).toISOString(), text: offlinePinLockText(wrong.until)};
+    const left = wrong.triesLeft === 1 ? '1 try left' : wrong.triesLeft + ' tries left';
+    return {error: 'WRONG_PIN', text: `Incorrect PIN, or this PIN needs internet (${left} before this counter pauses PIN sign-in). Offline, only cashiers who signed in on this counter in the last 14 days can sign in.`};
+  }
+  clearOfflinePinFailures();
+  return {staff: found[0], offline: true};
+}
+
+/* ---- Wrong PINs while offline: limit the tries on this counter ----
+   The server limits wrong PINs when online. Offline, nothing is counting, so this counter does:
+   5 wrong tries lock PIN sign-in for 5 minutes; each later lock is longer (15 min, 1 h, then
+   4 h). Kept in local storage, so reloading the page does not give new tries. A right PIN
+   starts the count again. (Approvals never use offline PINs, so this is for sign-in only.) */
+const OFFLINE_PIN_LOCK_KEY = 'cccc.offlinePin.lock';
+const OFFLINE_PIN_TRIES = 5;
+const OFFLINE_PIN_LOCK_MINUTES = [5, 15, 60, 240];
+let offlinePinLockMemory = null;                 // used when the browser blocks local storage
+function readOfflinePinLock(){
+  let o = null;
+  try{ o = JSON.parse(localStorage.getItem(OFFLINE_PIN_LOCK_KEY) || 'null'); }catch(e){ o = offlinePinLockMemory; }
+  o = (o && typeof o === 'object') ? o : {};
+  return {fails: Number(o.fails) || 0, locks: Number(o.locks) || 0, until: Number(o.until) || 0};
+}
+function writeOfflinePinLock(o){
+  offlinePinLockMemory = o;
+  try{ localStorage.setItem(OFFLINE_PIN_LOCK_KEY, JSON.stringify(o)); }catch(e){}
+}
+function clearOfflinePinFailures(){
+  offlinePinLockMemory = null;
+  try{ localStorage.removeItem(OFFLINE_PIN_LOCK_KEY); }catch(e){}
+}
+function offlinePinLockedUntil(){ const l = readOfflinePinLock(); return l.until > Date.now() ? l.until : 0; }
+function offlinePinLockText(until){
+  const mins = Math.max(1, Math.ceil((until - Date.now()) / 60000));
+  const wait = mins === 1 ? 'about 1 minute' : mins < 120 ? 'about ' + mins + ' minutes' : 'about ' + Math.round(mins / 60) + ' hours';
+  return `Too many wrong PINs while offline. PIN sign-in on this counter is paused until ${fmtTime(until)} (${wait}). When the internet is back, you can sign in right away.`;
+}
+// Counts one wrong try. Returns {until (ms, 0 = not locked), triesLeft}.
+function noteOfflinePinFailure(){
+  const l = readOfflinePinLock();
+  const now = Date.now();
+  if(l.locks && l.until && now - l.until > 24*3600*1000) l.locks = 0;      // a quiet day forgives earlier locks
+  l.fails += 1;
+  if(l.fails >= OFFLINE_PIN_TRIES){
+    l.locks += 1; l.fails = 0;
+    l.until = now + OFFLINE_PIN_LOCK_MINUTES[Math.min(l.locks, OFFLINE_PIN_LOCK_MINUTES.length) - 1] * 60000;
+  }
+  writeOfflinePinLock(l);
+  return {until: l.until > now ? l.until : 0, triesLeft: Math.max(0, OFFLINE_PIN_TRIES - l.fails)};
 }
 
 // Manager approval: checked by the server only — never against copies on this counter.
@@ -392,22 +463,27 @@ async function prunePinVerifiers(){
     if(keep.length !== list.length) await LocalDB.set('fo.pinVerifiers', keep);
   }catch(e){ console.warn('could not tidy the offline PIN copies', e); }
 }
+// Every cached cashier whose PIN fits (normally 0 or 1; 2 or more = the PIN is shared).
+// All copies are checked, not only until the first match, so a shared PIN is noticed.
 async function offlineVerifyPin(pin){
   const list = (await LocalDB.get('fo.pinVerifiers')) || [];
+  const found = [];
   for(const v of list){
     if(!v || !isActiveCashier(v.staff_id) || !pinCopyIsFresh(v)) continue;
     if(await pbkdf2Hex(pin, v.staff_id + ':' + deviceKey()) === v.hash){
       const st = state.staff.find(s=>s.id===v.staff_id);
-      return {id: st.id, name: st.name, role: st.role};
+      if(st && !found.some(f=>f.id===st.id)) found.push({id: st.id, name: st.name, role: st.role});
     }
   }
-  return null;
+  return found;
 }
 
 async function signIn(staff, token, expiresAt, offline){
   posState.currentUser = {id: staff.id, name: staff.name, role: staff.role, offline: !!offline};
+  posState.loginExpiresAt = token ? (expiresAt || null) : null;
   cloud.setStaffToken(token || null);
   try{ sessionStorage.setItem(STAFF_SESSION_STORAGE, JSON.stringify({staff, token: token||null, expires_at: expiresAt||null})); }catch(e){}
+  if(token && ROLE_RANK[staff.role] >= ROLE_RANK.MANAGER) rememberLoginToken(token, expiresAt, staff.name);
   queueAudit('User login', `Role: ${staff.role}${offline?' (offline)':''}`);
   document.getElementById('pin-gate').style.display='none';
   show('app', true);
@@ -423,6 +499,7 @@ function resumeStaffSession(){
     const st = state.staff.find(x=>x.id===s.staff.id);
     if(!st || st.active===false) return false;
     posState.currentUser = {id: st.id, name: st.name, role: st.role, offline: !s.token};
+    posState.loginExpiresAt = s.token ? (s.expires_at || null) : null;
     cloud.setStaffToken(s.token);
     show('app', true);
     renderShell();
@@ -436,7 +513,7 @@ function lockSession(){
   const token = cloud.getStaffToken();
   cloud.setStaffToken(null);
   try{ sessionStorage.removeItem(STAFF_SESSION_STORAGE); }catch(e){}
-  posState.currentUser = null;
+  posState.currentUser = null; posState.loginExpiresAt = null;
   posState.cart = []; posState.discount = null; posState.customer = null; posState.qrOrder = null; posState.resumingHeldSaleId = null;
   show('app', false);
   showPinGate('login');
@@ -480,16 +557,32 @@ async function finishPendingLogouts(){
   return logoutRun;
 }
 
+// The signed-in manager's own login token, if it can still approve (not ended, not about to end).
+// It was issued by the server when they signed in online; the server checks it again when the
+// action uploads, and accepts it only when that same person is the one doing the action.
+function ownLoginToken(){
+  const t = cloud.getStaffToken();
+  if(!t) return null;
+  const end = posState.loginExpiresAt ? new Date(posState.loginExpiresAt).getTime() : NaN;
+  if(isFinite(end) && end - Date.now() < 60*1000) return null;
+  return t;
+}
+
 // Manager (or admin) approval for a refund, void, discount or closing someone else's
 // shift — without losing the current cart. Resolves to {id, name, role, token} or null.
-// The token goes with the action to the server, which checks it (security decision 3),
-// so approvals need internet.
+// The token goes with the action to the server, which checks it (security decision 3):
+//  * a manager who is signed in approves their OWN actions with their sign-in token, with or
+//    without internet (owner decision 2026-10-12);
+//  * anyone else's action (a cashier's) needs a manager to type their PIN, which only the
+//    server can check, so that needs internet. Manager PINs are never checked offline.
 function requireOverride(minRole='MANAGER'){
-  if(!isOnline()){ toast(APPROVAL_OFFLINE_TEXT, 'warn'); return Promise.resolve(null); }
   const me = posState.currentUser;
-  const myToken = cloud.getStaffToken();
-  // A manager signed in online approves with their own login (signed in offline = no login token: ask for the PIN).
-  if(me && hasRole(minRole) && myToken) return Promise.resolve({id: me.id, name: me.name, role: me.role, token: myToken});
+  const own = me && hasRole(minRole) ? ownLoginToken() : null;
+  if(own) return Promise.resolve({id: me.id, name: me.name, role: me.role, token: own, own: true});
+  if(!isOnline()){
+    toast(me && hasRole(minRole) && cloud.getStaffToken() ? APPROVAL_ENDED_TEXT : APPROVAL_OFFLINE_TEXT, 'warn');
+    return Promise.resolve(null);
+  }
   if(pinOverrideResolve){ const prev = pinOverrideResolve; pinOverrideResolve = null; prev(null); }
   return new Promise((resolve)=>{
     pinOverrideMinRole = minRole;
@@ -519,6 +612,7 @@ function applyOpLocally(op, replay){
       break;
     case 'sale': {
       const sale = d.sale;
+      noteTouchedSale(sale.id);
       const existing = state.sales.find(s=>s.id===sale.id);
       if(existing && existing.status!=='HELD') break;               // already final (server copy)
       if(existing) Object.assign(existing, sale); else state.sales.push(Object.assign({}, sale));
@@ -534,10 +628,12 @@ function applyOpLocally(op, replay){
       break;
     }
     case 'held_delete':
+      noteTouchedSale(d.id);
       state.sales = state.sales.filter(s=>!(s.id===d.id && s.status==='HELD'));
       state.saleItems = state.saleItems.filter(i=>i.sale_id!==d.id || state.sales.some(s=>s.id===d.id));
       break;
     case 'refund': {
+      noteTouchedSale(d.refund.sale_id);
       if(state.refunds.some(r=>r.id===d.refund.id)) break;
       state.refunds.push(d.refund);
       applyStockDeltas((d.inventory||[]).map(t=>Object.assign({transaction_type:'SALE_REVERSAL'}, t)));
@@ -562,6 +658,7 @@ const Sync = {
     await LocalDB.outboxAdd(op);
     this.pending += 1;
     updateSyncPill();
+    updateApprovalBanner();
     this.kick();
     return op;
   },
@@ -601,7 +698,8 @@ const Sync = {
           if(!o) continue;
           if(r.status==='error'){
             await LocalDB.failedAdd(Object.assign({}, o, {error: r.message, failed_at: new Date().toISOString()}));
-            toast(`Could not upload a ${o.type.replace('_',' ')}: ${friendlyError({message:r.message})}`, 'error');
+            if(o.type==='sale' && errorCode(r.message)==='QR_ORDER_ALREADY_PAID') await onQrOrderAlreadyPaid(o);
+            else toast(`Could not upload a ${o.type.replace('_',' ')}: ${friendlyError({message:r.message})}`, 'error');
           }
           done.push(o.seq);
         }
@@ -619,6 +717,7 @@ const Sync = {
     this.pending = await LocalDB.outboxCount();
     this.failed = (await LocalDB.failedAll()).length;
     updateSyncPill();
+    updateApprovalBanner();
   },
 };
 function queueAudit(action, details, referenceId){
@@ -649,6 +748,75 @@ function setBanner(text, kind){
   if(!b) return;
   if(!text){ b.style.display='none'; delete b.dataset.sticky; return; }
   b.dataset.sticky = '1'; b.className = 'offline-banner ' + (kind||''); b.textContent = text; b.style.display='block';
+}
+
+/* ---- Manager sign-ins that queued approvals depend on ----
+   A manager's sign-in token (16 hours) is what approves their own refund / void / discount /
+   shift close while the counter is offline. The server checks it when the action uploads, so if
+   the sign-in runs out first the action is refused. We remember each manager sign-in's end time
+   here and warn on screen when queued approvals are about to be left without one. */
+const LOGIN_TOKENS_KEY = 'fo.loginTokens';
+const APPROVAL_WARN_MS = 2*3600*1000;
+// Only a fingerprint of the token is kept in this list (the token itself stays where it already is: the waiting action).
+async function tokenKey(token){
+  const bits = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(token)));
+  return [...new Uint8Array(bits)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function rememberLoginToken(token, expiresAt, name){
+  try{
+    const map = (await LocalDB.get(LOGIN_TOKENS_KEY)) || {};
+    map[await tokenKey(token)] = {exp: expiresAt || null, name: name || ''};
+    const cutoff = Date.now() - 2*24*3600*1000;
+    Object.keys(map).forEach(k=>{ const e = map[k] && map[k].exp ? new Date(map[k].exp).getTime() : 0; if(e && e < cutoff) delete map[k]; });
+    await LocalDB.set(LOGIN_TOKENS_KEY, map);
+  }catch(e){ console.warn('could not save the sign-in end time', e); }
+}
+async function updateApprovalBanner(){
+  const box = document.getElementById('approval-banner');
+  if(!box) return;
+  try{
+    const map = (await LocalDB.get(LOGIN_TOKENS_KEY)) || {};
+    const ops = await LocalDB.outboxAll();
+    let n = 0, soonest = null, who = '';
+    for(const o of ops){
+      const d = o.data || {};
+      const t = d.approval_token || d.discount_approval_token;
+      const entry = t ? map[await tokenKey(t)] : null;
+      const e = entry && entry.exp ? new Date(entry.exp).getTime() : null;
+      if(!e) continue;
+      n += 1;
+      if(soonest === null || e < soonest){ soonest = e; who = entry.name || 'The manager'; }
+    }
+    if(!n || soonest - Date.now() > APPROVAL_WARN_MS){ box.style.display = 'none'; return; }
+    const them = n === 1 ? 'it' : 'them';
+    const waiting = n === 1 ? '1 approved action is' : n + ' approved actions are';
+    box.textContent = soonest > Date.now()
+      ? `⏰ ${waiting} waiting to upload. ${who}'s sign-in ends at ${fmtTime(soonest)}. Reconnect to the internet before then, or the server will refuse ${them}.`
+      : `⚠ ${waiting} waiting to upload, but ${who}'s sign-in ended at ${fmtTime(soonest)}. Reconnect to the internet now. If the server refuses ${them}, tell the owner (they can be redone in Back Office).`;
+    box.style.display = 'block';
+  }catch(e){ /* the warning is a help, never a blocker */ }
+}
+
+/* ---- Important notices that must not be missed (shown until the cashier taps "Got it") ----
+   Used when the server refuses a payment that already took the customer's money (e.g. a QR
+   order that another counter had already been paid). Saved on this counter so a reload keeps it. */
+const ALERTS_KEY = 'fo.alerts';
+async function loadAlerts(){ try{ const l = await LocalDB.get(ALERTS_KEY); return Array.isArray(l) ? l : []; }catch(e){ return []; } }
+async function addAlert(alert){
+  const list = await loadAlerts();
+  if(!list.some(a=>a.id===alert.id)){ list.push(Object.assign({at: new Date().toISOString()}, alert)); try{ await LocalDB.set(ALERTS_KEY, list); }catch(e){} }
+  renderAlerts();
+}
+async function renderAlerts(){
+  const box = document.getElementById('alert-banner');
+  if(!box) return;
+  const list = await loadAlerts();
+  if(!list.length){ box.style.display = 'none'; box.innerHTML = ''; return; }
+  const a = list[0];
+  box.innerHTML = `<b>${escapeHtml(a.title)}</b> ${escapeHtml(a.text)}
+    <button class="btn btn-outline" id="alert-ok" style="margin-left:10px;">Got it${list.length>1?` (${list.length-1} more)`:''}</button>`;
+  box.style.display = 'block';
+  document.getElementById('alert-ok').onclick = async ()=>{ try{ await LocalDB.set(ALERTS_KEY, list.slice(1)); }catch(e){} renderAlerts(); };
 }
 
 async function showFailedOps(){
@@ -693,6 +861,7 @@ function startBackgroundLoops(){
   window.addEventListener('offline', updateSyncPill);
   setInterval(pollQrOrders, 7000);
   setInterval(refreshStockQuietly, 5*60*1000);
+  setInterval(updateApprovalBanner, 60*1000);          // "sign-in ends soon" warning
   document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ pollQrOrders(); Sync.run(); } });
 }
 
@@ -770,6 +939,152 @@ async function maybeRefreshMenu(){
 }
 
 /* =====================================================================
+   FRESH SHIFT FIGURES
+   The owner can change the open shift from Back Office (for example a refund taken from this
+   shift's drawer). Shop data is only loaded when the counter starts, so the screens that show
+   the drawer (Shift & Cash, Close shift, X-report) first ask the server for the open shift's
+   sales, refunds and pay-ins / pay-outs. Offline, or if the server is slow, they use what is
+   on this counter and say so. Anything still waiting to upload is never overwritten.
+   ===================================================================== */
+const SHIFT_CHECK_MS = 3500;                 // how long a screen waits for the server
+let shiftRefreshRun = null;
+// Sales changed on this counter while a server check is running: the server's copy may be older.
+let touchWatchers = 0;
+const touchedSales = new Set();
+function watchTouchedSales(){ if(touchWatchers++ === 0) touchedSales.clear(); }
+function unwatchTouchedSales(){ touchWatchers = Math.max(0, touchWatchers - 1); }
+function noteTouchedSale(id){ if(touchWatchers && id) touchedSales.add(id); }
+
+function mergeById(list, rows, skip){
+  (rows || []).forEach(r=>{
+    if(!r || r.id == null || (skip && skip(r))) return;
+    const i = list.findIndex(x=>x.id===r.id);
+    if(i >= 0) Object.assign(list[i], r); else list.push(r);
+  });
+}
+async function selectPaged(table, query, timeout){
+  const out = [];
+  for(let offset = 0; ; offset += 1000){
+    const page = await cloud.select(table, Object.assign({order: 'id.asc', limit: 1000, offset}, query), {timeout});
+    out.push.apply(out, page || []);
+    if(!page || page.length < 1000) break;
+  }
+  return out;
+}
+async function selectIn(table, col, ids, timeout){
+  const out = [];
+  for(let i = 0; i < ids.length; i += 40){
+    const page = await cloud.select(table, {in: {[col]: ids.slice(i, i + 40)}}, {timeout});
+    out.push.apply(out, page || []);
+  }
+  return out;
+}
+// Sales that a waiting (not yet uploaded) action changes: the server's copy of them is older.
+async function pendingSaleIds(){
+  const ids = new Set();
+  (await LocalDB.outboxAll()).forEach(op=>{
+    const d = op.data || {};
+    if(op.type === 'sale' && d.sale) ids.add(d.sale.id);
+    else if(op.type === 'refund' && d.refund) ids.add(d.refund.sale_id);
+    else if(op.type === 'held_delete') ids.add(d.id);
+  });
+  return ids;
+}
+
+// Asks the server for the open shift's sales, refunds and pay-ins / pay-outs and merges them in.
+// Resolves true when the server answered, false when offline / too slow / failed (nothing changed).
+//   opt.timeout  ms to wait for the server (default 3.5 s)
+// Calls made while a check is already running share it (a double tap does not ask twice).
+function refreshOpenShift(opt){
+  opt = opt || {};
+  const shift = activeShift();
+  if(!shift || !isOnline() || !cloud.session) return Promise.resolve(false);
+  if(shiftRefreshRun) return shiftRefreshRun;                         // one check at a time; callers share it
+  const t = opt.timeout || SHIFT_CHECK_MS;
+  shiftRefreshRun = (async ()=>{
+    watchTouchedSales();
+    try{
+      const before = await pendingSaleIds();
+      const mine = {eq: {shift_id: shift.id}};
+      const [sales, refunds, moves] = await Promise.all([selectPaged('sales', mine, t), selectPaged('refunds', mine, t), selectPaged('cash_movements', mine, t)]);
+      // Sales this counter doesn't have yet (and their payments), and sales of OTHER shifts that
+      // this shift's refunds point at: a refund of a cash sale takes cash out of this drawer, so the
+      // sale and its payment must be known to work out the drawer.
+      const known = (id)=> state.sales.some(s=>s.id===id);
+      const newIds = sales.filter(s=>s.status !== 'HELD' && !known(s.id)).map(s=>s.id);
+      const refundSaleIds = [...new Set(refunds.concat(state.refunds.filter(r=>r.shift_id === shift.id)).map(r=>r.sale_id))]
+        .filter(id=> id && !known(id) && !sales.some(s=>s.id===id));
+      const [items, pays, extraSales, extraPays] = await Promise.all([
+        selectIn('sale_items', 'sale_id', newIds, t), selectIn('payments', 'sale_id', newIds, t),
+        selectIn('sales', 'id', refundSaleIds, t), selectIn('payments', 'sale_id', refundSaleIds, t)]);
+      // Merge now, in one go (no waiting from here on).
+      const skip = new Set([...before, ...(await pendingSaleIds()), ...touchedSales]);
+      mergeById(state.sales, sales, r=> skip.has(r.id) || (r.status === 'HELD' && !known(r.id)));
+      mergeById(state.sales, extraSales);
+      mergeById(state.saleItems, items);
+      mergeById(state.payments, pays.concat(extraPays));
+      mergeById(state.refunds, refunds);
+      mergeById(state.cashMovements, moves);
+      posState.shiftSyncedAt = Date.now();
+      saveSnapshotSoon();
+      return true;
+    }catch(e){
+      if(!e.offline) console.warn('could not check the shift against the server', e.message);
+      return false;
+    }finally{
+      unwatchTouchedSales();
+      shiftRefreshRun = null;
+    }
+  })();
+  return shiftRefreshRun;
+}
+// After a full load: sales of earlier shifts that this shift's refunds point at (see above).
+async function fillRefundSales(timeout){
+  const shift = activeShift();
+  if(!shift || !isOnline()) return;
+  const missing = [...new Set(state.refunds.filter(r=>r.shift_id === shift.id).map(r=>r.sale_id))].filter(id=> id && !state.sales.some(s=>s.id===id));
+  if(!missing.length) return;
+  const [sales, pays] = await Promise.all([selectIn('sales', 'id', missing, timeout), selectIn('payments', 'sale_id', missing, timeout)]);
+  mergeById(state.sales, sales); mergeById(state.payments, pays);
+  saveSnapshotSoon();
+}
+// Plain words for the figures' source, shown on the shift screens when they could not be checked.
+function shiftFreshNote(checked){
+  if(checked) return '';
+  if(checked === null && isOnline()) return '';                    // not asked yet
+  return isOnline()
+    ? 'Could not check the server just now, so these figures come from this counter. Changes made in Back Office (for example a refund by the owner) may not be included yet.'
+    : 'No internet: these figures come from this counter. Changes made in Back Office (for example a refund by the owner) are not included until the internet is back.';
+}
+// The sale's refunds can come from elsewhere (Back Office, another counter): fetch them before
+// working out what is left to refund. Offline, the refunds known here are used.
+async function refreshSaleRefunds(sale, dataset){
+  if(!isOnline() || !cloud.session) return false;
+  watchTouchedSales();
+  try{
+    const before = await pendingSaleIds();
+    const refunds = await selectPaged('refunds', {eq: {sale_id: sale.id}}, SHIFT_CHECK_MS);
+    mergeById(dataset.refunds, refunds);
+    if(dataset !== state && state.sales.some(s=>s.id===sale.id)) mergeById(state.refunds, refunds);
+    // The sale's status follows its refunds (same rule as the server).
+    if(!before.has(sale.id) && !(await pendingSaleIds()).has(sale.id) && !touchedSales.has(sale.id) && (sale.status === 'COMPLETED' || sale.status === 'PARTIALLY_REFUNDED')){
+      const all = dataset.refunds.filter(r=>r.sale_id === sale.id);
+      if(all.length){
+        const total = all.reduce((s, r)=> s + (Number(r.amount) || 0), 0);
+        const next = all.some(r=>r.type === 'VOID') ? 'VOIDED' : (total >= Number(sale.grand_total) - 0.01 ? 'REFUNDED' : 'PARTIALLY_REFUNDED');
+        sale.status = next;
+        const copy = state.sales.find(s=>s.id === sale.id); if(copy) copy.status = next;
+      }
+    }
+    return true;
+  }catch(e){
+    return false;
+  }finally{
+    unwatchTouchedSales();
+  }
+}
+
+/* =====================================================================
    SHELL & NAVIGATION
    ===================================================================== */
 const POS_NAV_ITEMS = [
@@ -800,7 +1115,7 @@ function renderShell(){
   document.getElementById('lock-btn').onclick = lockSession;
   document.getElementById('sync-pill').onclick = ()=>{ Sync.run(); showFailedOps(); };
   document.title = 'Front Office — ' + (businessName()||appDisplayName());
-  updateSyncPill(); updateQrBadge();
+  updateSyncPill(); updateQrBadge(); updateApprovalBanner(); renderAlerts();
 }
 
 function navigatePOS(route, param=null){
@@ -1249,6 +1564,13 @@ function openCheckout(){
         if(!box || !box.checked){ toast('Please confirm the payment was actually received','error'); return; }
       }
       ev.currentTarget.disabled = true;
+      // A QR order may have been paid on another counter while this cart was open.
+      if(posState.qrOrder && await qrOrderPaidOnServer(posState.qrOrder)){
+        const paidOrder = posState.qrOrder;
+        closeModal(); clearCart(); navigatePOS('qr');
+        await showQrAlreadyPaid(paidOrder);
+        return;
+      }
       const paymentInfo = {
         method, amount: totals.grandTotal,
         tendered: method==='CASH'? tendered : null,
@@ -1397,12 +1719,70 @@ function qrCard(o){
     <div class="qr-actions">${btns.join('')}</div>
   </div>`;
 }
+/* ---- A QR order is paid ONCE ----
+   Online, the order is checked on the server before payment is taken. If the check can't be
+   made (offline), the server decides when the sale uploads: it refuses a second payment with
+   QR_ORDER_ALREADY_PAID and onQrOrderAlreadyPaid() tells the cashier plainly. */
+async function qrOrderPaidOnServer(o){
+  if(!isOnline() || !cloud.session) return false;
+  try{
+    const rows = await cloud.select('qr_orders', {eq: {id: o.id}}, {timeout: 4000});
+    const fresh = rows && rows[0];
+    if(!fresh) return false;
+    mergeQrOrder(fresh);
+    return !!(fresh.paid_at || fresh.sale_id);
+  }catch(e){ return false; }
+}
+// A dialog with one button, for things the cashier must read. `title` is plain text.
+function noticeDialog(title, bodyHtml, okLabel){
+  return new Promise(resolve=>{
+    let done = false;
+    openModal({title: escapeHtml(title), body: bodyHtml, foot: `<button class="btn btn-primary btn-big" data-ok>${escapeHtml(okLabel || 'OK')}</button>`,
+      onClose: ()=>{ if(!done){ done = true; resolve(); } },
+      onMount:(root)=>{ root.querySelector('[data-ok]').onclick = ()=>{ done = true; closeModal(); resolve(); }; }});
+  });
+}
+function showQrAlreadyPaid(o){
+  return noticeDialog('This order is already paid',
+    `<p><b>QR order ${escapeHtml(o.order_number)} was already paid</b> (on another counter, or in Back Office).</p>
+     <p><b>Do not charge the customer again.</b> Just prepare and serve the order.</p>`, 'OK, I will not charge again');
+}
+// The server refused a QR sale that this counter took money for, because the order was already
+// paid elsewhere (typically two counters taking payment while one was offline). The sale was NOT
+// recorded, so the customer may have paid twice: say so clearly and keep the notice until read.
+async function onQrOrderAlreadyPaid(op){
+  const d = op.data || {}, sale = d.sale || {};
+  const q = state.qrOrders.find(o=>o.id===sale.qr_order_id);
+  const no = q ? q.order_number : 'a QR order';
+  // Not on the server, so not in this counter's figures either (a restart would not show it).
+  const hadIt = state.sales.some(s=>s.id===sale.id);               // (a retry of an earlier refusal no longer has it)
+  state.sales = state.sales.filter(s=>s.id!==sale.id);
+  state.saleItems = state.saleItems.filter(i=>i.sale_id!==sale.id);
+  state.payments = state.payments.filter(p=>p.sale_id!==sale.id);
+  if(hadIt) applyStockDeltas((d.inventory || []).map(t=>Object.assign({transaction_type:'SALE_REVERSAL'}, t)));
+  if(q && q.sale_id === sale.id){ q.sale_id = null; q.paid_at = null; }
+  try{
+    const rows = await cloud.select('qr_orders', {eq: {id: sale.qr_order_id}}, {timeout: 4000});
+    if(rows && rows[0]) mergeQrOrder(rows[0]);
+  }catch(e){}
+  const title = `QR order ${no} was already paid.`;
+  const text = `This counter's payment of ${fmtMoney(sale.grand_total)} (${sale.transaction_number || 'sale'}) was NOT recorded, because the order had already been paid on another counter. Do not charge the customer again. If you took money from them here, give it back.`;
+  await addAlert({id: op.op_id, title, text});
+  toast(title + ' Do not charge again.', 'error');
+  if(!document.getElementById('active-modal-overlay') && document.getElementById('pin-gate').style.display === 'none'){
+    noticeDialog(title, `<p>${escapeHtml(text)}</p>`, 'OK, I understand');
+  }
+  if(posState.route === 'qr') renderQrBoard(); else if(posState.route === 'shift') renderShiftScreen({local: true}); else if(posState.route === 'sales') renderSalesScreen();
+  saveSnapshotSoon();
+}
 async function qrAction(orderId, action){
   const o = state.qrOrders.find(x=>x.id===orderId);
   if(!o) return;
   if(action==='TICKET'){ printKitchenTicket(o); return; }
   if(action==='PAY'){
     if(!activeShift()){ toast('Start a shift first (Sell screen).', 'error'); navigatePOS('pos'); return; }
+    // Online: make sure another counter hasn't taken payment for this order already.
+    if(await qrOrderPaidOnServer(o)){ renderQrBoard(); await showQrAlreadyPaid(o); return; }
     if(posState.cart.length && !posState.qrOrder){
       const ok = await confirmDialog('The current cart has items. Hold it first, or replace it with this QR order?', 'Replace cart');
       if(!ok) return;
@@ -1506,23 +1886,36 @@ function renderStartShiftGate(){
   };
 }
 
-function renderShiftScreen(){
-  const shift = activeShift();
+async function renderShiftScreen(opts){
   const content = document.getElementById('content');
+  if(!activeShift()){ renderStartShiftGate(); return; }
+  if(!(opts && opts.local)){
+    // Ask the server for the latest figures first (a refund made in Back Office, ...). Offline or
+    // slow: carry on with what is on this counter and say so below.
+    if(isOnline()){
+      document.getElementById('topbar-actions').innerHTML = '';
+      content.innerHTML = emptyBlock('Checking for the latest figures…');
+    }
+    posState.shiftCheckOk = await refreshOpenShift({timeout: SHIFT_CHECK_MS});
+    if(posState.route !== 'shift') return;                          // moved to another screen meanwhile
+  }
+  const shift = activeShift();
   if(!shift){ renderStartShiftGate(); return; }
   const m = shiftMetrics(shift);
+  const note = shiftFreshNote(posState.shiftCheckOk);
   document.getElementById('topbar-actions').innerHTML = `
     <button class="btn btn-outline" id="cash-mgmt-btn">💵 Pay In / Pay Out</button>
     <button class="btn btn-outline" id="xreport-btn">🖨 Print X-Report</button>
     <button class="btn btn-danger" id="close-shift-btn">Close Shift</button>`;
   document.getElementById('cash-mgmt-btn').onclick = openCashManagementModal;
-  document.getElementById('xreport-btn').onclick = ()=> printShiftReport(shift, m, true);
+  document.getElementById('xreport-btn').onclick = printXReport;
   document.getElementById('close-shift-btn').onclick = openCloseShiftFlow;
   content.innerHTML = `
     <div class="text-light" style="margin-bottom:14px;">${escapeHtml(shift.shift_number||'')} · ${escapeHtml(shift.cashier_name)} · opened ${fmtDateTime(shift.opened_at)} (${shiftDuration(shift)})</div>
+    ${note?`<div class="notice warn">${escapeHtml(note)}</div>`:''}
     <div class="grid grid-4">
-      ${statCard('Gross Sales', fmtMoney(m.grossSales),'')}${statCard('Net Sales', fmtMoney(m.netSales),'')}
-      ${statCard('Transactions', m.transactionCount, `${m.voidedCount} voided`)}${statCard('Refunds', fmtMoney(m.refundsOnly),'')}
+      ${statCard(SALES_LABELS.sales, fmtMoney(m.sales), escapeHtml(SALES_HINTS.sales))}${statCard(SALES_LABELS.refunds, fmtMoney(m.refunds), escapeHtml(SALES_HINTS.refunds))}
+      ${statCard(SALES_LABELS.netSales, fmtMoney(m.netSales), escapeHtml(SALES_HINTS.netSales))}${statCard('Transactions', m.transactionCount, `${m.voidedCount} voided`)}
     </div>
     <div class="section-title">Payment Breakdown</div>
     <div class="grid grid-3">${statCard('Cash', fmtMoney(m.cashGross),'')}${statCard('Card', fmtMoney(m.cardGross),'')}${statCard('GCash / Maya / Other', fmtMoney(m.otherGross),'')}</div>
@@ -1564,28 +1957,42 @@ function openCashManagementModal(){
       queueAudit(mode==='PAY_IN'?'Cash pay-in':'Cash pay-out', `${fmtMoney(amount)} — ${reason}`, shift.id);
       closeModal();
       toast(`${mode==='PAY_IN'?'Pay in':'Pay out'} recorded`);
-      if(posState.route==='shift') renderShiftScreen();
+      if(posState.route==='shift') renderShiftScreen({local: true});
     };
   }});
 }
 
 async function openCloseShiftFlow(){
-  const shift = activeShift();
-  if(!shift) return;
+  const first = activeShift();
+  if(!first) return;
   // Closing your own shift needs nothing extra. Closing another cashier's shift needs a
   // manager approval (closer = the approving manager, with the token the server checks).
+  // A signed-in manager approves with their own sign-in, also offline.
   let closer = posState.currentUser;
-  if(shift.cashier_id !== posState.currentUser.id){
+  if(first.cashier_id !== posState.currentUser.id){
     closer = await requireOverride('MANAGER');
     if(!closer) return;
   }
-  const closeApprovalToken = closer.id !== shift.cashier_id ? (closer.token || null) : null;
+  const closeApprovalToken = closer.id !== first.cashier_id ? (closer.token || null) : null;
+  // The drawer is counted against the LATEST figures: ask the server first (a refund the owner
+  // made from this drawer in Back Office must not make a correct count look short).
+  const btn = document.getElementById('close-shift-btn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Checking…'; }
+  const checked = await refreshOpenShift({timeout: SHIFT_CHECK_MS});
+  if(btn){ btn.disabled = false; btn.textContent = 'Close Shift'; }
+  const shift = activeShift();
+  if(!shift) return;
+  showCloseShiftDialog(shift, closer, closeApprovalToken, checked, {});
+}
+function showCloseShiftDialog(shift, closer, closeApprovalToken, checked, preset){
   const m = shiftMetrics(shift);
+  const note0 = shiftFreshNote(checked);
   let declared = NaN;
   const body = `
+    ${note0?`<div class="notice warn">${escapeHtml(note0)}</div>`:''}
     <div class="grid grid-4">
-      ${statCard('Gross Sales', fmtMoney(m.grossSales),'')}${statCard('Net Sales', fmtMoney(m.netSales),'')}
-      ${statCard('Transactions', m.transactionCount, `${m.voidedCount} voided`)}${statCard('Refunds', fmtMoney(m.refundsOnly),'')}
+      ${statCard(SALES_LABELS.sales, fmtMoney(m.sales),'')}${statCard(SALES_LABELS.refunds, fmtMoney(m.refunds),'')}
+      ${statCard(SALES_LABELS.netSales, fmtMoney(m.netSales),'')}${statCard('Transactions', m.transactionCount, `${m.voidedCount} voided`)}
     </div>
     <div class="section-title" style="font-size:15px;">Cash Drawer</div>
     <div class="card drawer-card">
@@ -1604,8 +2011,9 @@ async function openCloseShiftFlow(){
     onMount:(root)=>{
       root.querySelector('[data-cancel]').onclick = closeModal;
       const disp = root.querySelector('#cs-variance-display'), notesRow = root.querySelector('#cs-notes-row');
-      root.querySelector('#cs-declared').oninput = (e)=>{
-        declared = e.target.value==='' ? NaN : Number(e.target.value);
+      const declaredInput = root.querySelector('#cs-declared');
+      declaredInput.oninput = ()=>{
+        declared = declaredInput.value==='' ? NaN : Number(declaredInput.value);
         if(isNaN(declared)){ disp.style.display='none'; notesRow.style.display='none'; return; }
         const variance = declared - m.expectedCash;
         disp.style.display='block';
@@ -1614,11 +2022,30 @@ async function openCloseShiftFlow(){
         root.querySelector('#cs-variance-val').style.color = Math.abs(variance)<0.005 ? 'var(--green)' : 'var(--red)';
         notesRow.style.display = Math.abs(variance) > 20 ? 'block' : 'none';
       };
-      root.querySelector('#cs-confirm').onclick = async ()=>{
+      if(preset && preset.declared !== undefined && !isNaN(preset.declared)){      // coming back after the figures changed
+        declaredInput.value = String(preset.declared); declaredInput.oninput();
+        root.querySelector('#cs-notes').value = preset.note || '';
+      }
+      root.querySelector('#cs-confirm').onclick = async (ev)=>{
+        const confirmBtn = ev.currentTarget;
+        if(confirmBtn.disabled) return;
         if(isNaN(declared)){ toast('Enter the counted cash', 'error'); return; }
-        const variance = declared - m.expectedCash;
         const note = root.querySelector('#cs-notes').value.trim();
-        if(Math.abs(variance) > 20 && !note){ toast('Please enter a reason for this variance', 'error'); return; }
+        if(Math.abs(declared - m.expectedCash) > 20 && !note){ toast('Please enter a reason for this variance', 'error'); return; }
+        // One last look at the server: if something changed while the drawer was being counted
+        // (e.g. the owner refunded from this drawer), show the new figures instead of saving a wrong variance.
+        confirmBtn.disabled = true; confirmBtn.textContent = 'Checking…';
+        const stillChecked = await refreshOpenShift({timeout: SHIFT_CHECK_MS});
+        const current = activeShift();
+        if(!current){ closeModal(); return; }
+        const m2 = shiftMetrics(current);
+        if(Math.abs(m2.expectedCash - m.expectedCash) >= 0.005 || Math.abs(m2.netSales - m.netSales) >= 0.005){
+          closeModal();
+          showCloseShiftDialog(current, closer, closeApprovalToken, stillChecked, {declared, note});
+          toast('The figures changed (for example a refund made in Back Office). They are updated below — check your count and confirm again.', 'warn');
+          return;
+        }
+        const variance = declared - m.expectedCash;
         const now = new Date().toISOString();
         const closeOp = {
           id: shift.id, closed_at: now, declared_cash: declared, expected_cash: m.expectedCash, cash_variance: variance,
@@ -1635,6 +2062,17 @@ async function openCloseShiftFlow(){
       };
     }});
 }
+// The sales lines of a report, from the shared words: Item sales, Discounts, Tax & service,
+// Sales, Refunds, Net sales (salesSummaryRows), then Voids and Transactions.
+function shiftSalesLines(shift, m){
+  const closed = shift.status === 'CLOSED';
+  const rows = salesSummaryRows(m, shift).map(r=>({label: r.label, hint: r.hint, text: r.sign + fmtMoney(r.amount), total: r.total}));
+  const voids = closed && shift.voids_total !== null && shift.voids_total !== undefined ? Number(shift.voids_total) : m.voids;
+  const count = closed && shift.transaction_count !== null && shift.transaction_count !== undefined ? shift.transaction_count : m.transactionCount;
+  rows.push({label: SALES_LABELS.voids, hint: SALES_HINTS.voids, text: fmtMoney(voids), total: false});
+  rows.push({label: 'Transactions', hint: '', text: String(count), total: false});
+  return rows;
+}
 function showShiftReport(shiftId){
   const shift = state.shifts.find(s=>s.id===shiftId);
   const m = shiftMetrics(shift);
@@ -1643,8 +2081,9 @@ function showShiftReport(shiftId){
       <div>Cashier: <b>${escapeHtml(shift.cashier_name)}</b>${shift.closed_by_name && shift.closed_by_name!==shift.cashier_name?` · closed by <b>${escapeHtml(shift.closed_by_name)}</b>`:''}</div>
       <div>Opened: <b>${fmtDateTime(shift.opened_at)}</b> — Closed: <b>${fmtDateTime(shift.closed_at)}</b> (${shiftDuration(shift)})</div>
     </div>
-    <div class="grid grid-4">${statCard('Gross Sales', fmtMoney(shift.gross_sales),'')}${statCard('Net Sales', fmtMoney(shift.net_sales),'')}
-      ${statCard('Transactions', shift.transaction_count, `${m.voidedCount} voided`)}${statCard('Refunds', fmtMoney(shift.refunds_total),'')}</div>
+    <div class="card drawer-card" id="sr-sales">
+      ${shiftSalesLines(shift, m).map(r=>`<div class="drow ${r.total?'total':''}" ${r.hint?`title="${escapeHtml(r.hint)}"`:''}><span>${r.total?`<b>${escapeHtml(r.label)}</b>`:escapeHtml(r.label)}</span><b>${r.text}</b></div>`).join('')}
+    </div>
     <div class="grid grid-3" style="margin-top:14px;">${statCard('Cash', fmtMoney(shift.cash_sales),'')}${statCard('Card', fmtMoney(shift.card_sales),'')}${statCard('Other', fmtMoney(shift.other_sales),'')}</div>
     <div class="card drawer-card" style="margin-top:14px;">
       <div class="drow"><span>Opening Cash</span><b>${fmtMoney(shift.opening_cash)}</b></div>
@@ -1659,19 +2098,15 @@ function showShiftReport(shiftId){
     root.querySelector('#sr-print').onclick = ()=> printShiftReport(shift, m, false);
   }});
 }
-function printShiftReport(shift, m, isX){
+function shiftReportHtml(shift, m, isX){
   const closed = shift.status==='CLOSED';
   const v = (k, live)=> closed ? shift[k] : live;
-  openPrintWindow(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${isX?'X':'Z'}-Report ${escapeHtml(shift.shift_number||'')}</title>
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${isX?'X':'Z'}-Report ${escapeHtml(shift.shift_number||'')}</title>
     <style>body{font-family:Georgia,serif;max-width:420px;margin:24px auto;color:#241209;font-size:13px;} .row{display:flex;justify-content:space-between;padding:3px 0;} hr{border:none;border-top:1px dashed #999;margin:10px 0;} h1{font-size:17px;}</style></head><body>
     <h1>${escapeHtml(businessName()||appDisplayName())} — ${isX?'X-Report (mid-shift)':'Shift Report'}</h1>
     <div>${escapeHtml(shift.shift_number||'')} · ${escapeHtml(shift.cashier_name)} · ${escapeHtml(state.device?state.device.device_name:'')}</div>
     <div>${fmtDateTime(shift.opened_at)} → ${closed?fmtDateTime(shift.closed_at):'now ('+fmtDateTime(new Date())+')'}</div><hr>
-    <div class="row"><span>Gross Sales</span><b>${fmtMoney(v('gross_sales', m.grossSales))}</b></div>
-    <div class="row"><span>Net Sales</span><b>${fmtMoney(v('net_sales', m.netSales))}</b></div>
-    <div class="row"><span>Transactions</span><b>${v('transaction_count', m.transactionCount)}</b></div>
-    <div class="row"><span>Refunds</span><b>${fmtMoney(v('refunds_total', m.refundsOnly))}</b></div>
-    <div class="row"><span>Voids</span><b>${fmtMoney(v('voids_total', m.voidsOnly))}</b></div><hr>
+    ${shiftSalesLines(shift, m).map(r=>`<div class="row"><span>${escapeHtml(r.label)}</span><b>${r.text}</b></div>`).join('\n    ')}<hr>
     <div class="row"><span>Cash</span><b>${fmtMoney(v('cash_sales', m.cashGross))}</b></div>
     <div class="row"><span>Card</span><b>${fmtMoney(v('card_sales', m.cardGross))}</b></div>
     <div class="row"><span>GCash / Maya / Other</span><b>${fmtMoney(v('other_sales', m.otherGross))}</b></div><hr>
@@ -1681,7 +2116,31 @@ function printShiftReport(shift, m, isX){
     ${closed?`<div class="row"><span>Declared Cash</span><b>${fmtMoney(shift.declared_cash)}</b></div>
     <div class="row" style="font-size:15px;"><span><b>Variance</b></span><b>${shift.cash_variance>=0?'+':''}${fmtMoney(shift.cash_variance)}</b></div>`:''}
     ${shift.notes?`<hr><div>${escapeHtml(shift.notes)}</div>`:''}
-    </body></html>`, true);
+    </body></html>`;
+}
+function printShiftReport(shift, m, isX){
+  openPrintWindow(shiftReportHtml(shift, m, isX), true);
+}
+// X-report: print the latest figures. The window is opened right away (a pop-up is only allowed
+// straight after a tap) and filled in once the server has been asked, unless the figures were
+// checked a moment ago (they are when this screen was just opened).
+async function printXReport(){
+  const shift = activeShift();
+  if(!shift) return;
+  if(!isOnline() || Date.now() - posState.shiftSyncedAt < 20000){
+    printShiftReport(shift, shiftMetrics(shift), true);
+    return;
+  }
+  const win = window.open('', '_blank');
+  if(!win){ toast('Please allow pop-ups to view/print', 'error'); return; }
+  try{ win.document.write('<p style="font-family:sans-serif;margin:24px;">Getting the latest figures…</p>'); }catch(e){}
+  posState.shiftCheckOk = await refreshOpenShift({timeout: SHIFT_CHECK_MS});
+  const current = activeShift() || shift;
+  try{
+    win.document.open(); win.document.write(shiftReportHtml(current, shiftMetrics(current), true)); win.document.close();
+    win.focus(); setTimeout(()=>{ try{ win.print(); }catch(e){} }, 350);
+  }catch(e){ console.warn('could not fill the X-report', e); }
+  if(posState.route === 'shift') renderShiftScreen({local: true});
 }
 
 /* =====================================================================
@@ -1748,7 +2207,8 @@ function renderSaleDetail(saleId){
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn btn-outline" id="reprint-btn">🖨 Reprint</button>
-        ${sale.status==='COMPLETED'?`<button class="btn btn-danger" id="void-btn">Void</button><button class="btn btn-amber" id="refund-btn">Refund</button>`:''}
+        ${sale.status==='COMPLETED'?`<button class="btn btn-danger" id="void-btn">Void</button>`:''}
+        ${sale.status==='COMPLETED' || sale.status==='PARTIALLY_REFUNDED'?`<button class="btn btn-amber" id="refund-btn">Refund</button>`:''}
       </div>
     </div>
     <div class="grid grid-4" style="margin-top:20px;">
@@ -1764,62 +2224,91 @@ function renderSaleDetail(saleId){
       <tbody>${refunds.map(r=>`<tr><td>${fmtDateTime(r.date)}</td><td>${r.type.replace(/_/g,' ')}</td><td>${fmtMoney(r.amount)}</td><td>${escapeHtml(r.reason||'—')}</td><td>${escapeHtml(r.approved_by_name||'')}</td></tr>`).join('')}</tbody></table></div>`:''}`;
   content.querySelector('#back-sh').onclick = ()=>navigatePOS('sales');
   content.querySelector('#reprint-btn').onclick = ()=>showReceipt(saleId, {autoPrint:true}, ds);
-  if(sale.status==='COMPLETED'){
-    content.querySelector('#void-btn').onclick = ()=>openRefundVoidFlow(sale, items, 'VOID', ds);
-    content.querySelector('#refund-btn').onclick = ()=>openRefundVoidFlow(sale, items, 'REFUND', ds);
-  }
+  if(sale.status==='COMPLETED') content.querySelector('#void-btn').onclick = ()=>openRefundVoidFlow(sale, items, 'VOID', ds);
+  if(sale.status==='COMPLETED' || sale.status==='PARTIALLY_REFUNDED') content.querySelector('#refund-btn').onclick = ()=>openRefundVoidFlow(sale, items, 'REFUND', ds);
 }
 
+let refundCheckBusy = false;
 async function openRefundVoidFlow(sale, items, kind, ds){
+  if(refundCheckBusy) return;                                       // a second tap while the first is still checking
+  const isVoid = kind==='VOID';
+  const dataset = ds || state;
+  // Refunds can also be made elsewhere (Back Office, another counter): ask the server for this
+  // sale's refunds first, so "what is left" is right. Offline, the refunds known here are used.
+  refundCheckBusy = true;
+  let checked = false;
+  try{ checked = await refreshSaleRefunds(sale, dataset); }finally{ refundCheckBusy = false; }
+  let prior = refundPriorFor(sale.id, dataset.refunds);
+  if(posState.route==='saleDetail' && posState.routeParam===sale.id) renderSaleDetail(sale.id);   // the status may have changed
+  if(sale.status==='VOIDED' || sale.status==='REFUNDED' || refundLeft(sale, prior.amount) <= 0){
+    toast('Nothing is left to refund on this sale.', 'warn'); return;
+  }
+  if(isVoid && (prior.amount > 0 || sale.status!=='COMPLETED')){
+    toast('Part of this sale was already refunded, so it cannot be voided. Refund the items that are left instead.', 'warn'); return;
+  }
   const approver = await requireOverride('MANAGER');
   if(!approver) return;
-  const isVoid = kind==='VOID';
+  const returned = (it)=> Math.max(0, Number(prior.quantities[it.id]) || 0);       // already given back on earlier refunds
+  const canReturn = (it)=> Math.max(0, Number(it.quantity) - returned(it));
+  const offlineNote = checked ? '' : `<p class="hint">${isOnline() ? 'Could not check the server just now' : 'No internet'}: refunds made somewhere else (for example in Back Office) are not counted here yet. The server checks the amount again when this uploads.</p>`;
   openModal({
     title: isVoid?'Void Transaction':'Refund Transaction', wide:true,
     body: isVoid ? `<p>This voids <b>${escapeHtml(sale.transaction_number)}</b> (${fmtMoney(sale.grand_total)}) and returns all items to inventory. The sale record is kept.</p>
-      <div class="form-row"><label>Reason</label><input id="rv-reason" placeholder="e.g. Entered by mistake"></div>`
+      <div class="notice ok" id="rv-amount-box">Customer gets back: <b id="rv-amount">${fmtMoney(0)}</b></div>
+      <div class="form-row"><label>Reason</label><input id="rv-reason" placeholder="e.g. Entered by mistake"></div>${offlineNote}`
       : `<p>Select items and quantities to refund from <b>${escapeHtml(sale.transaction_number)}</b>:</p>
-      <table class="ri-table"><thead><tr><th>Item</th><th>Sold Qty</th><th>Refund Qty</th></tr></thead>
-      <tbody>${items.map(it=>`<tr data-item="${it.id}"><td>${escapeHtml(it.name)}</td><td>${Number(it.quantity)}</td><td><input type="number" min="0" max="${Number(it.quantity)}" value="0" class="rv-qty" style="width:70px;"></td></tr>`).join('')}</tbody></table>
-      <div class="form-row" style="margin-top:12px;"><label>Reason</label><input id="rv-reason" placeholder="e.g. Customer changed order"></div>`,
+      <table class="ri-table"><thead><tr><th>Item</th><th>Sold Qty</th><th>Already refunded</th><th>Refund Qty</th></tr></thead>
+      <tbody>${items.map(it=>`<tr data-item="${escapeHtml(it.id)}"><td>${escapeHtml(it.name)}</td><td>${Number(it.quantity)}</td><td>${returned(it)}</td>
+        <td><input type="number" min="0" max="${canReturn(it)}" value="0" class="rv-qty" style="width:70px;" ${canReturn(it)<=0?'disabled':''}></td></tr>`).join('')}</tbody></table>
+      <div class="notice ok" id="rv-amount-box" style="margin-top:12px;">Customer gets back: <b id="rv-amount">${fmtMoney(0)}</b>
+        <div class="text-light" style="font-size:12px;">What they paid for these items: their share of any discount, plus tax and service charge.</div></div>
+      <div class="form-row" style="margin-top:12px;"><label>Reason</label><input id="rv-reason" placeholder="e.g. Customer changed order"></div>${offlineNote}`,
     foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-danger" id="rv-confirm">${isVoid?'Confirm Void':'Confirm Refund'}</button>`,
     onMount:(root)=>{
       root.querySelector('[data-cancel]').onclick = closeModal;
+      // What is entered now, as lines for the shared refund maths: [{sale_item_id, quantity}].
+      const entered = ()=>{
+        if(isVoid) return items.map(it=>({sale_item_id: it.id, quantity: Number(it.quantity)}));
+        const out = [];
+        root.querySelectorAll('[data-item]').forEach(row=>{
+          const qty = Number(row.querySelector('.rv-qty').value) || 0;
+          if(qty > 0) out.push({sale_item_id: row.dataset.item, quantity: qty});
+        });
+        return out;
+      };
+      const showAmount = ()=>{ root.querySelector('#rv-amount').textContent = fmtMoney(refundAmountForItems(sale, items, entered(), prior)); };
+      root.querySelectorAll('.rv-qty').forEach(i=> i.addEventListener('input', showAmount));
+      showAmount();
       root.querySelector('#rv-confirm').onclick = async (ev)=>{
         const btn = ev.currentTarget;
         if(btn.disabled) return;
         const reason = root.querySelector('#rv-reason').value.trim();
-        let refundItems = [], refundAmount = 0;
-        // What is left to refund on this sale (the server refuses more than this).
-        const alreadyRefunded = ((ds||state).refunds||[]).filter(r=>r.sale_id===sale.id).reduce((s,r)=>s+(Number(r.amount)||0), 0);
-        const leftToRefund = Math.max(0, Math.round((Number(sale.grand_total) - alreadyRefunded)*100)/100);
-        if(isVoid){
-          refundItems = items.map(it=>({sale_item_id:it.id, quantity:Number(it.quantity), recipe_id:it.recipe_id, modifiers:it.modifiers||[]}));
-          refundAmount = Number(sale.grand_total);
-        } else {
-          let bad = false, everything = true;
-          root.querySelectorAll('[data-item]').forEach(row=>{
-            const qty = Number(row.querySelector('.rv-qty').value)||0;
-            const it = items.find(x=>x.id===row.dataset.item);
-            if(qty > Number(it.quantity)) bad = true;
-            if(qty < Number(it.quantity)) everything = false;
-            if(qty>0){
-              refundItems.push({sale_item_id:it.id, quantity:qty, recipe_id:it.recipe_id, modifiers:it.modifiers||[]});
-              refundAmount += (Number(it.line_total)/Number(it.quantity))*qty;
-            }
+        prior = refundPriorFor(sale.id, dataset.refunds);                      // as of now
+        const lines = entered();
+        if(!isVoid){
+          const tooMany = items.some(it=>{
+            const row = root.querySelector(`[data-item="${CSS.escape(it.id)}"]`);
+            return row && (Number(row.querySelector('.rv-qty').value) || 0) > canReturn(it);
           });
-          if(bad){ toast('Refund quantity cannot be more than what was sold','error'); return; }
-          if(refundItems.length===0){ toast('Select at least one item to refund','error'); return; }
-          // Every item back = everything the customer paid (after discount, incl. tax/service);
-          // otherwise the items' prices, never more than what is left.
-          refundAmount = everything ? leftToRefund : Math.min(refundAmount, leftToRefund);
+          if(tooMany){ toast('Refund quantity cannot be more than what is left to refund','error'); return; }
+          if(lines.length===0){ toast('Select at least one item to refund','error'); return; }
         }
+        // The customer's amount: the shared maths (a void or refunding everything = what is left).
+        const amount = refundAmountForItems(sale, items, lines, prior);
+        const type = isVoid ? 'VOID' : (refundLeft(sale, prior.amount + amount) === 0 ? 'FULL_REFUND' : 'PARTIAL_REFUND');
         btn.disabled = true;
         const now = new Date().toISOString();
         const currentShift = activeShift();
+        // Lines sent to the server: sale_item_id + quantity (the stock part also needs recipe + options).
+        const refundItems = lines.map(l=>{
+          const it = items.find(x=>x.id===l.sale_item_id);
+          return {sale_item_id: l.sale_item_id, quantity: l.quantity, recipe_id: it.recipe_id, modifiers: it.modifiers||[]};
+        });
         const refund = {id: uid(), sale_id: sale.id, shift_id: currentShift ? currentShift.id : null,
-          type: isVoid?'VOID':(refundAmount>=Number(sale.grand_total)-0.01?'FULL_REFUND':'PARTIAL_REFUND'),
-          amount: Math.round(refundAmount*100)/100, reason, items: refundItems, approved_by: approver.id, approved_by_name: approver.name, date: now, notes:'', created_at: now};
+          type, amount, reason, items: refundItems,
+          approved_by: approver.id, approved_by_name: approver.name,
+          performed_by: posState.currentUser.id,        // who is doing it at the counter (the server needs it to accept a manager's own sign-in as the approval)
+          date: now, notes:'', created_at: now};
         // Return stock for refunded quantities, incl. modifier extras (mirrors the sale).
         const inventory = [];
         refundItems.forEach(ri=>{
@@ -1829,12 +2318,18 @@ async function openRefundVoidFlow(sale, items, kind, ds){
           });
         });
         // sale_status is only for this screen (the server works out the sale's status itself).
-        const saleStatus = isVoid ? 'VOIDED' : (refund.type==='FULL_REFUND' ? 'REFUNDED' : 'PARTIALLY_REFUNDED');
+        const saleStatus = isVoid ? 'VOIDED' : (type==='FULL_REFUND' ? 'REFUNDED' : 'PARTIALLY_REFUNDED');
+        // A sale from another shift / counter (the "Today" list) isn't in this counter's own data; the
+        // drawer maths needs it (a refund of a cash sale takes cash out of this drawer).
+        if(!state.sales.some(x=>x.id===sale.id)){
+          state.sales.push(Object.assign({}, sale));
+          state.payments = state.payments.concat(dataset.payments.filter(p=>p.sale_id===sale.id && !state.payments.some(x=>x.id===p.id)));
+        }
         await Sync.queue('refund', {refund, inventory, sale_status: saleStatus, approval_token: approver.token || null});
         if(ds && ds!==state){ ds.refunds.push(refund); const s = ds.sales.find(x=>x.id===sale.id); if(s) s.status = saleStatus; }
         queueAudit(isVoid?'Sale voided':'Refund', `${sale.transaction_number} — ${fmtMoney(refund.amount)}${reason?' — '+reason:''} (approved by ${approver.name})`, sale.id);
         closeModal();
-        toast(isVoid?'Transaction voided, stock restored':'Refund processed, stock restored');
+        toast(isVoid ? `Transaction voided, stock restored. Customer gets back ${fmtMoney(refund.amount)}` : `Refund processed, stock restored. Customer gets back ${fmtMoney(refund.amount)}`);
         navigatePOS('saleDetail', sale.id);
       };
     }

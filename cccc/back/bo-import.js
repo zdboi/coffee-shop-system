@@ -175,11 +175,15 @@ async function convertOldPayload(payload, existing, notes){
     row.id = ref(table, oldId); row.local_id = String(oldId);
     if(skipInsert.has(row.id)) already++; else out[table].push(row);
   };
+  // what the refund check below needs to know (every finished sale, every refund and every sale / put-back stock line,
+  // whether it is new or already in the shop)
+  const saleInfo = new Map(), refundSeen = [], stockSeen = [], ingredientInfo = new Map();
   const ok = (cond) => { if(!cond) unlinked++; return cond; };
   const each = (store, fn) => (src[store] || []).forEach(r => { if(r && r.id != null && !r._synthetic) fn(r); });
 
   each('categories', r => add('categories', r.id, {name: String(r.name || 'Category').slice(0, 80)}));
   each('suppliers', r => add('suppliers', r.id, {name: String(r.name || 'Supplier').slice(0, 80), contact: r.contact || '', phone: r.phone || '', email: r.email || '', address: r.address || '', notes: r.notes || ''}));
+  each('ingredients', r => ingredientInfo.set(ref('ingredients', r.id), {name: r.name || 'an ingredient', unit: r.base_unit || ''}));
   each('ingredients', r => add('ingredients', r.id, {name: r.name || 'Ingredient', category_id: ref('categories', r.categoryId || r.category_id), supplier_id: ref('suppliers', r.supplierId || r.supplier_id),
     base_unit: r.base_unit || 'pcs', reorder_level: num(r.reorder_level), notes: r.notes || '', is_produced_item: !!r.is_produced_item,
     _source_recipe_id: ref('recipes', r.source_recipe_id || r.sourceRecipeId), shelf_life_days: nOrNull(r.shelf_life_days), storage_notes: r.storage_notes || '',
@@ -228,6 +232,7 @@ async function convertOldPayload(payload, existing, notes){
   const heldIds = new Set();
   each('sales', r => {
     if(r.status === 'HELD'){ held++; heldIds.add(String(r.id)); return; }
+    saleInfo.set(ref('sales', r.id), {number: r.transaction_number || '', total: num(r.grand_total)});
     add('sales', r.id, {transaction_number: r.transaction_number || '', transaction_date: isoOrNull(r.transaction_date) || isoOrNull(r.created_at),
       status: ['COMPLETED', 'VOIDED', 'REFUNDED', 'PARTIALLY_REFUNDED'].includes(r.status) ? r.status : 'COMPLETED',
       cashier_id: ref('staff', r.cashier_id) || staffNamed(r.cashier || r.cashier_name), cashier_name: r.cashier_name || r.cashier || '', shift_id: ref('shifts', r.shift_id),
@@ -249,13 +254,20 @@ async function convertOldPayload(payload, existing, notes){
     if(ok(saleOk(sid))) add('payments', r.id, {sale_id: ref('sales', sid), method: PAY_IDS.includes(String(r.method).toUpperCase()) ? String(r.method).toUpperCase() : 'OTHER',
       amount: num(r.amount), tendered: nOrNull(r.tendered), change: nOrNull(r.change), reference: r.reference || null, status: r.status || 'CONFIRMED', created_at: isoOrNull(r.created_at) || nowISO()});
   });
+  // Old refunds are history: money the old app already handed back, at the line price and without limits.
+  // imported_at tells the database so (it then checks only the two hard limits - see checkOldRefunds below);
+  // only the owner's Back Office can set it.
+  const importedAt = nowISO();
   each('refunds', r => {
     const sid = r.saleId || r.sale_id;
-    if(ok(saleOk(sid))) add('refunds', r.id, {sale_id: ref('sales', sid), shift_id: ref('shifts', r.shift_id),
+    if(!ok(saleOk(sid))) return;
+    const row = {sale_id: ref('sales', sid), shift_id: ref('shifts', r.shift_id),
       type: ['VOID', 'FULL_REFUND', 'PARTIAL_REFUND'].includes(r.type) ? r.type : 'PARTIAL_REFUND', amount: num(r.amount), reason: r.reason || '',
       items: (r.items || []).map(it => ({sale_item_id: ref('sale_items', it.saleItemId || it.sale_item_id), quantity: num(it.quantity), recipe_id: ref('recipes', it.recipeId || it.recipe_id), modifiers: (it.modifiers || []).map(m => oldModifier(m, modMap))})),
       approved_by: isUuid(r.approved_by) ? ref('staff', r.approved_by) : staffNamed(r.approved_by_name || r.approved_by), approved_by_name: r.approved_by_name || (isUuid(r.approved_by) ? '' : r.approved_by) || '',
-      date: isoOrNull(r.date) || nowISO(), notes: r.notes || '', created_at: isoOrNull(r.created_at || r.date) || nowISO()});
+      date: isoOrNull(r.date) || nowISO(), notes: r.notes || '', created_at: isoOrNull(r.created_at || r.date) || nowISO(), imported_at: importedAt};
+    add('refunds', r.id, row);
+    refundSeen.push({id: row.id, sale_id: row.sale_id, amount: row.amount, date: row.date, isNew: !skipInsert.has(row.id)});
   });
   each('cashMovements', r => {
     const sh = ref('shifts', r.shift_id);
@@ -266,18 +278,95 @@ async function convertOldPayload(payload, existing, notes){
     const iid = ref('ingredients', r.ingredientId || r.ingredient_id);
     const type = ['PURCHASE', 'INITIAL_STOCK', 'USAGE', 'WASTE', 'ADJUSTMENT', 'PRODUCTION', 'PRODUCTION_USE', 'SALE_USAGE', 'SALE_REVERSAL'].includes(r.transaction_type) ? r.transaction_type : null;
     if(r.transaction_type === 'SALE_USAGE' && heldIds.has(String(r.reference_id))) return;
-    if(ok(iid && type)) add('inventory_transactions', r.id, {ingredient_id: iid, transaction_type: type, quantity: num(r.quantity),
+    if(!ok(iid && type)) return;
+    const row = {ingredient_id: iid, transaction_type: type, quantity: num(r.quantity),
       reference_id: r.reference_id == null ? null : (anyRef(r.reference_id) || String(r.reference_id)), transaction_date: dateOnly(r.transaction_date) || dateOnly(r.created_at) || shopTodayKey(),
-      notes: r.notes || '', created_at: isoOrNull(r.created_at) || nowISO()});
+      notes: r.notes || '', created_at: isoOrNull(r.created_at) || nowISO()};
+    add('inventory_transactions', r.id, row);
+    if(type === 'SALE_USAGE' || type === 'SALE_REVERSAL') stockSeen.push({ingredient_id: iid, type, qty: Math.abs(row.quantity), reference_id: row.reference_id});
   });
   each('auditLog', r => add('audit_log', r.id, {action: r.action || '', actor_id: staffNamed(r.actor || r.actor_name), actor_name: r.actor || r.actor_name || '',
     details: r.details || '', reference_id: r.reference_id == null ? null : (anyRef(r.reference_id) || String(r.reference_id)), at: isoOrNull(r.at) || nowISO()}));
+
+  // The database now refuses refunds that give back more than the sale had left, or put back more stock than the sale
+  // took out - for every login. Old refunds that break either are left out here and listed for the owner.
+  const leftOut = [];
+  const dropped = new Set();
+  if(refundSeen.some(x => x.isNew)){
+    const found = checkOldRefunds(refundSeen, stockSeen, saleInfo, (existing.refunds && existing.refunds.rows) || [], ingredientInfo);
+    found.forEach(f => { dropped.add(f.id); leftOut.push(f); });
+    if(dropped.size){
+      out.refunds = out.refunds.filter(r => !dropped.has(r.id));
+      out.inventory_transactions = out.inventory_transactions.filter(l => {
+        const mine = l.transaction_type === 'SALE_REVERSAL' && dropped.has(l.reference_id);
+        if(mine) found.find(f => f.id === l.reference_id).lines++;
+        return !mine;
+      });
+    }
+  }
 
   if(held) notes.push(`${plural(held, 'held (unfinished) order was', 'held (unfinished) orders were')} left out.`);
   const openShifts = out.shifts.filter(s => s.status === 'ACTIVE').length;
   if(openShifts) notes.push(`${plural(openShifts, 'shift was', 'shifts were')} still open in the old app and came in as open (they don't affect today's counters).`);
   ['orders', 'orderItems', 'diningTables', 'customers'].forEach(k => { if((src[k] || []).length) notes.push(`"${k}" from that file are not brought in.`); });
-  return {tables: out, legacyPins, unlinked, already, settings: src.settings ? mapOldSettings(src.settings) : null};
+  return {tables: out, legacyPins, unlinked, already, leftOut, dropped, saleNumbers: new Map([...saleInfo].map(([id, v]) => [id, v.number])),
+    settings: src.settings ? mapOldSettings(src.settings) : null};
+}
+
+/* ---- the two hard limits the database keeps for refunds (section 8b of the database script) ----
+   money: all refunds of a sale together can't be more than the sale's total (1 centavo of rounding allowed);
+   stock: per ingredient, the stock all refunds of a sale put back can't be more than the sale took out.
+   Old refunds are looked at one sale at a time, oldest first: the first ones that fit are kept and an old refund that
+   would break a limit is left out (with its stock lines). Refunds already in the shop count as given.
+   refunds:   [{id, sale_id, amount, date, isNew}]   (every old refund linked to a sale; isNew = not in the shop yet)
+   stock:     [{ingredient_id, type: SALE_USAGE | SALE_REVERSAL, qty, reference_id}]  (reference = sale id / refund id)
+   inShop:    refund rows already in the shop [{sale_id, amount}]
+   Returns the refunds that must be left out: [{id, sale, amount, date, why, lines: 0}] */
+function checkOldRefunds(refunds, stock, saleInfo, inShop, ingredientInfo){
+  const cents = (n) => Math.round(roundMoney(n) * 100);
+  const usage = new Map(), back = new Map();
+  stock.forEach(l => {
+    const map = l.type === 'SALE_USAGE' ? usage : back, key = l.reference_id;
+    if(!key) return;
+    const m = map.get(key) || new Map(); m.set(l.ingredient_id, (m.get(l.ingredient_id) || 0) + l.qty); map.set(key, m);
+  });
+  const given = new Map();     // sale id -> centavos already given back in the shop
+  (inShop || []).forEach(r => given.set(r.sale_id, (given.get(r.sale_id) || 0) + Math.max(0, cents(r.amount))));
+  const putBack = new Map();   // sale id -> Map(ingredient id -> qty) for refunds that are kept (already in the shop, or accepted now)
+  const take = (saleId, refundId) => {
+    const m = putBack.get(saleId) || new Map(); putBack.set(saleId, m);
+    (back.get(refundId) || new Map()).forEach((q, ing) => m.set(ing, (m.get(ing) || 0) + q));
+  };
+  refunds.filter(r => !r.isNew).forEach(r => take(r.sale_id, r.id));
+  const bySale = new Map();
+  refunds.filter(r => r.isNew).forEach(r => { const l = bySale.get(r.sale_id) || []; l.push(r); bySale.set(r.sale_id, l); });
+  const out = [];
+  bySale.forEach((list, saleId) => {
+    const info = saleInfo.get(saleId) || {number: '', total: 0};
+    const total = cents(info.total);
+    list.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).forEach(r => {
+      const amount = cents(r.amount), left = Math.max(0, total - (given.get(saleId) || 0));
+      const drop = (why) => out.push({id: r.id, sale: info.number || '(sale without a number)', amount: r.amount, date: r.date, why, lines: 0});
+      if(amount < 0) return drop('its amount is not valid');
+      if(amount > left + 1){
+        const already = total - left;
+        return drop(already > 0
+          ? `it gave back ${fmtMoney(amount / 100)}, but only ${fmtMoney(left / 100)} of this ${fmtMoney(total / 100)} sale was left to give back (${fmtMoney(already / 100)} was already refunded)`
+          : `it gave back ${fmtMoney(amount / 100)}, which is more than the whole sale (${fmtMoney(total / 100)})`);
+      }
+      const sold = usage.get(saleId) || new Map(), kept = putBack.get(saleId) || new Map();
+      for(const [ing, q] of (back.get(r.id) || new Map())){
+        const took = sold.get(ing) || 0;
+        if((kept.get(ing) || 0) + q > took + 0.001){
+          const i = ingredientInfo.get(ing) || {name: 'an ingredient', unit: ''};
+          return drop(`it put back ${fmtNum(q, 2)} ${i.unit} of ${i.name} but the sale only took out ${fmtNum(took, 2)} ${i.unit}${(kept.get(ing) || 0) ? ' (some was already put back by another refund)' : ''}`.replace(/\s+/g, ' '));
+        }
+      }
+      given.set(saleId, (given.get(saleId) || 0) + amount);
+      take(saleId, r.id);
+    });
+  });
+  return out;
 }
 function mapOldSettings(o){
   const s = {};
@@ -349,7 +438,9 @@ function convertCcccPayload(payload, existingIds, notes){
   });
   if(skippedPhones) notes.push(`${plural(skippedPhones, 'customer')} came in without a mobile number because another customer already has it (merge them in Customers if they are the same person).`);
   if(!sameShop && payload.business) notes.push('This backup is from another shop account: its table QR codes got new codes.');
-  return {tables: out, legacyPins: [], unlinked, already, settings: src.settings ? mapOldSettings(src.settings) : null};
+  return {tables: out, legacyPins: [], unlinked, already, leftOut: [], dropped: new Set(),
+    saleNumbers: new Map((src.sales || []).filter(x => x && x.id).map(x => [x.id, x.transaction_number || ''])),
+    settings: src.settings ? mapOldSettings(src.settings) : null};
 }
 
 /* ================= running an import ================= */
@@ -357,10 +448,10 @@ async function existingForOld(payload){
   const ex = {};
   for(const [store, table] of Object.entries(OLD_STORES)){
     if(!(payload.data[store] || []).length) continue;
-    const rows = await cloud.selectAll(table, {select: 'id,local_id' + (['categories', 'suppliers', 'staff'].includes(table) ? ',name' : ''), order: 'id.asc'});
+    const rows = await cloud.selectAll(table, {select: 'id,local_id' + (['categories', 'suppliers', 'staff'].includes(table) ? ',name' : '') + (table === 'refunds' ? ',sale_id,amount' : ''), order: 'id.asc'});
     const byLocal = new Map(), byName = new Map();
     rows.forEach(r => { if(r.local_id) byLocal.set(String(r.local_id), r.id); if(r.name && !byName.has(String(r.name).trim().toLowerCase())) byName.set(String(r.name).trim().toLowerCase(), r.id); });
-    ex[table] = {byLocal, byName};
+    ex[table] = {byLocal, byName, rows: table === 'refunds' ? rows : null};     // refunds: every refund in the shop (the money check counts them)
   }
   return ex;
 }
@@ -395,12 +486,45 @@ async function runImport(payload, opts){
   const toSend = IMPORT_ORDER.reduce((s, t) => s + T[t].length, 0);
   let done = 0;
   const strip = (r) => { const x = Object.assign({}, r); delete x._source_recipe_id; return x; };
+  const leftOut = conv.leftOut.slice();     // refunds that were not brought in: [{sale, amount, date, why, lines}]
+  const dropped = conv.dropped;              // ids of those refunds (their put-back stock lines are left out too)
+  const refusedLines = [];                   // sale numbers of stock lines the database refused one by one
+  const refundSale = new Map(T.refunds.map(r => [r.id, r.sale_id]));
+  const addedBy = {}; IMPORT_ORDER.forEach(t => { addedBy[t] = 0; });     // what was really sent, per table
+  const opFor = (t, r) => Ops.insertIgnore(t, strip(t === 'ingredients' ? Object.assign({}, r, {source_recipe_id: null}) : r));
+  // Refund limits are checked by the database for every save. The check above should already have left out every
+  // refund that breaks them; if the database still refuses a refund or a stock line, only THAT one is left out.
+  const isLimitError = (e) => /^(REFUND_TOO_LARGE|RETURN_TOO_LARGE|SALE_NOT_REFUNDABLE|SALE_NOT_FOUND|BAD_AMOUNT)$/.test(errorCode(e && e.message) || '');
   for(const t of IMPORT_ORDER){
-    const rows = T[t];
+    let rows = T[t];
+    if(t === 'inventory_transactions'){
+      // stock the sales took out first, stock the refunds put back last, so a "put back" line never arrives before its sale's own lines
+      rows = rows.filter(l => {      // lines of a refund the database refused a moment ago are left out too
+        const mine = l.transaction_type === 'SALE_REVERSAL' && dropped.has(l.reference_id);
+        if(mine){ const f = leftOut.find(x => x.id === l.reference_id); if(f) f.lines++; }
+        return !mine;
+      });
+      rows = rows.filter(l => l.transaction_type !== 'SALE_REVERSAL').concat(rows.filter(l => l.transaction_type === 'SALE_REVERSAL'));
+    }
     for(let i = 0; i < rows.length; i += 150){
       const part = rows.slice(i, i + 150);
       progress(done, toSend, `Saving ${TABLE_LABEL[t]}… ${done.toLocaleString('en-PH')} of ${toSend.toLocaleString('en-PH')}`);
-      await applyChanges(part.map(r => Ops.insertIgnore(t, strip(t === 'ingredients' ? Object.assign({}, r, {source_recipe_id: null}) : r))));
+      try{
+        await applyChanges(part.map(r => opFor(t, r)));
+        addedBy[t] += part.length;
+      }catch(e){
+        if(!(t === 'refunds' || t === 'inventory_transactions') || !isLimitError(e)) throw e;
+        for(const r of part){
+          try{ await applyChanges([opFor(t, r)]); addedBy[t]++; }
+          catch(e2){
+            if(!isLimitError(e2)) throw e2;
+            if(t === 'refunds'){
+              dropped.add(r.id);
+              leftOut.push({id: r.id, sale: (conv.saleNumbers.get(r.sale_id)) || '(older sale)', amount: r.amount, date: r.date, why: `the database refused it (${String(friendlyError(e2)).replace(/[.\s]+$/, '')})`, lines: 0});
+            } else refusedLines.push(conv.saleNumbers.get(refundSale.get(r.reference_id)) || 'an older sale');
+          }
+        }
+      }
       done += part.length;
     }
     if(t === 'recipes'){
@@ -443,9 +567,11 @@ async function runImport(payload, opts){
     notes.push('Shop name, colours, tax and receipt settings were brought in.');
   }
   const already = conv.already;
-  await applyChanges([Ops.audit('Data imported', `${toSend} new records, ${already} already here${conv.unlinked ? ', ' + conv.unlinked + ' not linked' : ''} (${kind === 'old' ? 'old apps' : 'Back Office backup'})`)]).catch(() => {});
+  const imported = IMPORT_ORDER.reduce((n, t) => n + addedBy[t], 0);
+  if(refusedLines.length) notes.push(`${plural(refusedLines.length, 'stock line was', 'stock lines were')} left out (sale ${[...new Set(refusedLines)].join(', ')}) because the database would not accept more stock put back than the sale took out.`);
+  await applyChanges([Ops.audit('Data imported', `${imported} new records, ${already} already here${conv.unlinked ? ', ' + conv.unlinked + ' not linked' : ''}${leftOut.length ? ', ' + plural(leftOut.length, 'refund') + ' left out' : ''} (${kind === 'old' ? 'old apps' : 'Back Office backup'})`)]).catch(() => {});
   progress(1, 1, 'Done');
-  return {imported: toSend, already, unlinked: conv.unlinked, notes, perTable: IMPORT_ORDER.filter(t => T[t].length).map(t => [TABLE_LABEL[t], T[t].length])};
+  return {imported, already, unlinked: conv.unlinked, notes, leftOut, kind, perTable: IMPORT_ORDER.filter(t => addedBy[t]).map(t => [TABLE_LABEL[t], addedBy[t]])};
 }
 
 /* ================= Backup & import screen ================= */
@@ -464,7 +590,7 @@ async function renderBackup(){
 
     <div class="section-title">Import data</div>
     <div class="card">
-      <p class="hint" style="margin-top:0;">Bring in data from the old offline Inventory / POS apps, or restore a backup made here. Importing only <b>adds</b> records that aren't here yet — it never changes or deletes anything, and running it twice is safe.</p>
+      <p class="hint" style="margin-top:0;">Bring in data from the old offline Inventory / POS apps, or restore a backup made here. Importing only <b>adds</b> records that aren't here yet — it never changes or deletes anything, and running it twice is safe. An old refund that gives back more than its sale had left, or puts back more stock than the sale took out, is left out and listed when the import is done.</p>
       <div id="imp-local"><div class="hint">Looking for old app data in this browser…</div></div>
       <div class="form-row" style="margin-top:12px;"><label for="imp-file">Or choose a backup file (.json)</label><input type="file" id="imp-file" accept=".json,application/json"></div>
       <div id="imp-preview"></div>
@@ -541,6 +667,15 @@ async function renderBackup(){
     box.querySelector('#imp-use-local').onclick = () => showImportPreview(old, document.getElementById('imp-preview'));
   } else box.innerHTML = '<p class="hint">No old app data in this browser. (Open the Back Office in the same browser you used the old apps in, or choose a backup file below.)</p>';
 }
+// The old refunds that were not brought in, in plain words: which sale, how much, and why.
+function leftOutRefundsHtml(list, kind){
+  if(!list || !list.length) return '';
+  const old = kind === 'old';
+  return `<div class="notice warn" id="imp-left-out" style="margin-top:10px;"><b>${plural(list.length, (old ? 'old ' : '') + 'refund was', (old ? 'old ' : '') + 'refunds were')} not brought in.</b>
+    The system refuses a refund that gives back more than the sale had left, or puts back more stock than the sale took out.${old ? ' The old app did not check this.' : ''}
+    The sales themselves came in as they were, and ${list.length === 1 ? 'this refund is' : 'these refunds are'} still in ${old ? 'your old backup file' : 'the backup file'}.
+    <ul style="margin:8px 0 0 18px;">${list.map(f => `<li><b>Sale ${esc(f.sale)}</b> — ${esc(fmtMoney(f.amount))} refund${f.date ? ' on ' + esc(fmtShopDate(f.date)) : ''}: ${esc(String(f.why).replace(/[.\s]+$/, ''))}.${f.lines ? ` The stock it put back (${esc(plural(f.lines, 'stock line'))}) was left out too.` : ''}</li>`).join('')}</ul></div>`;
+}
 function showImportPreview(payload, target){
   const sum = summarizePayload(payload);
   const rows = Object.entries(sum.counts);
@@ -567,7 +702,7 @@ function showImportPreview(payload, target){
       applyCustomTheme(); renderShell();
       prog.innerHTML = `<div class="notice ok"><b>Done.</b> ${res.imported.toLocaleString('en-PH')} new records added${res.already ? `, ${res.already.toLocaleString('en-PH')} were already here (skipped)` : ''}${res.unlinked ? `, ${res.unlinked} skipped because what they belong to is missing` : ''}.
         ${res.perTable.length ? `<div class="hint">${res.perTable.map(([l, n]) => `${n.toLocaleString('en-PH')} ${esc(l)}`).join(' · ')}</div>` : ''}
-        ${res.notes.map(n => `<div class="hint">• ${esc(n)}</div>`).join('')}</div>`;
+        ${res.notes.map(n => `<div class="hint">• ${esc(n)}</div>`).join('')}</div>${leftOutRefundsHtml(res.leftOut, res.kind)}`;
       go.textContent = 'Imported';
     }catch(e){
       console.error(e);

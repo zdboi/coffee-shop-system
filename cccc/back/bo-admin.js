@@ -222,6 +222,7 @@ function renderStaff(){
     <div class="settings-block" style="max-width:1000px;">
       <p class="hint" style="margin-bottom:12px;">Everyone who uses a counter signs in there with their own 4–6 digit PIN. PINs are checked by the server and stored scrambled — nobody can read them, so if someone forgets theirs, set a new one here.
         <b>Cashiers</b> sell. <b>Managers</b> can also approve discounts, refunds and voids. <b>Admin</b> is the same as a manager at the counter. A PIN never opens the Back Office — only your email login does.</p>
+      <p class="hint" style="margin-bottom:12px;"><b>PIN stopped working?</b> If someone says the counter tells them <i>“Two staff members share this PIN”</i>, give one of those two people a new PIN here (press <b>Change PIN</b>). The counter never says who shares it — PINs are stored scrambled — so pick either person.</p>
       ${me && !me.has_pin ? `<div class="notice warn">You have no counter PIN yet. <a class="linklike" id="set-own-pin">Set your own PIN</a> so you can sign in at the counter.</div>` : ''}
       <div class="table-wrap"><table><thead><tr><th>Name</th><th>Role</th><th>PIN</th><th>Status</th><th></th></tr></thead><tbody>
         ${staff.map(u => `<tr class="${u.active === false ? 'muted-row' : ''}"><td><b>${esc(u.name)}</b>${me && u.id === me.id ? ' <span class="text-light">(you, the owner)</span>' : ''}${u.local_id ? ' <span class="badge badge-gray" title="Brought in from the old app">imported</span>' : ''}</td>

@@ -97,6 +97,7 @@ const ERROR_TEXT = {
   // Sales and stock
   BAD_SALE: 'This sale is missing information, so it was not saved. Please tell the owner.',
   BAD_SALE_STATUS: 'This sale has an unknown status, so it was not saved. Please tell the owner.',
+  SALE_LOCKED: 'A finished sale\'s amounts can\'t be changed.',
   SALE_TOTALS_MISMATCH: 'The sale total does not match its items, so the server did not save it. Please tell the owner.',
   UNKNOWN_INGREDIENT: 'An ingredient in this item no longer exists. Ask the owner to check the item\'s recipe in Back Office.',
   UNKNOWN_RECIPE: 'An item in this sale is no longer on the menu. Ask the owner to check the menu in Back Office.',

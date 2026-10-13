@@ -106,7 +106,7 @@ function salesReport(id, ds){
       sales.forEach(s => { const r = row(dayKeyOf(s.transaction_date)); r.n++; r.gross += num(s.grand_total); r.disc += num(s.discount_amount); r.tax += num(s.tax_amount); r.svc += num(s.service_charge_amount); });
       refunds.forEach(x => { row(dayKeyOf(x.date)).ref += num(x.amount); });
       const rows = Object.keys(by).sort().map(k => { const r = by[k]; return [k, r.n, M(r.gross), M(r.ref), M(r.gross - r.ref), M(r.disc), M(r.tax + r.svc)]; });
-      return {headers: ['Date', 'Transactions', 'Sales before refunds', 'Refunds', 'Net sales', 'Discounts given', 'Tax + service'], rows,
+      return {headers: ['Date', 'Transactions', SALES_LABELS.sales, SALES_LABELS.refunds, SALES_LABELS.netSales, SALES_LABELS.discounts, SALES_LABELS.taxAndService], rows,
         total: ['Total', sum.count, M(sum.gross), M(sum.refunds), M(sum.net), M(sum.discounts), M(sales.reduce((s, x) => s + num(x.tax_amount) + num(x.service_charge_amount), 0))]};
     }
     case 'salesByItem': {
@@ -120,7 +120,7 @@ function salesReport(id, ds){
       });
       const rows = [...by.values()].sort((a, b) => b.rev - a.rev).map(r => [r.name, fmtNum(r.qty, 0), M(r.rev), M(r.cost), M(r.rev - r.cost), r.rev > 0 ? fmtNum(r.cost / r.rev * 100, 1) + '%' : '—']);
       const tq = [...by.values()].reduce((s, r) => s + r.qty, 0), tr = [...by.values()].reduce((s, r) => s + r.rev, 0), tc = [...by.values()].reduce((s, r) => s + r.cost, 0);
-      return {headers: ['Item', 'Sold', 'Sales (item prices)', 'Ingredient cost (today\'s prices)', 'Gross profit', 'Food cost %'], rows,
+      return {headers: ['Item', 'Sold', SALES_LABELS.itemSales, 'Ingredient cost (today\'s prices)', 'Gross profit', 'Food cost %'], rows,
         total: ['Total', fmtNum(tq, 0), M(tr), M(tc), M(tr - tc), tr > 0 ? fmtNum(tc / tr * 100, 1) + '%' : '—'],
         note: 'Item prices are before sale discounts and tax. Ingredient cost uses today\'s costs and includes extras used by options. Voided sales are left out; refunds are not taken off per item.'};
     }
@@ -132,7 +132,7 @@ function salesReport(id, ds){
         by[k] = by[k] || {qty: 0, rev: 0}; by[k].qty += num(i.quantity); by[k].rev += num(i.line_total);
       });
       const total = Object.values(by).reduce((s, r) => s + r.rev, 0);
-      return {headers: ['Menu section', 'Items sold', 'Sales (item prices)', 'Share'], rows: Object.entries(by).sort((a, b) => b[1].rev - a[1].rev).map(([k, r]) => [k, fmtNum(r.qty, 0), M(r.rev), total > 0 ? fmtNum(r.rev / total * 100, 1) + '%' : '—'])};
+      return {headers: ['Menu section', 'Items sold', SALES_LABELS.itemSales, 'Share'], rows: Object.entries(by).sort((a, b) => b[1].rev - a[1].rev).map(([k, r]) => [k, fmtNum(r.qty, 0), M(r.rev), total > 0 ? fmtNum(r.rev / total * 100, 1) + '%' : '—'])};
     }
     case 'salesByHour': {
       const hours = Array.from({length: 24}, (_, h) => ({h, n: 0, t: 0}));
@@ -156,7 +156,7 @@ function salesReport(id, ds){
       return {headers: ['Name', 'Transactions', 'Sales', 'Voided sales', 'Refunds / voids approved', 'Amount approved'], rows: Object.entries(by).sort((a, b) => b[1].t - a[1].t).map(([n, r]) => [n, r.n, M(r.t), r.voids, r.refundsDone, M(r.refundAmt)])};
     }
     case 'shifts':
-      return {headers: ['Shift', 'Cashier', 'Opened', 'Closed', 'Net sales', 'Expected cash', 'Counted cash', 'Over / short'], rows: ds.shifts.filter(s => inRange(s.opened_at, ds.from, ds.to)).sort((a, b) => String(a.opened_at).localeCompare(String(b.opened_at))).map(s => {
+      return {headers: ['Shift', 'Cashier', 'Opened', 'Closed', SALES_LABELS.netSales, 'Expected cash', 'Counted cash', 'Over / short'], rows: ds.shifts.filter(s => inRange(s.opened_at, ds.from, ds.to)).sort((a, b) => String(a.opened_at).localeCompare(String(b.opened_at))).map(s => {
         const m = shiftMetrics(s, ds), closed = s.status === 'CLOSED';
         return [s.shift_number || '', s.cashier_name || '', fmtShopDateTime(s.opened_at), closed ? fmtShopDateTime(s.closed_at) : 'open',
           M(closed && s.net_sales != null ? s.net_sales : m.netSales), M(closed && s.expected_cash != null ? s.expected_cash : m.expectedCash), closed ? M(s.declared_cash) : '—', closed ? M(s.cash_variance) : '—'];

@@ -67,13 +67,24 @@
     CANNOT_CANCEL: 'The shop already started this order, so it can\'t be cancelled here. Please talk to our staff.',
     NOT_SIGNED_IN: 'Your phone isn\'t connected. Reload the page and try again.',
   };
+  // This page does not load cccc/shared/ui.js (that file's wording is written for staff at the
+  // counter, e.g. its NOT_SIGNED_IN talks about "this tablet's counter login"). Every message a
+  // customer can see comes from MSG below. A code we don't know, or a raw server/network message,
+  // is never shown as-is: the customer gets the plain fallback.
+  const FALLBACK = 'Something went wrong. Please try again.';
+  // The error code at the start of a server answer: "BAD_PHONE" or "BAD_PHONE: more text".
+  function codeOf(r){
+    const raw = String((r && (r.error || r.message)) || '');
+    const m = /^\s*([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*)(?![A-Za-z0-9_])/.exec(raw);
+    return m ? m[1] : raw;
+  }
   function errText(r){
-    if(!r) return 'Something went wrong. Please try again.';
+    if(!r) return FALLBACK;
     if(r.offline) return 'No connection. Check your internet and try again.';
-    const code = r.error || r.message;
+    const code = codeOf(r);
     if(code === 'ITEM_UNAVAILABLE') return `${r.name || 'An item'} just sold out. Remove it to continue.`;
     if(code === 'OPTION_REQUIRED') return `Choose a ${r.group || 'option'} for ${r.name}.`;
-    return MSG[code] || (r.message ? r.message : 'Something went wrong. Please try again.');
+    return MSG[code] || FALLBACK;
   }
   // The server limits number checks (register, save number, "ordered here before") per phone.
   const TOO_MANY = {
@@ -82,8 +93,7 @@
     relink: 'Too many tries. Please wait about 15 minutes, or ask our staff to help.',
   };
   function errFor(r, where){
-    const code = r && (r.error || r.message);
-    return (code === 'TOO_MANY_ATTEMPTS' && TOO_MANY[where]) || errText(r);
+    return (codeOf(r) === 'TOO_MANY_ATTEMPTS' && TOO_MANY[where]) || errText(r);
   }
   // PHONE_TAKEN: the number already belongs to a customer here. Offer "I've ordered here
   // before" with the number filled in (only qr_relink links a phone to an existing customer).
@@ -191,7 +201,7 @@
       try{ navigator.vibrate && navigator.vibrate([200, 100, 200]); }catch(e){}
       document.title = `Ready: ${o.order_number} — ${shop()}`;
     } else if(o.status === 'PREPARING') toast(`${o.order_number} is being prepared`);
-    else if(o.status === 'REJECTED') toast(`${o.order_number} couldn't be accepted`, true);
+    else if(o.status === 'REJECTED') toast(`Sorry, we couldn't take ${o.order_number}`, true);
   }
   function schedulePoll(){
     clearTimeout(S.pollTimer);
@@ -612,17 +622,27 @@
     ];
     const bad = st === 'REJECTED' || st === 'CANCELLED';
     const c = S.customer || {};
+    // What the money line says depends on the order's state. "Pay at the counter" is only
+    // for an order that is still open and unpaid; it never shows next to a cancelled or
+    // rejected order (nothing is charged) or a finished one.
+    let payClass = '', payText;
+    if(bad){ payClass = ' off'; payText = 'Not charged'; }
+    else if(o.paid_at){ payClass = ' paid'; payText = 'Paid — thank you!'; }
+    else if(st === 'COMPLETED'){ payText = 'Thank you!'; }
+    else payText = esc(S.menu.payment_note || 'Please pay at the counter.');
+    const badNote = st === 'CANCELLED'
+      ? '<b>You cancelled this order.</b><p>Nothing to pay.</p>'
+      : `<b>Sorry, we couldn't take this order.</b>${o.reject_reason ? `<p>${esc(o.reject_reason)}</p>` : ''}`;
     return `
-        <div class="ticket-top">
+        <div class="ticket-top${bad ? ' is-bad' : ''}">
           <div class="ticket-label">${st === 'COMPLETED' ? 'Enjoy!' : 'Your order number'}</div>
           <div class="ticket-no">${esc(o.order_number)}</div>
           <div class="ticket-where">${esc(o.table_label || '')} · ${takeaway ? 'Take away' : 'Dine in'}${c.nickname ? ` · for ${esc(c.nickname)}` : ''}</div>
         </div>
         <div class="perf" aria-hidden="true"></div>
-        ${bad ? `<div style="padding:16px 22px;"><b>${st === 'REJECTED' ? 'The shop couldn\'t accept this order.' : 'You cancelled this order.'}</b>
-            ${o.reject_reason ? `<p style="color:var(--muted);margin-top:4px;">${esc(o.reject_reason)}</p>` : ''}</div>`
+        ${bad ? `<div class="ticket-note">${badNote}</div>`
           : `<ol class="steps">${steps.map((s, i) => `<li class="step ${stepState(i + 1)}"><span class="dot">${stepState(i + 1) === 'done' ? '✓' : i + 1}</span><div><b>${s.b}</b><span>${s.s}</span></div></li>`).join('')}</ol>`}
-        <div class="ticket-pay"><span>${o.paid_at ? 'Paid — thank you!' : esc(S.menu.payment_note || 'Please pay at the counter.')}</span><b>${money(o.total)}</b></div>
+        <div class="ticket-pay${payClass}"><span>${payText}</span><b>${money(o.total)}</b></div>
         <ul class="ticket-items">${(o.items || []).map(it => `<li><span>${it.quantity}× ${esc(it.name)}${(it.modifiers || []).length ? `<br><span class="mods">${esc(it.modifiers.map(m => m.label).join(', '))}</span>` : ''}</span><span>${money(it.line_total)}</span></li>`).join('')}</ul>`;
   }
 
