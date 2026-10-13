@@ -1,0 +1,111 @@
+--- tests/sql/30_security_tests.sql	2026-10-12 15:47:04.663610638 +0800
++++ /tmp/claude-0/-home-claude-coffee-shop-system/87e71ae2-6bc5-5944-baf1-422d60cc0268/scratchpad/30_patched.sql	2026-10-12 22:53:15.026446095 +0800
+@@ -25,11 +25,11 @@
+ $$;
+ create or replace function test.sale_data(p_sale uuid, p_total numeric, p_inv jsonb,
+    p_item uuid default gen_random_uuid(), p_pay uuid default gen_random_uuid(), p_status text default 'COMPLETED',
+-   p_discount numeric default 0, p_appr uuid default null, p_tok text default null, p_cust uuid default null)
++   p_discount numeric default 0, p_appr uuid default null, p_tok text default null, p_cust uuid default null, p_cashier uuid default '66666666-0000-0000-0000-000000000001')
+ returns jsonb language sql as $$
+   select jsonb_build_object(
+     'sale', jsonb_build_object('id', p_sale, 'transaction_number', 'POS-A-2026-' || left(p_sale::text, 6), 'transaction_date', now(),
+-       'status', p_status, 'cashier_id', '66666666-0000-0000-0000-000000000001', 'cashier_name', 'Cathy Cashier',
++       'status', p_status, 'cashier_id', p_cashier, 'cashier_name', 'Cathy Cashier',
+        'shift_id', '88888888-0000-0000-0000-000000000001', 'subtotal', p_total + p_discount,
+        'discount_type', case when p_discount > 0 then 'fixed' end, 'discount_value', p_discount, 'discount_amount', p_discount,
+        'discount_approved_by', p_appr, 'discount_approved_by_name', 'Fake Name', 'tax_amount', 0, 'service_charge_amount', 0,
+@@ -41,10 +41,10 @@
+     'discount_approval_token', p_tok)
+ $$;
+ create or replace function test.refund_data(p_ref uuid, p_sale uuid, p_type text, p_amount numeric, p_appr uuid, p_tok text,
+-   p_inv jsonb default '[]', p_status text default 'REFUNDED') returns jsonb language sql as $$
++   p_inv jsonb default '[]', p_status text default 'REFUNDED', p_performer uuid default null) returns jsonb language sql as $$
+   select jsonb_build_object(
+     'refund', jsonb_build_object('id', p_ref, 'sale_id', p_sale, 'shift_id', '88888888-0000-0000-0000-000000000001', 'type', p_type,
+-       'amount', p_amount, 'reason', 'test', 'approved_by', p_appr, 'approved_by_name', 'Fake Name', 'date', now()),
++       'amount', p_amount, 'reason', 'test', 'approved_by', p_appr, 'approved_by_name', 'Fake Name', 'date', now(), 'performed_by', p_performer),
+     'sale_status', p_status, 'inventory', p_inv, 'approval_token', p_tok)
+ $$;
+ -- a completed sale with exactly the given sale fields and items (no stock lines)
+@@ -156,7 +156,7 @@
+ select test.ok(to_regprocedure('public.fo_register_device(text,text)') is null, 'fo_register_device removed');
+ select test.ok((select proconfig::text from pg_proc where oid = 'public.current_role_rank()'::regprocedure) like '%search_path=public%', 'current_role_rank has a fixed search_path');
+ select test.ok(not has_function_privilege('anon', 'public.current_role_rank()', 'execute'), 'anon cannot run current_role_rank');
+-select test.ok(not has_function_privilege('authenticated', 'public._use_approval(uuid,uuid,uuid,text,text)', 'execute')
++select test.ok(not has_function_privilege('authenticated', 'public._use_approval(uuid,uuid,uuid,text,text,uuid)', 'execute')
+            and not has_function_privilege('authenticated', 'public._phone_lookup_allowed(uuid)', 'execute')
+            and not has_function_privilege('authenticated', 'public._pin_locked_until(uuid)', 'execute')
+            and not has_function_privilege('authenticated', 'public._customer_for_staff(public.customers,boolean)', 'execute')
+@@ -192,8 +192,8 @@
+ select test.ok((select used_at is not null and used_for = 'discount:99999999-0000-0000-0000-000000000101' from staff_sessions where purpose = 'OVERRIDE'), 'OVERRIDE token marked used');
+ select test.login(:'d1'); set role authenticated;
+ select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000102', 140, '[]', p_discount => 10, p_appr => :'manager', p_tok => :'ov1'))->>'message' = 'APPROVAL_INVALID', 'same OVERRIDE token cannot approve a second discount');
+-select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000102', 140, '[]', p_discount => 10, p_appr => :'manager', p_tok => :'mgr_login'))->>'status' = 'ok', 'manager''s own LOGIN token approves (signed in on this counter)');
+-select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000103', 140, '[]', p_discount => 10, p_appr => :'manager', p_tok => :'mgr_login'))->>'status' = 'ok', 'LOGIN token is not used up');
++select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000102', 140, '[]', p_discount => 10, p_appr => :'manager', p_tok => :'mgr_login', p_cashier => :'manager'))->>'status' = 'ok', 'manager''s own LOGIN token approves (signed in on this counter)');
++select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000103', 140, '[]', p_discount => 10, p_appr => :'manager', p_tok => :'mgr_login', p_cashier => :'manager'))->>'status' = 'ok', 'LOGIN token is not used up');
+ select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000104', 140, '[]', p_status => 'HELD', p_discount => 10, p_appr => :'cashier'))->>'status' = 'ok', 'HELD sale with a discount needs no approval yet');
+ select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000104', 140, '[]', p_discount => 10, p_appr => :'cashier'))->>'message' = 'ROLE_TOO_LOW', '... but completing it does');
+ select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000105', 150, '[]'))->>'status' = 'ok', 'sale without discount needs no approval');
+@@ -210,7 +210,7 @@
+ select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_revoked \gset
+ select (public.staff_pin_login('3333', 'OVERRIDE', 'MANAGER'))->>'token' as ov_mara \gset
+ reset role;
+-update staff_sessions set created_at = now() - interval '20 hours', expires_at = now() - interval '19 hours'
++update staff_sessions set created_at = now() - interval '20 hours', expires_at = now() + interval '4 hours'
+   where token_hash = encode(extensions.digest(:'ov_late', 'sha256'), 'hex');
+ update staff_sessions set created_at = now() - interval '25 hours', expires_at = now() - interval '24 hours'
+   where token_hash = encode(extensions.digest(:'ov_old', 'sha256'), 'hex');
+@@ -250,11 +250,11 @@
+ select test.ok((select status from sales where id = '99999999-0000-0000-0000-000000000201') = 'PARTIALLY_REFUNDED', 'sale status worked out by the server (counter said VOIDED)');
+ select test.ok((select approved_by_name from refunds where id = 'dddddddd-0000-0000-0000-000000000201') = 'Manny Manager', 'refund approver name from the staff list');
+ select test.login(:'d1'); set role authenticated;
+-select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000202', '99999999-0000-0000-0000-000000000201', 'PARTIAL_REFUND', 70, :'manager', :'mgr_login'))->>'message' = 'REFUND_TOO_LARGE', 'second refund 70 when 65 is left -> REFUND_TOO_LARGE');
++select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000202', '99999999-0000-0000-0000-000000000201', 'PARTIAL_REFUND', 70, :'manager', :'mgr_login', p_performer => :'manager'))->>'message' = 'REFUND_TOO_LARGE', 'second refund 70 when 65 is left -> REFUND_TOO_LARGE');
+ select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000202', '99999999-0000-0000-0000-000000000201', 'PARTIAL_REFUND', 65, :'manager', :'mgr_login',
+-   jsonb_build_array(test.inv('eeeeeeee-0000-0000-0000-000000000202', :'beans', 9))))->>'message' = 'RETURN_TOO_LARGE', 'returns of all refunds together over 18 g (10 + 9) -> RETURN_TOO_LARGE');
++   jsonb_build_array(test.inv('eeeeeeee-0000-0000-0000-000000000202', :'beans', 9)), p_performer => :'manager'))->>'message' = 'RETURN_TOO_LARGE', 'returns of all refunds together over 18 g (10 + 9) -> RETURN_TOO_LARGE');
+ select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000202', '99999999-0000-0000-0000-000000000201', 'PARTIAL_REFUND', 65.005, :'manager', :'mgr_login',
+-   jsonb_build_array(test.inv('eeeeeeee-0000-0000-0000-000000000202', :'beans', 8), test.inv('eeeeeeee-0000-0000-0000-000000000203', :'milk', 180))))->>'status' = 'ok', 'rest of the sale (65.005, within rounding) with 8 g + 180 ml -> ok');
++   jsonb_build_array(test.inv('eeeeeeee-0000-0000-0000-000000000202', :'beans', 8), test.inv('eeeeeeee-0000-0000-0000-000000000203', :'milk', 180)), p_performer => :'manager'))->>'status' = 'ok', 'rest of the sale (65.005, within rounding) with 8 g + 180 ml -> ok');
+ reset role;
+ select test.ok((select status from sales where id = '99999999-0000-0000-0000-000000000201') = 'REFUNDED', 'fully refunded -> REFUNDED');
+ select test.ok((select stock from v_ingredient_stock where ingredient_id = :'beans') = 1000 and (select stock from v_ingredient_stock where ingredient_id = :'milk') = 5000, 'stock fully restored, not more');
+@@ -304,17 +304,17 @@
+    jsonb_build_array(test.item(0.1, 3, 0.30000000000000004, p_recipe => null))))->>'status' = 'ok', 'float noise (0.1 x 3) passes');
+ select test.ok(test.op(:'key1', 'sale', test.raw_sale('99999999-0000-0000-0000-000000000402',
+    jsonb_build_object('subtotal',340,'discount_type','percent','discount_value',20,'discount_amount',68,'tax_amount',0,'service_charge_amount',27.2,'grand_total',299.2,
+-                      'discount_approved_by', :'manager'),
++                      'discount_approved_by', :'manager', 'cashier_id', :'manager'),
+    jsonb_build_array(test.item(170, 2, p_mods => '[{"group":"Size","label":"16oz","price_delta":20}]'))) || jsonb_build_object('discount_approval_token', :'mgr_login'))->>'status' = 'ok',
+    'tax-inclusive + 10% service + 20% discount passes');
+ select test.ok(test.op(:'key1', 'sale', test.raw_sale('99999999-0000-0000-0000-000000000403',
+    jsonb_build_object('subtotal',450,'discount_type','percent','discount_value',3.3,'discount_amount',14.85,'tax_amount',52.218,'service_charge_amount',43.515,'grand_total',530.88,
+-                      'discount_approved_by', :'manager'),
++                      'discount_approved_by', :'manager', 'cashier_id', :'manager'),
+    jsonb_build_array(test.item(150, 3))) || jsonb_build_object('discount_approval_token', :'mgr_login'))->>'status' = 'ok',
+    '12% tax + 10% service + 3.3% discount, grand total rounded to 530.88, passes');
+ select test.ok(test.op(:'key1', 'sale', test.raw_sale('99999999-0000-0000-0000-000000000404',
+    jsonb_build_object('subtotal',150,'discount_type','percent','discount_value',100,'discount_amount',150,'tax_amount',0,'service_charge_amount',0,'grand_total',0,
+-                      'discount_approved_by', :'manager'),
++                      'discount_approved_by', :'manager', 'cashier_id', :'manager'),
+    jsonb_build_array(test.item(150, 1))) || jsonb_build_object('discount_approval_token', :'mgr_login'))->>'status' = 'ok', '100% discount passes');
+ -- broken sales
+ select test.ok(test.op(:'key1', 'sale', test.raw_sale('99999999-0000-0000-0000-000000000410',
+@@ -327,13 +327,13 @@
+    '{"subtotal":0,"discount_amount":0,"tax_amount":0,"service_charge_amount":0,"grand_total":0}',
+    jsonb_build_array(test.item(150, 1, 0))))->>'message' = 'SALE_TOTALS_MISMATCH', 'items with a zero line total -> SALE_TOTALS_MISMATCH');
+ select test.ok(test.op(:'key1', 'sale', test.raw_sale('99999999-0000-0000-0000-000000000410',
+-   jsonb_build_object('subtotal',150,'discount_type','fixed','discount_value',200,'discount_amount',200,'tax_amount',0,'service_charge_amount',0,'grand_total',-50,'discount_approved_by', :'manager'),
++   jsonb_build_object('subtotal',150,'discount_type','fixed','discount_value',200,'discount_amount',200,'tax_amount',0,'service_charge_amount',0,'grand_total',-50,'discount_approved_by', :'manager', 'cashier_id', :'manager'),
+    jsonb_build_array(test.item(150, 1))) || jsonb_build_object('discount_approval_token', :'mgr_login'))->>'message' = 'SALE_TOTALS_MISMATCH', 'discount above the subtotal -> SALE_TOTALS_MISMATCH');
+ select test.ok(test.op(:'key1', 'sale', test.raw_sale('99999999-0000-0000-0000-000000000410',
+-   jsonb_build_object('subtotal',150,'discount_type','percent','discount_value',10,'discount_amount',20,'tax_amount',0,'service_charge_amount',0,'grand_total',130,'discount_approved_by', :'manager'),
++   jsonb_build_object('subtotal',150,'discount_type','percent','discount_value',10,'discount_amount',20,'tax_amount',0,'service_charge_amount',0,'grand_total',130,'discount_approved_by', :'manager', 'cashier_id', :'manager'),
+    jsonb_build_array(test.item(150, 1))) || jsonb_build_object('discount_approval_token', :'mgr_login'))->>'message' = 'SALE_TOTALS_MISMATCH', 'discount not matching 10% -> SALE_TOTALS_MISMATCH');
+ select test.ok(test.op(:'key1', 'sale', test.raw_sale('99999999-0000-0000-0000-000000000410',
+-   jsonb_build_object('subtotal',150,'discount_amount',20,'tax_amount',0,'service_charge_amount',0,'grand_total',130,'discount_approved_by', :'manager'),
++   jsonb_build_object('subtotal',150,'discount_amount',20,'tax_amount',0,'service_charge_amount',0,'grand_total',130,'discount_approved_by', :'manager', 'cashier_id', :'manager'),
+    jsonb_build_array(test.item(150, 1))) || jsonb_build_object('discount_approval_token', :'mgr_login'))->>'message' = 'SALE_TOTALS_MISMATCH', 'discount without a discount type -> SALE_TOTALS_MISMATCH');
+ select test.ok(test.op(:'key1', 'sale', test.raw_sale('99999999-0000-0000-0000-000000000410',
+    '{"subtotal":150,"discount_amount":0,"tax_amount":-20,"service_charge_amount":0,"grand_total":130}',
