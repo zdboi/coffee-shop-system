@@ -41,6 +41,21 @@
 --      * The money of a finished sale can't be changed afterwards (SALE_LOCKED).
 --      * Refunds imported from the old offline app are marked (imported_at)
 --        and checked only against the hard limits.
+--   8. Security review fixes of 2026-10-19:
+--      * The old live column profiles.pin_hash is emptied and kept empty (F1).
+--      * A new PIN sign-in on a counter ends that counter's earlier sign-ins (F2).
+--      * Manager / admin PINs must be 6 digits (PIN_TOO_SHORT); the Back
+--        Office is told who still has a shorter PIN and which counters were
+--        locked by wrong PINs (decision 8, F4).
+--      * QR ordering has per-table and per-shop limits on top of the
+--        per-phone ones (F5, section 13a).
+--      * Counter sales / refunds / pay-outs that look odd are flagged for the
+--        owner: TAX_MISMATCH, PAYMENT_MISMATCH, STAFF_MISMATCH, big pay-outs
+--        (F6, F7, F8).
+--      * Counters read only the tables they need (F9); internal helper
+--        functions can't be called through the API (F10).
+--      * Adding a customer at the counter needs their consent (F11).
+--      * fo_sync answers only with known error codes (F13).
 -- =============================================================================
 begin;
 
@@ -78,6 +93,24 @@ create table if not exists public.staff_pins (
   legacy_sha256 text,              -- imported from the old offline app; upgraded on first login
   updated_at timestamptz not null default now()
 );
+-- How many digits the PIN has (4, 5 or 6). Null = not known yet (PINs saved
+-- before 2026-10-19); it is filled in the next time that person signs in.
+-- Managers / admins need 6 digits (security decision 8).
+alter table public.staff_pins add column if not exists pin_length smallint;
+
+-- One row each time wrong PINs LOCK a counter (see _pin_locked_until). The
+-- owner sees the last 7 days in the Back Office (bo_bootstrap -> pin_lockouts),
+-- so someone guessing PINs on a counter does not go unnoticed.
+create table if not exists public.pin_lock_events (
+  id bigint generated always as identity primary key,
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  device_user_id uuid not null,        -- the counter's login
+  device_id uuid,                      -- the counter (devices.id), if known
+  device_name text,
+  locked_at timestamptz not null default now(),
+  locked_until timestamptz not null
+);
+create index if not exists pin_lock_events_business_idx on public.pin_lock_events(business_id, locked_at desc);
 
 -- One row per PIN login on a counter. The app keeps the secret token; we only
 -- store its fingerprint (sha256), so a database leak can't be replayed.
@@ -247,6 +280,19 @@ alter table public.refunds add column if not exists performed_by uuid;
 alter table public.refunds add column if not exists performed_by_name text;
 alter table public.refunds add column if not exists imported_at timestamptz;
 
+-- Review flags and "who was really signed in" (security review 2026-10-19, F6-F8).
+--   signed_in_staff_id = the staff member of the counter's latest ONLINE PIN
+--     sign-in when the action uploaded (the server knows this; the counter's own
+--     cashier_id / performed_by is only what the counter says). Set only by fo_sync.
+--   needs_review / review_reason on refunds and pay-outs: like on sales, set by
+--     the server, cleared by the owner in the Back Office after checking.
+alter table public.sales add column if not exists signed_in_staff_id uuid;
+alter table public.refunds add column if not exists signed_in_staff_id uuid;
+alter table public.refunds add column if not exists needs_review boolean not null default false;
+alter table public.refunds add column if not exists review_reason text;
+alter table public.audit_log add column if not exists signed_in_staff_id uuid;
+alter table public.cash_movements add column if not exists needs_review boolean not null default false;
+
 alter table public.sale_items add column if not exists notes text;
 create index if not exists sale_items_sale_idx on public.sale_items(sale_id);
 create index if not exists payments_sale_idx on public.payments(sale_id);
@@ -268,6 +314,34 @@ alter table public.settings add column if not exists stamps_per_reward integer n
 alter table public.settings add column if not exists timezone text not null default 'Asia/Manila';
 alter table public.settings add column if not exists theme text not null default 'light';
 alter table public.settings add column if not exists order_page_url text;
+-- A counter pay-out (cash taken out of the drawer) above this many pesos is
+-- flagged "needs review" for the owner. Change it in Back Office settings.
+alter table public.settings add column if not exists payout_review_limit numeric not null default 1000;
+
+-- Speed up the QR flood limits (section 13a).
+create index if not exists qr_orders_table_status_idx on public.qr_orders(table_id, status);
+create index if not exists customers_business_created_idx on public.customers(business_id, created_at);
+
+-- Old PIN data (security review 2026-10-19, F1). The live schema kept staff PIN
+-- hashes in profiles.pin_hash, which every login of the shop can read. PINs now
+-- live in staff_pins (unreadable). So: empty the old column now, and a trigger
+-- keeps it empty forever (anything written there is thrown away). The column
+-- itself stays until go-live because the old apps may still select it
+-- (decision 9); a later 005 script drops it:
+--   alter table public.profiles drop column pin_hash;
+create or replace function public._profiles_no_pin_hash() returns trigger
+language plpgsql set search_path = public as $$
+begin new.pin_hash := null; return new; end $$;
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'profiles' and column_name = 'pin_hash') then
+    update public.profiles set pin_hash = null where pin_hash is not null;
+    execute 'drop trigger if exists profiles_no_pin_hash on public.profiles';
+    execute 'create trigger profiles_no_pin_hash before insert or update on public.profiles
+               for each row execute function public._profiles_no_pin_hash()';
+  end if;
+end $$;
 
 create unique index if not exists sync_operations_operation_id_key on public.sync_operations(operation_id);
 create unique index if not exists settings_business_id_key on public.settings(business_id);
@@ -524,7 +598,7 @@ declare
     'customers','qr_orders','sync_operations'];
 begin
   foreach t in array std_tables || array['businesses','profiles','staff_pins','staff_sessions','auth_attempts',
-      'device_pairing_codes','customer_devices','qr_order_counters'] loop
+      'device_pairing_codes','customer_devices','qr_order_counters','pin_lock_events'] loop
     execute format('alter table public.%I enable row level security', t);
     for p in select policyname from pg_policies where schemaname = 'public' and tablename = t loop
       execute format('drop policy %I on public.%I', p.policyname, t);
@@ -536,6 +610,14 @@ begin
       -- Customer records hold full phone numbers: only the owner's login reads them
       -- directly. Counters use search_customers() / fo_add_customer(), which mask numbers.
       execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3)', t || '_read', t);
+    elsif t in ('suppliers','purchases','production_batches','waste','audit_log','reconciliation_issues','sync_operations','stores') then
+      -- Office data a counter never needs (security review 2026-10-19, F9): only
+      -- logins with a staff-type profile (the owner's email login) read it.
+      -- A paired counter (DEVICE login, rank 0) reads none of it.
+      execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 1)', t || '_read', t);
+    elsif t = 'devices' then
+      -- The owner sees every counter; a counter sees only its OWN row.
+      execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()) and ((select public.app_rank()) >= 1 or auth_user_id = (select auth.uid())))', t || '_read', t);
     else
       -- Everyone who belongs to the business (owner, counter devices) can read.
       execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()))', t || '_read', t);
@@ -562,8 +644,9 @@ create policy businesses_owner_update on public.businesses for update to authent
   using (id = (select public.current_business_id()) and (select public.app_rank()) >= 3)
   with check (id = (select public.current_business_id()));
 
+-- Profiles: the owner sees the shop's logins; a counter sees only its own row.
 create policy profiles_read on public.profiles for select to authenticated
-  using (business_id = (select public.current_business_id()));
+  using (business_id = (select public.current_business_id()) and (id = auth.uid() or (select public.app_rank()) >= 1));
 create policy profiles_owner_insert on public.profiles for insert to authenticated
   with check (business_id = (select public.current_business_id()) and (select public.is_owner()));
 create policy profiles_update on public.profiles for update to authenticated
@@ -571,6 +654,10 @@ create policy profiles_update on public.profiles for update to authenticated
   with check (business_id = (select public.current_business_id()));
 create policy profiles_owner_delete on public.profiles for delete to authenticated
   using (business_id = (select public.current_business_id()) and (select public.is_owner()) and id <> auth.uid());
+-- Counter lock alerts: the owner reads them (bo_bootstrap -> pin_lockouts); only
+-- staff_pin_login writes them.
+create policy pin_lock_events_owner_read on public.pin_lock_events for select to authenticated
+  using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3);
 -- staff_pins, staff_sessions, auth_attempts, device_pairing_codes, customer_devices,
 -- qr_order_counters: RLS on, no policies => only the functions below can touch them.
 
@@ -651,8 +738,14 @@ end $$;
 -- ops = [{op:'upsert', table, row} (full row) | {op:'update', table, row} (id + changed columns)
 --        | {op:'insert_ignore', table, row} | {op:'delete', table, id}
 --        | {op:'delete_where', table, where:{col:value,...}}]
+-- SECURITY DEFINER (since 2026-10-19, F10): the row helpers above are internal
+-- (not callable through the API), so this function runs with the owner's rights
+-- and does the shop check itself on EVERY op: only the owner's email login
+-- (rank 3) may call it, every row written gets the caller's business_id, an
+-- existing row of another shop can't be overwritten (FORBIDDEN_ROW), and
+-- update / delete only touch rows of the caller's shop.
 create or replace function public.apply_changes(p_ops jsonb) returns jsonb
-language plpgsql volatile security invoker set search_path = public as $$
+language plpgsql volatile security definer set search_path = public as $$
 declare
   v_op jsonb; v_table text; v_n integer := 0; v_biz uuid := public.current_business_id();
   v_sql text; k text; v_key text; v_row jsonb;
@@ -673,11 +766,11 @@ begin
       continue;
     end if;
     case v_op->>'op'
-      when 'upsert' then perform public._write_row(v_table, v_row, v_key, 'update');
-      when 'update' then perform public._update_row(v_table, v_row, v_key);
-      when 'insert_ignore' then perform public._write_row(v_table, v_row, v_key, 'nothing');
+      when 'upsert' then perform public._write_row(v_table, v_row, v_key, 'update', v_biz);
+      when 'update' then perform public._update_row(v_table, v_row, v_key, v_biz);
+      when 'insert_ignore' then perform public._write_row(v_table, v_row, v_key, 'nothing', v_biz);
       when 'delete' then
-        execute format('delete from public.%I where id = $1', v_table) using (v_op->>'id')::uuid;
+        execute format('delete from public.%I where id = $1 and business_id = $2', v_table) using (v_op->>'id')::uuid, v_biz;
       when 'delete_where' then
         v_sql := format('delete from public.%I where business_id = $1', v_table);
         for k in select jsonb_object_keys(coalesce(v_op->'where', '{}'::jsonb)) loop
@@ -955,6 +1048,50 @@ language sql stable security definer set search_path = public as $$
   where s.business_id = public.current_business_id() and (sp.pin_hash is not null or sp.legacy_sha256 is not null)
 $$;
 
+-- Security decision 8: managers and admins need a 6-digit PIN. Staff members of
+-- the caller's shop who are MANAGER / ADMIN (and active) but whose PIN is shorter
+-- than 6 digits, or of unknown length (saved before 2026-10-19 and not used
+-- since), are listed here. Their PIN still works (no lock-out on day one); the
+-- Back Office asks the owner to give them a new one. Changing someone's role to
+-- MANAGER / ADMIN puts them on this list straight away if their PIN is short.
+-- Only the owner's login gets the list (anyone else: empty).
+create or replace function public.staff_pin_update_needed() returns setof uuid
+language sql stable security definer set search_path = public as $$
+  select s.id from public.staff s join public.staff_pins sp on sp.staff_id = s.id
+  where s.business_id = public.current_business_id() and public.is_owner()
+    and s.active and s.role in ('MANAGER', 'ADMIN')
+    and (sp.pin_hash is not null or sp.legacy_sha256 is not null)
+    and coalesce(sp.pin_length, 0) < 6
+$$;
+
+-- The shortest PIN allowed for a role: 6 digits for MANAGER / ADMIN, 4 for cashiers.
+create or replace function public._min_pin_length(p_role text) returns integer
+language sql immutable as $$
+  select case when p_role in ('MANAGER', 'ADMIN') then 6 else 4 end
+$$;
+
+-- After a wrong PIN: is this counter locked now? If it is, and this wrong PIN
+-- is what locked it (no lock event yet for this lock), remember it in
+-- pin_lock_events for the owner's alert. Returns when the lock ends (or null).
+create or replace function public._note_pin_lock(p_biz uuid, p_uid uuid) returns timestamptz
+language plpgsql volatile security definer set search_path = public as $$
+declare v_until timestamptz := public._pin_locked_until(p_uid); v_dev public.devices%rowtype;
+begin
+  if v_until is null then return null; end if;
+  if not exists (select 1 from public.pin_lock_events
+                 where device_user_id = p_uid and locked_until > now() and locked_at > now() - interval '1 day') then
+    select * into v_dev from public.devices where auth_user_id = p_uid and business_id = p_biz limit 1;
+    insert into public.pin_lock_events(business_id, device_user_id, device_id, device_name, locked_until)
+      values (p_biz, p_uid, v_dev.id, coalesce(v_dev.device_name, 'Counter'), v_until);
+    delete from public.pin_lock_events where locked_at < now() - interval '30 days';
+  else
+    -- a longer lock (more wrong PINs): keep the alert's end time up to date
+    update public.pin_lock_events set locked_until = greatest(locked_until, v_until)
+      where device_user_id = p_uid and locked_until > now() and locked_at > now() - interval '1 day';
+  end if;
+  return v_until;
+end $$;
+
 -- PIN login. Returns {token, expires_at, staff:{id,name,role}} or {error:'...'}.
 --   p_purpose 'LOGIN'    = staff member signs in on this counter (16 hours).
 --                          A MANAGER / ADMIN's sign-in token also approves their
@@ -970,7 +1107,15 @@ $$;
 -- A PIN that belongs to TWO active staff members (e.g. an old-app PIN imported
 -- for one person is the same as someone else's PIN) signs nobody in:
 -- {error:'PIN_AMBIGUOUS'} (it does not say who). The owner fixes it by giving one
--- of them a new PIN in the Back Office (Staff & PINs).
+-- of them a new PIN in the Back Office (Staff & PINs). Since 2026-10-19 this
+-- answer COUNTS as a wrong PIN for the lock (otherwise it could be used to test
+-- PINs without limit).
+-- A successful LOGIN ends every earlier LOGIN sign-in of THIS counter login
+-- (the person before is signed out on the server too, F2). OVERRIDE approvals
+-- and other counters are not touched. The counter uploads its waiting actions
+-- BEFORE a new online sign-in, so the earlier person's actions still go through.
+-- When a wrong PIN locks the counter, a row is added to pin_lock_events (the
+-- owner's alert in the Back Office).
 create or replace function public.staff_pin_login(p_pin text, p_purpose text default 'LOGIN', p_min_role text default null)
 returns jsonb language plpgsql volatile security definer set search_path = public, extensions as $$
 declare
@@ -1006,7 +1151,9 @@ begin
   end loop;
   if v_matches > 1 then
     -- The PIN is right, but for more than one person: sign nobody in, upgrade
-    -- nothing, and don't say who. (Not counted as a wrong PIN.)
+    -- nothing, and don't say who. Counted like a wrong PIN for the lock.
+    insert into public.auth_attempts(subject, kind, success) values (v_uid, 'PIN', false);
+    perform public._note_pin_lock(v_biz, v_uid);
     return jsonb_build_object('error', 'PIN_AMBIGUOUS');
   end if;
   if v_matches = 1 and v_legacy then
@@ -1014,10 +1161,14 @@ begin
     update public.staff_pins set pin_hash = crypt(p_pin, gen_salt('bf', 8)), legacy_sha256 = null, updated_at = now()
       where staff_id = v_id;
   end if;
+  if v_matches = 1 then
+    -- now we know how many digits this PIN has (for the 6-digit rule)
+    update public.staff_pins set pin_length = length(p_pin) where staff_id = v_id and pin_length is distinct from length(p_pin);
+  end if;
   insert into public.auth_attempts(subject, kind, success) values (v_uid, 'PIN', v_id is not null);
   delete from public.auth_attempts where at < now() - interval '2 days';
   if v_id is null then
-    v_locked := public._pin_locked_until(v_uid);
+    v_locked := public._note_pin_lock(v_biz, v_uid);
     if v_locked is not null then
       return jsonb_build_object('error', 'TOO_MANY_ATTEMPTS', 'locked_until', v_locked);
     end if;
@@ -1028,6 +1179,11 @@ begin
   end if;
   v_token := encode(gen_random_bytes(32), 'hex');
   v_ttl := case when v_purpose = 'OVERRIDE' then interval '24 hours' else interval '16 hours' end;
+  if v_purpose = 'LOGIN' then
+    -- a new sign-in on this counter ends the earlier ones (F2)
+    update public.staff_sessions set revoked_at = now()
+      where device_user_id = v_uid and purpose = 'LOGIN' and revoked_at is null;
+  end if;
   insert into public.staff_sessions(staff_id, business_id, device_user_id, token_hash, purpose, expires_at)
     values (v_id, v_biz, v_uid, encode(digest(v_token, 'sha256'), 'hex'), v_purpose, now() + v_ttl);
   delete from public.staff_sessions where expires_at < now() - interval '2 days';
@@ -1042,15 +1198,20 @@ language sql volatile security definer set search_path = public, extensions as $
 $$;
 
 -- Admin sets / resets a staff member's PIN. Returns {ok:true} or {error:'...'}.
+--   PIN_FORMAT    = not 4-6 digits
+--   PIN_TOO_SHORT = a MANAGER / ADMIN needs 6 digits (security decision 8)
+--   PIN_IN_USE    = another active staff member already has that PIN
 create or replace function public.staff_set_pin(p_staff_id uuid, p_pin text) returns jsonb
 language plpgsql volatile security definer set search_path = public, extensions as $$
-declare v_biz uuid := public.current_business_id(); r record;
+declare v_biz uuid := public.current_business_id(); r record; v_role text;
 begin
   if v_biz is null or public.app_rank() < 3 then return jsonb_build_object('error', 'ADMIN_ONLY'); end if;
-  if not exists (select 1 from public.staff where id = p_staff_id and business_id = v_biz) then
+  select role into v_role from public.staff where id = p_staff_id and business_id = v_biz;
+  if v_role is null then
     return jsonb_build_object('error', 'UNKNOWN_STAFF');
   end if;
   if p_pin is null or p_pin !~ '^\d{4,6}$' then return jsonb_build_object('error', 'PIN_FORMAT'); end if;
+  if length(p_pin) < public._min_pin_length(v_role) then return jsonb_build_object('error', 'PIN_TOO_SHORT'); end if;
   for r in
     select sp.pin_hash, sp.legacy_sha256 from public.staff_pins sp join public.staff s on s.id = sp.staff_id
     where s.business_id = v_biz and s.active and s.id <> p_staff_id
@@ -1060,23 +1221,37 @@ begin
       return jsonb_build_object('error', 'PIN_IN_USE');
     end if;
   end loop;
-  insert into public.staff_pins(staff_id, pin_hash, legacy_sha256, updated_at)
-    values (p_staff_id, crypt(p_pin, gen_salt('bf', 8)), null, now())
-    on conflict (staff_id) do update set pin_hash = excluded.pin_hash, legacy_sha256 = null, updated_at = now();
+  insert into public.staff_pins(staff_id, pin_hash, legacy_sha256, pin_length, updated_at)
+    values (p_staff_id, crypt(p_pin, gen_salt('bf', 8)), null, length(p_pin), now())
+    on conflict (staff_id) do update set pin_hash = excluded.pin_hash, legacy_sha256 = null,
+      pin_length = excluded.pin_length, updated_at = now();
   update public.staff_sessions set revoked_at = now() where staff_id = p_staff_id and revoked_at is null;
   return jsonb_build_object('ok', true);
 end $$;
 
 -- Used only when importing from the old offline app: keeps everyone's old PIN working.
+-- The old app allowed 4-6 digit PINs and stored sha256('coffeepos:' || PIN). To
+-- know the PIN's length (security decision 8), every 4- and 5-digit PIN is tried
+-- (110,000 tries, well under a second); no match = a 6-digit PIN. A MANAGER /
+-- ADMIN whose old PIN is shorter than 6 digits is refused: PIN_TOO_SHORT (the
+-- owner gives them a new 6-digit PIN in Staff & PINs instead).
 create or replace function public.staff_import_legacy_pin(p_staff_id uuid, p_sha256 text) returns void
-language plpgsql volatile security definer set search_path = public as $$
+language plpgsql volatile security definer set search_path = public, extensions as $$
+declare v_role text; v_len integer;
 begin
   if public.app_rank() < 3 then raise exception 'ADMIN_ONLY'; end if;
-  if not exists (select 1 from public.staff where id = p_staff_id and business_id = public.current_business_id()) then
+  select role into v_role from public.staff where id = p_staff_id and business_id = public.current_business_id();
+  if v_role is null then
     raise exception 'UNKNOWN_STAFF';
   end if;
-  if p_sha256 !~ '^[0-9a-f]{64}$' then raise exception 'BAD_HASH'; end if;
-  insert into public.staff_pins(staff_id, legacy_sha256) values (p_staff_id, p_sha256)
+  if p_sha256 is null or p_sha256 !~ '^[0-9a-f]{64}$' then raise exception 'BAD_HASH'; end if;
+  select min(x.len) into v_len
+  from (values (4), (5)) x(len)
+  where exists (select 1 from generate_series(0, (10 ^ x.len)::integer - 1) g
+                where encode(digest('coffeepos:' || lpad(g::text, x.len, '0'), 'sha256'), 'hex') = p_sha256);
+  v_len := coalesce(v_len, 6);
+  if v_len < public._min_pin_length(v_role) then raise exception 'PIN_TOO_SHORT'; end if;
+  insert into public.staff_pins(staff_id, legacy_sha256, pin_length) values (p_staff_id, p_sha256, v_len)
     on conflict (staff_id) do nothing;
 end $$;
 
@@ -1216,17 +1391,9 @@ end $$;
 -- -----------------------------------------------------------------------------
 -- 11. Data loading for the apps (read-only, Row Level Security applies)
 -- -----------------------------------------------------------------------------
-create or replace function public._next_numbers(p_biz uuid, p_tag text) returns jsonb
-language sql stable security invoker set search_path = public as $$
-  select jsonb_build_object(
-    'year', extract(year from now())::int,
-    'pos', coalesce((select max(nullif(regexp_replace(split_part(transaction_number, '-', 4), '\D', '', 'g'), '')::int)
-                     from public.sales where business_id = p_biz
-                       and transaction_number like 'POS-' || p_tag || '-' || extract(year from now())::int || '-%'), 0),
-    'shift', coalesce((select max(nullif(regexp_replace(split_part(shift_number, '-', 4), '\D', '', 'g'), '')::int)
-                       from public.shifts where business_id = p_biz
-                         and shift_number like 'SHIFT-' || p_tag || '-' || extract(year from now())::int || '-%'), 0))
-$$;
+-- (The helper _next_numbers() of earlier test copies is now part of fo_bootstrap
+-- below, so no internal helper has to be callable through the API.)
+drop function if exists public._next_numbers(uuid, text);
 
 create or replace function public.fo_bootstrap(p_device_key text) returns jsonb
 language plpgsql stable security invoker set search_path = public as $$
@@ -1245,7 +1412,15 @@ begin
     'business', (select to_jsonb(b) from public.businesses b where b.id = v_biz),
     'settings', (select to_jsonb(s) from public.settings s where s.business_id = v_biz),
     'device', case when v_dev.id is null then null else to_jsonb(v_dev) end,
-    'next_numbers', case when v_dev.id is null then null else public._next_numbers(v_biz, v_dev.device_tag) end,
+    -- the highest receipt / shift numbers this counter has used this year
+    'next_numbers', case when v_dev.id is null then null else jsonb_build_object(
+      'year', extract(year from now())::int,
+      'pos', coalesce((select max(nullif(regexp_replace(split_part(transaction_number, '-', 4), '\D', '', 'g'), '')::int)
+                       from public.sales where business_id = v_biz
+                         and transaction_number like 'POS-' || v_dev.device_tag || '-' || extract(year from now())::int || '-%'), 0),
+      'shift', coalesce((select max(nullif(regexp_replace(split_part(shift_number, '-', 4), '\D', '', 'g'), '')::int)
+                         from public.shifts where business_id = v_biz
+                           and shift_number like 'SHIFT-' || v_dev.device_tag || '-' || extract(year from now())::int || '-%'), 0)) end,
     'staff', coalesce((select jsonb_agg(jsonb_build_object('id', st.id, 'name', st.name, 'role', st.role, 'active', st.active,
                          'has_pin', st.id in (select public.staff_pin_ids())) order by st.name)
                        from public.staff st where st.business_id = v_biz), '[]'::jsonb),
@@ -1268,18 +1443,33 @@ begin
   );
 end $$;
 
+-- Back Office start-up data. Besides the shop's data it returns two owner alerts:
+--   pin_update_needed = ids of managers / admins whose PIN is shorter than 6
+--                       digits or of unknown length (security decision 8);
+--                       staff rows also carry pin_update_needed true/false.
+--   pin_lockouts      = counters locked by wrong PINs in the last 7 days:
+--                       [{device_id, device_name, locked_at, locked_until}], newest first.
+-- Both are empty for any login that is not the owner's.
 create or replace function public.bo_bootstrap() returns jsonb
 language plpgsql stable security invoker set search_path = public as $$
-declare v_biz uuid := public.current_business_id();
+declare v_biz uuid := public.current_business_id(); v_upd uuid[];
 begin
   if v_biz is null then raise exception 'NOT_A_MEMBER'; end if;
+  select coalesce(array_agg(x), '{}') into v_upd from public.staff_pin_update_needed() x;
   return jsonb_build_object(
     'server_time', now(),
     'is_owner', public.is_owner(),
+    'pin_update_needed', to_jsonb(v_upd),
+    'pin_lockouts', coalesce((select jsonb_agg(jsonb_build_object('device_id', e.device_id, 'device_name', e.device_name,
+                        'locked_at', e.locked_at, 'locked_until', e.locked_until) order by e.locked_at desc)
+                      from (select * from public.pin_lock_events
+                            where business_id = v_biz and locked_at > now() - interval '7 days'
+                            order by locked_at desc limit 100) e), '[]'::jsonb),
     'rank', public.app_rank(),
     'business', (select to_jsonb(b) from public.businesses b where b.id = v_biz),
     'settings', (select to_jsonb(s) from public.settings s where s.business_id = v_biz),
-    'staff', coalesce((select jsonb_agg(to_jsonb(st) || jsonb_build_object('has_pin', st.id in (select public.staff_pin_ids())) order by st.name)
+    'staff', coalesce((select jsonb_agg(to_jsonb(st) || jsonb_build_object('has_pin', st.id in (select public.staff_pin_ids()),
+                                                                          'pin_update_needed', st.id = any(v_upd)) order by st.name)
                        from public.staff st where st.business_id = v_biz), '[]'::jsonb),
     'categories', coalesce((select jsonb_agg(to_jsonb(x)) from public.categories x where x.business_id = v_biz), '[]'::jsonb),
     'suppliers', coalesce((select jsonb_agg(to_jsonb(x)) from public.suppliers x where x.business_id = v_biz), '[]'::jsonb),
@@ -1541,6 +1731,64 @@ begin
   return nullif(array_to_string(v_reasons, ', '), '');
 end $$;
 
+-- Who is really signed in on this counter, as far as the SERVER knows: the staff
+-- member of the counter login's latest ONLINE PIN sign-in (staff_pin_login with
+-- 'LOGIN'), even if it has ended since (the counter uploads its queue before the
+-- next sign-in). Null when nobody ever signed in online on this counter login.
+create or replace function public._signed_in_staff(p_device_user uuid) returns uuid
+language sql stable security definer set search_path = public as $$
+  select staff_id from public.staff_sessions
+  where device_user_id = p_device_user and purpose = 'LOGIN'
+  order by created_at desc limit 1
+$$;
+
+-- Money checks of a FINISHED counter sale that FLAG it for the owner (they do not
+-- refuse it: the counter may have been offline while the settings changed).
+-- Returns null (all fine) or the reasons, comma separated:
+--   TAX_MISMATCH     = tax or service charge is not what the shop's CURRENT
+--                      settings give (same maths as computeSaleTotals():
+--                      tax = (subtotal - discount) x tax % (0 when prices
+--                      include tax), service = (subtotal - discount) x service %),
+--                      more than 2 centavos off.
+--   PAYMENT_MISMATCH = the payment does not cover the grand total: no payment
+--                      for a sale above ₱0, or an amount below the total. Cash
+--                      may be MORE than the total (change is given back), but
+--                      the change can't be more than what was handed over minus
+--                      the total. Other methods (GCash, card...) must match it.
+create or replace function public._sale_money_review(p_biz uuid, p_sale jsonb, p_payment jsonb) returns text
+language plpgsql stable security definer set search_path = public as $$
+declare
+  c_tol constant numeric := 0.02;
+  v_s public.settings%rowtype; v_reasons text[] := '{}';
+  v_after numeric; v_tax numeric; v_svc numeric; v_grand numeric;
+  v_amt numeric; v_tend numeric; v_change numeric; v_method text;
+begin
+  select * into v_s from public.settings where business_id = p_biz;
+  v_after := coalesce(public._to_num(p_sale->>'subtotal'), 0) - coalesce(public._to_num(p_sale->>'discount_amount'), 0);
+  v_tax := case when coalesce(v_s.tax_inclusive, false) then 0 else v_after * coalesce(v_s.tax_pct, 0) / 100 end;
+  v_svc := v_after * coalesce(v_s.service_charge_pct, 0) / 100;
+  if abs(coalesce(public._to_num(p_sale->>'tax_amount'), 0) - v_tax) > c_tol
+     or abs(coalesce(public._to_num(p_sale->>'service_charge_amount'), 0) - v_svc) > c_tol then
+    v_reasons := v_reasons || 'TAX_MISMATCH'::text;
+  end if;
+  v_grand := round(coalesce(public._to_num(p_sale->>'grand_total'), 0), 2);
+  if jsonb_typeof(p_payment) is distinct from 'object' then
+    if v_grand > c_tol then v_reasons := v_reasons || 'PAYMENT_MISMATCH'::text; end if;
+  else
+    v_amt := public._to_num(p_payment->>'amount');
+    v_tend := public._to_num(p_payment->>'tendered');
+    v_change := public._to_num(p_payment->>'change');
+    v_method := upper(coalesce(p_payment->>'method', ''));
+    if v_amt is null or v_amt < v_grand - c_tol
+       or (v_method <> 'CASH' and v_amt > v_grand + c_tol)
+       or (v_method = 'CASH' and v_tend is not null and v_tend < v_grand - c_tol)
+       or (v_method = 'CASH' and coalesce(v_change, 0) > greatest(coalesce(v_tend, v_amt, 0), v_amt) - v_grand + c_tol) then
+      v_reasons := v_reasons || 'PAYMENT_MISMATCH'::text;
+    end if;
+  end if;
+  return nullif(array_to_string(v_reasons, ', '), '');
+end $$;
+
 -- Stock lines from a counter must use one of THIS shop's ingredients.
 create or replace function public._require_ingredient(p_biz uuid, p_line jsonb) returns void
 language plpgsql stable security definer set search_path = public as $$
@@ -1560,6 +1808,8 @@ declare
   v_shift public.shifts%rowtype; v_ref jsonb; v_status text;
   v_appr public.staff; v_sale_row public.sales%rowtype; v_prev numeric; v_type text; v_new_status text;
   v_closer_name text; v_reason text; v_qo public.qr_orders%rowtype; v_performer uuid; v_performer_name text;
+  v_signed uuid := public._signed_in_staff(p_dev.auth_user_id);   -- who signed in online on this counter (F8)
+  v_limit numeric;
 begin
   -- fo_sync only lets a paired counter call us with its own device row
   if p_dev.auth_user_id is distinct from auth.uid() then raise exception 'DEVICE_MISMATCH'; end if;
@@ -1598,7 +1848,12 @@ begin
 
   when 'cash_movement' then
     perform public._require_staff(p_biz, (p_d->>'performed_by')::uuid, 1);
-    perform public._write_row('cash_movements', p_d || jsonb_build_object('business_id', p_biz), 'id', 'nothing', p_biz);
+    -- A pay-out above the shop's limit (settings.payout_review_limit, ₱1000 by
+    -- default) is flagged for the owner to check (needs_review). Only the server sets it.
+    select coalesce(payout_review_limit, 1000) into v_limit from public.settings where business_id = p_biz;
+    perform public._write_row('cash_movements', p_d || jsonb_build_object('business_id', p_biz,
+      'needs_review', upper(coalesce(p_d->>'type', '')) = 'PAY_OUT'
+                      and coalesce(public._to_num(p_d->>'amount'), 0) > coalesce(v_limit, 1000)), 'id', 'nothing', p_biz);
     return 'ok';
 
   when 'sale' then
@@ -1639,13 +1894,22 @@ begin
                                      nullif(v_sale->>'cashier_id', '')::uuid);
       v_sale := v_sale || jsonb_build_object('discount_approved_by', v_appr.id, 'discount_approved_by_name', v_appr.name);
     end if;
-    -- A finished sale must add up (else SALE_TOTALS_MISMATCH), and is flagged for
-    -- review when sold below the menu. Only the server sets the review flag.
+    -- A finished sale must add up (else SALE_TOTALS_MISMATCH). It is FLAGGED for
+    -- review (not refused) when: sold below the menu (PRICE_BELOW_MENU /
+    -- NOT_ON_MENU), tax / service charge differ from the settings (TAX_MISMATCH),
+    -- the payment doesn't cover it (PAYMENT_MISMATCH), or its cashier is not the
+    -- person the server knows signed in on this counter (STAFF_MISMATCH).
+    -- Only the server sets the review flag and signed_in_staff_id.
     if v_status = 'COMPLETED' then
       perform public._check_sale_totals(v_sale, p_d->'items');
-      v_reason := public._sale_review_reason(p_biz, p_d->'items');
+      v_reason := nullif(concat_ws(', ',
+        public._sale_review_reason(p_biz, p_d->'items'),
+        public._sale_money_review(p_biz, v_sale, p_d->'payment'),
+        case when v_signed is null or v_signed is distinct from nullif(v_sale->>'cashier_id', '')::uuid
+             then 'STAFF_MISMATCH' end), '');
     end if;
-    v_sale := v_sale || jsonb_build_object('needs_review', v_reason is not null, 'review_reason', v_reason);
+    v_sale := v_sale || jsonb_build_object('needs_review', v_reason is not null, 'review_reason', v_reason,
+                                           'signed_in_staff_id', v_signed);
     -- A customer link must point at one of THIS shop's customers (else it is dropped).
     v_cust := nullif(v_sale->>'customer_id', '')::uuid;
     if v_cust is not null and not exists (select 1 from public.customers where id = v_cust and business_id = p_biz) then
@@ -1735,9 +1999,13 @@ begin
     if v_amount is null or v_amount < 0 then raise exception 'BAD_AMOUNT'; end if;
     select round(coalesce(sum(greatest(amount, 0)), 0), 2) into v_prev from public.refunds where sale_id = v_sale_row.id;
     if v_amount > round(greatest(coalesce(v_sale_row.grand_total, 0) - v_prev, 0), 2) + 0.01 then raise exception 'REFUND_TOO_LARGE'; end if;
+    -- Flag (not refuse) a refund whose performed_by is not the person the server
+    -- knows signed in on this counter: STAFF_MISMATCH.
+    v_reason := case when v_signed is null or v_signed is distinct from v_performer then 'STAFF_MISMATCH' end;
     perform public._write_row('refunds', v_ref || jsonb_build_object('business_id', p_biz, 'sale_id', v_sale_row.id,
       'amount', v_amount, 'approved_by', v_appr.id, 'approved_by_name', v_appr.name,
-      'performed_by', v_performer, 'performed_by_name', v_performer_name), 'id', 'error', p_biz);
+      'performed_by', v_performer, 'performed_by_name', v_performer_name,
+      'signed_in_staff_id', v_signed, 'needs_review', v_reason is not null, 'review_reason', v_reason), 'id', 'error', p_biz);
     -- A refund that lists items gives back at most what the customer paid for
     -- them (after the discount, with tax / service charge): REFUND_TOO_LARGE.
     -- Same rule as the Back Office (section 8b). VOID / FULL_REFUND of everything
@@ -1768,7 +2036,7 @@ begin
     return 'ok';
 
   when 'audit' then
-    perform public._write_row('audit_log', p_d || jsonb_build_object('business_id', p_biz), 'id', 'nothing', p_biz);
+    perform public._write_row('audit_log', p_d || jsonb_build_object('business_id', p_biz, 'signed_in_staff_id', v_signed), 'id', 'nothing', p_biz);
     return 'ok';
 
   when 'sold_out' then
@@ -1786,13 +2054,26 @@ end $$;
 -- Only a PAIRED COUNTER (DEVICE login) may call this, and only with its own device key.
 -- Each op is applied on its own: an op that fails leaves no trace (its approval
 -- token is not used up either) and the next ops still run.
+-- An op's error message is always one of the KNOWN codes below (F13); anything
+-- else (a database error text that could reveal how the database is built)
+-- becomes SERVER_ERROR, and the real text goes to the server log only.
+-- An op without a valid op_id answers BAD_OP.
+create or replace function public._fo_error_code(p_msg text) returns text
+language sql immutable as $$
+  select case when c = any(array['DEVICE_MISMATCH','SHIFT_NOT_FOUND','UNKNOWN_STAFF','ROLE_TOO_LOW','APPROVAL_REQUIRED',
+      'APPROVAL_INVALID','BAD_SALE','BAD_SALE_STATUS','QR_ORDER_ALREADY_PAID','SALE_TOTALS_MISMATCH','UNKNOWN_RECIPE',
+      'UNKNOWN_INGREDIENT','FORBIDDEN_ROW','BAD_REFUND','SALE_NOT_FOUND','SALE_NOT_REFUNDABLE','BAD_REFUND_TYPE','BAD_AMOUNT',
+      'REFUND_TOO_LARGE','RETURN_TOO_LARGE','SALE_LOCKED','UNKNOWN_OP','BAD_OP'])
+    then c else 'SERVER_ERROR' end
+  from (select substring(coalesce(p_msg, '') from '^[A-Z][A-Z_]+') as c) x
+$$;
 create or replace function public.fo_sync(p_device_key text, p_ops jsonb) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare
   v_uid uuid := auth.uid();
   v_biz uuid := public.current_business_id();
   v_role text; v_dev public.devices%rowtype;
-  v_op jsonb; v_d jsonb; v_opid uuid; v_type text; v_status text; v_entity uuid;
+  v_op jsonb; v_d jsonb; v_opid uuid; v_type text; v_status text; v_entity uuid; v_code text;
   v_out jsonb := '[]'::jsonb;
 begin
   if v_uid is null or v_biz is null then raise exception 'NOT_A_MEMBER'; end if;
@@ -1803,22 +2084,31 @@ begin
   if v_dev.auth_user_id is distinct from v_uid then raise exception 'DEVICE_MISMATCH'; end if;
   update public.devices set last_seen_at = now() where id = v_dev.id;
 
-  for v_op in select value from jsonb_array_elements(coalesce(p_ops, '[]'::jsonb)) loop
-    v_opid := (v_op->>'op_id')::uuid;
+  if jsonb_typeof(p_ops) is distinct from 'array' then p_ops := '[]'::jsonb; end if;
+  for v_op in select value from jsonb_array_elements(p_ops) loop
+    v_opid := public._to_uuid(v_op->>'op_id');
+    if v_opid is null then
+      v_out := v_out || jsonb_build_array(jsonb_build_object('op_id', v_op->'op_id', 'status', 'error', 'message', 'BAD_OP'));
+      continue;
+    end if;
     v_type := v_op->>'type';
-    v_d := coalesce(v_op->'data', '{}'::jsonb);
+    v_d := case when jsonb_typeof(v_op->'data') = 'object' then v_op->'data' else '{}'::jsonb end;
     if exists (select 1 from public.sync_operations where operation_id = v_opid) then
       v_out := v_out || jsonb_build_array(jsonb_build_object('op_id', v_opid, 'status', 'duplicate'));
       continue;
     end if;
     begin
       v_status := public._fo_apply(v_biz, v_dev, v_type, v_d);
-      v_entity := coalesce(nullif(v_d->>'id', ''), nullif(v_d->'sale'->>'id', ''), nullif(v_d->'refund'->>'id', ''), nullif(v_d->>'recipe_id', ''))::uuid;
+      v_entity := public._to_uuid(coalesce(nullif(v_d->>'id', ''), nullif(v_d->'sale'->>'id', ''), nullif(v_d->'refund'->>'id', ''), nullif(v_d->>'recipe_id', '')));
       insert into public.sync_operations(operation_id, business_id, device_id, entity_type, entity_id, operation_type, processed_at, result_summary)
         values (v_opid, v_biz, v_dev.id, v_type, v_entity, v_type, now(), v_status);
       v_out := v_out || jsonb_build_array(jsonb_build_object('op_id', v_opid, 'status', v_status));
     exception when others then
-      v_out := v_out || jsonb_build_array(jsonb_build_object('op_id', v_opid, 'status', 'error', 'message', sqlerrm));
+      v_code := public._fo_error_code(sqlerrm);
+      if v_code = 'SERVER_ERROR' then
+        raise log 'fo_sync op % (%) failed: % [%]', v_opid, v_type, sqlerrm, sqlstate;
+      end if;
+      v_out := v_out || jsonb_build_array(jsonb_build_object('op_id', v_opid, 'status', 'error', 'message', v_code));
     end;
   end loop;
   return v_out;
@@ -1829,7 +2119,14 @@ end $$;
 -- {customer:{...}, existing:true}; on a counter the phone comes back masked
 -- ('0917 ••• 4567', phone_masked = true). Look-ups by number are counted
 -- (max 60 per hour per counter) -> {error:'TOO_MANY_ATTEMPTS'}.
-create or replace function public.fo_add_customer(p_nickname text, p_phone text default null) returns jsonb
+-- p_consent (F11): the customer agreed to be saved (the counter asks them).
+-- Without it nothing is looked up or saved: {error:'CONSENT_REQUIRED'}; the new
+-- customer's consent_at is the moment of that agreement.
+-- A counter can create at most the shop-wide limit of new customers per hour
+-- (_qr_limits) -> {error:'TOO_MANY_SIGNUPS'} (the owner's login is not limited).
+-- (The earlier version without p_consent is removed.)
+drop function if exists public.fo_add_customer(text, text);
+create or replace function public.fo_add_customer(p_nickname text, p_phone text default null, p_consent boolean default false) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare
   v_biz uuid := public.current_business_id(); v_name text := public._clean_name(p_nickname); v_phone text;
@@ -1838,6 +2135,7 @@ begin
   if v_biz is null then raise exception 'NOT_A_MEMBER'; end if;
   select role into v_role from public.profiles where id = auth.uid();
   if coalesce(v_role, '') not in ('DEVICE', 'ADMIN') then raise exception 'NOT_ALLOWED'; end if;
+  if not coalesce(p_consent, false) then return jsonb_build_object('error', 'CONSENT_REQUIRED'); end if;
   if v_name is null then return jsonb_build_object('error', 'NAME_REQUIRED'); end if;
   if coalesce(btrim(p_phone), '') <> '' then
     v_phone := public._norm_phone(p_phone);
@@ -1848,8 +2146,11 @@ begin
     select * into v_c from public.customers where business_id = v_biz and phone = v_phone and merged_into is null;
     if found then return jsonb_build_object('customer', public._customer_for_staff(v_c, v_owner), 'existing', true); end if;
   end if;
+  if not v_owner and public._shop_signups_full(v_biz) then
+    return jsonb_build_object('error', 'TOO_MANY_SIGNUPS');
+  end if;
   insert into public.customers(business_id, nickname, phone, source, consent_at)
-    values (v_biz, v_name, v_phone, 'COUNTER', now()) returning * into v_c;
+    values (v_biz, v_name, v_phone, 'COUNTER', case when p_consent then now() end) returning * into v_c;
   return jsonb_build_object('customer', public._customer_for_staff(v_c, v_owner));
 end $$;
 
@@ -1915,6 +2216,30 @@ begin
     where id = p_keep returning * into v_keep;
   return to_jsonb(v_keep);
 end $$;
+
+-- -----------------------------------------------------------------------------
+-- 13a. Flood limits for QR ordering (security review 2026-10-19, F5)
+-- -----------------------------------------------------------------------------
+-- Anyone with a table's QR code can make a new anonymous login, so per-login
+-- limits alone don't stop a flood. These shop-wide limits do. ALL the numbers
+-- live HERE; change them in this one place.
+--   table_open_orders   10  orders still waiting (PENDING) at ONE table
+--   shop_orders_10min   60  new QR orders for the whole shop in 10 minutes
+--   shop_signups_hour   40  new customers for the whole shop in 1 hour
+--                           (QR sign-ups + customers added at a counter)
+-- Per login (unchanged): 3 open orders, 10 orders per hour, 5 phone reveals per
+-- 15 minutes. Answers: TOO_MANY_ORDERS (orders), TOO_MANY_SIGNUPS (new customers).
+create or replace function public._qr_limits() returns jsonb
+language sql immutable as $$
+  select '{"table_open_orders": 10, "shop_orders_10min": 60, "shop_signups_hour": 40}'::jsonb
+$$;
+
+-- True when the shop already got its hourly number of new customers.
+create or replace function public._shop_signups_full(p_biz uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select count(*) >= (public._qr_limits()->>'shop_signups_hour')::int
+  from public.customers where business_id = p_biz and created_at > now() - interval '1 hour'
+$$;
 
 -- -----------------------------------------------------------------------------
 -- 13. QR ordering (customer side). Customers log in anonymously; every function
@@ -2046,6 +2371,8 @@ begin
       return jsonb_build_object('error', 'PHONE_TAKEN');
     end if;
   end if;
+  -- shop-wide limit on new customers (section 13a)
+  if public._shop_signups_full(v_t.business_id) then return jsonb_build_object('error', 'TOO_MANY_SIGNUPS'); end if;
   insert into public.customers(business_id, nickname, phone, source, consent_at)
     values (v_t.business_id, v_name, v_phone, 'QR', now()) returning * into v_c;
   insert into public.customer_devices(auth_user_id, business_id, customer_id) values (v_uid, v_t.business_id, v_c.id);
@@ -2138,6 +2465,13 @@ begin
   if v_count >= 3 then return jsonb_build_object('error', 'TOO_MANY_OPEN_ORDERS'); end if;
   select count(*) into v_count from public.qr_orders where auth_user_id = v_uid and created_at > now() - interval '1 hour';
   if v_count >= 10 then return jsonb_build_object('error', 'TOO_MANY_ORDERS'); end if;
+  -- Shop-wide limits (section 13a). Orders of one shop are placed one at a time
+  -- (advisory lock), so two phones at the same moment can't both slip past a limit.
+  perform pg_advisory_xact_lock(hashtext('cccc.qr_order:' || v_t.business_id::text));
+  select count(*) into v_count from public.qr_orders where table_id = v_t.id and status = 'PENDING';
+  if v_count >= (public._qr_limits()->>'table_open_orders')::int then return jsonb_build_object('error', 'TOO_MANY_ORDERS'); end if;
+  select count(*) into v_count from public.qr_orders where business_id = v_t.business_id and created_at > now() - interval '10 minutes';
+  if v_count >= (public._qr_limits()->>'shop_orders_10min')::int then return jsonb_build_object('error', 'TOO_MANY_ORDERS'); end if;
 
   if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
     return jsonb_build_object('error', 'EMPTY_ORDER');
@@ -2226,6 +2560,7 @@ begin
   if v_t.id is null then return jsonb_build_object('error', 'TABLE_NOT_FOUND'); end if;
   update public.qr_orders set status = 'CANCELLED'
     where id = p_order_id and auth_user_id = auth.uid() and business_id = v_t.business_id and status = 'PENDING'
+      and paid_at is null      -- a paid order is never cancelled from the phone
     returning * into v_o;
   if v_o.id is null then return jsonb_build_object('error', 'CANNOT_CANCEL'); end if;
   return jsonb_build_object('order', to_jsonb(v_o) - 'auth_user_id');
@@ -2236,26 +2571,23 @@ end $$;
 -- -----------------------------------------------------------------------------
 -- public_fns: anyone with the shop's QR code (customers, even before login).
 -- member_fns: logged-in users; each function checks the caller's shop/role itself.
--- Everything else in the list below: internal only (no direct API access).
+-- EVERY other function in the public schema (all the "_" helpers, trigger
+-- functions, the signup trigger...) is internal only: no direct API access
+-- (security review 2026-10-19, F10). Functions that belong to a Postgres
+-- extension are left alone.
 do $$
 declare f record;
   public_fns text[] := array['get_qr_menu','qr_session','qr_register','qr_relink','qr_set_phone','qr_forget_device',
                              'qr_place_order','qr_my_orders','qr_cancel_order'];
-  member_fns text[] := array['current_business_id','current_role_rank','app_rank','is_owner','apply_changes','staff_pin_ids','staff_pin_login',
-    'staff_logout','staff_set_pin','staff_import_legacy_pin','create_device_pairing_code','redeem_device_pairing',
-    'revoke_device','unlock_device_pin','fo_bootstrap','bo_bootstrap','sales_report','search_customers','fo_sync',
-    'fo_add_customer','qr_update_order','merge_customers','_write_row','_update_row','_writable_tables','_role_rank','_norm_phone','_clean_name','_next_numbers'];
+  member_fns text[] := array['current_business_id','current_role_rank','app_rank','is_owner','apply_changes','staff_pin_ids',
+    'staff_pin_update_needed','staff_pin_login','staff_logout','staff_set_pin','staff_import_legacy_pin','create_device_pairing_code',
+    'redeem_device_pairing','revoke_device','unlock_device_pin','fo_bootstrap','bo_bootstrap','sales_report','search_customers',
+    'fo_sync','fo_add_customer','qr_update_order','merge_customers'];
 begin
   for f in
     select p.oid::regprocedure as sig, p.proname from pg_proc p
     where p.pronamespace = 'public'::regnamespace
-      and p.proname = any(public_fns || member_fns || array['_too_many_attempts','_pin_locked_until','_phone_lookup_allowed',
-        '_mask_phone','_customer_for_staff','_use_approval','_require_ingredient','_check_sale_totals','_menu_unit_price',
-        '_sale_review_reason','_next_device_tag','_next_numbers',
-        '_to_num','_to_uuid','_refund_items_cap','_check_refund','_check_sale_returns','_check_sale_refund_total',
-        '_stock_line_sale','_refund_caps_trigger','_lock_finished_sale',
-        '_require_staff','_fo_apply','_type_label','_public_modifier_groups','_recipe_makeable','_qr_table','_qr_customer_json',
-        'handle_new_user_signup','protect_profile_columns','touch_updated_at'])
+      and not exists (select 1 from pg_depend d where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
   loop
     execute format('revoke all on function %s from public, anon, authenticated', f.sig);
     if f.proname = any(public_fns) then

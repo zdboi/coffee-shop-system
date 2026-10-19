@@ -58,10 +58,14 @@
     PHONE_TAKEN: 'That number is already registered here.',
     NO_MATCH: 'No match for that number and name. Use the same name you gave us before.',
     TOO_MANY_ATTEMPTS: 'Too many tries. Please wait about 15 minutes, then try again.',
+    // qr_register: shop-wide limit on new customers. There's no guest ordering on this page
+    // (a name is needed to order), so point to the counter instead.
+    TOO_MANY_SIGNUPS: 'Lots of people are joining right now. Please wait a few minutes, or order at the counter.',
     BAD_OPTION: 'Something on the menu changed. Please remove that item and add it again.',
     BAD_QUANTITY: 'Please order 1 to 20 of each item.',
     TOO_MANY_OPEN_ORDERS: 'You already have 3 orders waiting. Please pay for those at the counter first.',
-    TOO_MANY_ORDERS: 'That\'s a lot of orders! Please order at the counter.',
+    // Also the shop-wide / per-table limit (F5): many orders in a short time.
+    TOO_MANY_ORDERS: 'We\'re getting a lot of orders right now. Please wait a few minutes or order at the counter.',
     EMPTY_ORDER: 'Your order is empty.',
     ORDER_TOO_BIG: 'That order is too big for the app. Please order at the counter.',
     CANNOT_CANCEL: 'The shop already started this order, so it can\'t be cancelled here. Please talk to our staff.',
