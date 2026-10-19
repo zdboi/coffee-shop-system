@@ -220,20 +220,22 @@ function renderStaff(){
   const me = BO.ownerStaff;
   content.innerHTML = `
     <div class="settings-block" style="max-width:1000px;">
-      <p class="hint" style="margin-bottom:12px;">Everyone who uses a counter signs in there with their own 4–6 digit PIN. PINs are checked by the server and stored scrambled — nobody can read them, so if someone forgets theirs, set a new one here.
+      ${pinUpdateBannerHtml()}
+      <p class="hint" style="margin-bottom:12px;">Everyone who uses a counter signs in there with their own PIN: <b>6 digits for managers and admins</b>, 4–6 digits for cashiers. PINs are checked by the server and stored scrambled — nobody can read them, so if someone forgets theirs, set a new one here.
         <b>Cashiers</b> sell. <b>Managers</b> can also approve discounts, refunds and voids. <b>Admin</b> is the same as a manager at the counter. A PIN never opens the Back Office — only your email login does.</p>
       <p class="hint" style="margin-bottom:12px;"><b>PIN stopped working?</b> If someone says the counter tells them <i>“Two staff members share this PIN”</i>, give one of those two people a new PIN here (press <b>Change PIN</b>). The counter never says who shares it — PINs are stored scrambled — so pick either person.</p>
       ${me && !me.has_pin ? `<div class="notice warn">You have no counter PIN yet. <a class="linklike" id="set-own-pin">Set your own PIN</a> so you can sign in at the counter.</div>` : ''}
       <div class="table-wrap"><table><thead><tr><th>Name</th><th>Role</th><th>PIN</th><th>Status</th><th></th></tr></thead><tbody>
         ${staff.map(u => `<tr class="${u.active === false ? 'muted-row' : ''}"><td><b>${esc(u.name)}</b>${me && u.id === me.id ? ' <span class="text-light">(you, the owner)</span>' : ''}${u.local_id ? ' <span class="badge badge-gray" title="Brought in from the old app">imported</span>' : ''}</td>
           <td>${esc(ROLE_LABEL[u.role] || u.role)}</td>
-          <td>${u.has_pin ? '<span class="badge badge-green">Set</span>' : '<span class="badge badge-yellow">Not set</span>'}</td>
+          <td>${u.has_pin ? (BO.pinUpdateNeeded.includes(String(u.id)) ? '<span class="badge badge-red" title="Managers and admins need a 6-digit PIN">Needs a new 6-digit PIN</span>' : '<span class="badge badge-green">Set</span>') : '<span class="badge badge-yellow">Not set</span>'}</td>
           <td>${u.active !== false ? '<span class="badge badge-green">Active</span>' : '<span class="badge badge-gray">Inactive</span>'}</td>
-          <td class="row-actions"><button class="btn btn-sm btn-ghost" data-pin="${esc(u.id)}">${u.has_pin ? 'Change PIN' : 'Set PIN'}</button>
+          <td class="row-actions"><button class="btn btn-sm btn-ghost" data-pin="${esc(u.id)}">${u.has_pin ? (BO.pinUpdateNeeded.includes(String(u.id)) ? 'Set new PIN' : 'Change PIN') : 'Set PIN'}</button>
             <button class="btn btn-sm btn-ghost" data-edit="${esc(u.id)}">Edit</button>
             ${me && u.id === me.id ? '' : `<button class="btn btn-sm btn-ghost" data-toggle="${esc(u.id)}">${u.active !== false ? 'Deactivate' : 'Reactivate'}</button>`}</td></tr>`).join('')}
       </tbody></table></div>
     </div>`;
+  wirePinUpdateBanner(content);
   const own = content.querySelector('#set-own-pin'); if(own) own.onclick = () => openSetPinModal(me.id);
   content.querySelectorAll('[data-pin]').forEach(b => b.onclick = () => openSetPinModal(b.dataset.pin));
   content.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openStaffForm(b.dataset.edit));
@@ -255,20 +257,35 @@ function openStaffForm(id){
     <div class="form-row"><label for="sf-name">Name</label><input id="sf-name" maxlength="40" value="${esc(u ? u.name : '')}" placeholder="e.g. Maria Santos" autocomplete="off"></div>
     <div class="form-row"><label for="sf-role">Role</label><select id="sf-role" ${isOwner ? 'disabled' : ''}>${['CASHIER', 'MANAGER', 'ADMIN'].map(r => `<option value="${r}" ${(u ? u.role : 'CASHIER') === r ? 'selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select>
       ${isOwner ? '<div class="hint">Your own role stays Admin.</div>' : '<div class="hint">Managers and admins can approve discounts, refunds and voids at the counter.</div>'}</div>
-    ${u ? '' : `<div class="form-grid"><div class="form-row"><label for="sf-pin">PIN (4–6 digits)</label><input id="sf-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div>
-      <div class="form-row"><label for="sf-pin2">Type the PIN again</label><input id="sf-pin2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div></div><div class="hint">You can also set the PIN later.</div>`}`,
+    <div id="sf-pin-block" style="${u ? 'display:none;' : ''}">
+      ${u ? `<div class="notice warn" style="margin-bottom:10px;">Managers and admins need a <b>6-digit PIN</b>. Set ${esc(u.name)}'s new PIN now — the old one stops working.</div>` : ''}
+      <div class="form-grid"><div class="form-row"><label for="sf-pin" id="sf-pin-label">PIN (${pinRuleText(u ? u.role : 'CASHIER')})</label><input id="sf-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div>
+      <div class="form-row"><label for="sf-pin2">Type the PIN again</label><input id="sf-pin2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div></div>${u ? '' : '<div class="hint">You can also set the PIN later.</div>'}</div>`,
     foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="sf-save">${u ? 'Save' : 'Add staff member'}</button>`,
     onMount: (root) => {
       root.querySelector('[data-cancel]').onclick = closeModal;
+      // A cashier who becomes a manager or admin needs a new 6-digit PIN, asked for here.
+      const promoted = (role) => !!(u && !isOwner && !pinNeedsSix(u.role) && pinNeedsSix(role));
+      const roleSel = root.querySelector('#sf-role');
+      const syncPinBlock = () => {
+        const role = isOwner ? 'ADMIN' : roleSel.value;
+        root.querySelector('#sf-pin-label').textContent = `${u ? 'New PIN' : 'PIN'} (${pinRuleText(role)})`;
+        if(u) root.querySelector('#sf-pin-block').style.display = promoted(role) ? '' : 'none';
+      };
+      roleSel.onchange = syncPinBlock;
+      syncPinBlock();
       const save = root.querySelector('#sf-save');
       save.onclick = () => busy(save, async () => {
         const name = root.querySelector('#sf-name').value.replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
         const role = isOwner ? 'ADMIN' : root.querySelector('#sf-role').value;
-        const pin = u ? '' : root.querySelector('#sf-pin').value.trim();
+        const needPin = promoted(role);
+        const pin = (!u || needPin) ? root.querySelector('#sf-pin').value.trim() : '';
         if(!name){ toast('Enter a name', 'error'); return; }
         if(state.staff.some(x => x.id !== (u && u.id) && x.active !== false && x.name.toLowerCase() === name.toLowerCase())){ toast('Someone active already has that name — add a surname or initial so receipts are clear.', 'error'); return; }
+        if(needPin && !pin){ toast(`Set a 6-digit PIN for ${name} — managers and admins need one`, 'error'); return; }
         if(pin){
-          if(!/^\d{4,6}$/.test(pin)){ toast('The PIN must be 4 to 6 digits', 'error'); return; }
+          const bad = pinProblem(pin, role);
+          if(bad){ toast(bad, 'error'); return; }
           if(pin !== root.querySelector('#sf-pin2').value.trim()){ toast('The two PINs are different', 'error'); return; }
         }
         const rec = u ? {id: u.id, name, role, updated_at: nowISO()} : {id: uid(), name, role, active: true, created_at: nowISO(), updated_at: nowISO()};
@@ -277,8 +294,9 @@ function openStaffForm(id){
         if(pin){
           try{
             const r = await cloud.rpc('staff_set_pin', {p_staff_id: rec.id, p_pin: pin});
-            if(r && r.error){ await boLoad().catch(() => {}); toast(`${name} was added, but the PIN was not set: ${friendlyError(r)}`, 'error'); closeModal(); renderStaff(); return; }
-          }catch(e){ await boLoad().catch(() => {}); toast(`${name} was added, but the PIN was not set: ${friendlyError(e)}`, 'error'); closeModal(); renderStaff(); return; }
+            if(r && r.error){ await boLoad().catch(() => {}); toast(`${name} was ${u ? 'saved' : 'added'}, but the PIN was not set: ${friendlyError(r)}`, 'error'); closeModal(); renderStaff(); return; }
+          }catch(e){ await boLoad().catch(() => {}); toast(`${name} was ${u ? 'saved' : 'added'}, but the PIN was not set: ${friendlyError(e)}`, 'error'); closeModal(); renderStaff(); return; }
+          if(u) applyChanges([Ops.audit('PIN set', `${name} (new ${ROLE_LABEL[role]} PIN)`, u.id)]).catch(() => {});
           await boLoad().catch(() => {});
         }
         toast(u ? 'Saved' : 'Staff member added');
@@ -289,9 +307,11 @@ function openStaffForm(id){
 function openSetPinModal(staffId){
   const u = state.staff.find(x => x.id === staffId);
   if(!u) return;
+  const six = pinNeedsSix(u.role);
   openModal({title: 'PIN for ' + esc(u.name), body: `
+    ${six ? `<p class="hint" style="margin-top:0;">${esc(ROLE_LABEL[u.role] || u.role)}s need a PIN of exactly <b>6 digits</b>.</p>` : ''}
     <div class="form-grid">
-      <div class="form-row"><label for="sp-pin">New PIN (4–6 digits)</label><input id="sp-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div>
+      <div class="form-row"><label for="sp-pin">New PIN (${pinRuleText(u.role)})</label><input id="sp-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div>
       <div class="form-row"><label for="sp-pin2">Type it again</label><input id="sp-pin2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div>
     </div>
     <p class="hint">Each person needs a different PIN, because the PIN alone tells the counter who is signing in. Setting a new PIN signs this person out of every counter.</p>`,
@@ -302,7 +322,8 @@ function openSetPinModal(staffId){
       const save = root.querySelector('#sp-save');
       save.onclick = () => busy(save, async () => {
         const a = root.querySelector('#sp-pin').value.trim(), b = root.querySelector('#sp-pin2').value.trim();
-        if(!/^\d{4,6}$/.test(a)){ toast('The PIN must be 4 to 6 digits', 'error'); return; }
+        const bad = pinProblem(a, u.role);
+        if(bad){ toast(bad, 'error'); return; }
         if(a !== b){ toast('The two PINs are different', 'error'); return; }
         try{
           const r = await cloud.rpc('staff_set_pin', {p_staff_id: staffId, p_pin: a});
@@ -310,7 +331,7 @@ function openSetPinModal(staffId){
         }catch(e){ toast(friendlyError(e), 'error'); return; }
         applyChanges([Ops.audit('PIN set', u.name, u.id)]).catch(() => {});
         await boLoad().catch(() => {});
-        toast('PIN saved'); closeModal(); if(state.route === 'staff') renderStaff();
+        toast('PIN saved'); closeModal(); if(state.route === 'staff') renderStaff(); else if(state.route === 'dashboard') rerender();
       });
     }});
 }
@@ -323,6 +344,7 @@ function renderDevices(){
   const list = state.devices.slice().sort((a, b) => (b.active !== false) - (a.active !== false) || String(a.device_tag).localeCompare(String(b.device_tag)));
   content.innerHTML = `
     <div class="settings-block" style="max-width:1000px;">
+      ${pinLockoutAlertHtml()}
       <p class="hint" style="margin-bottom:12px;">A counter (tablet, phone or laptop) is paired once with a code from here. After that, staff only need their PIN. Each counter gets a letter used in its receipt numbers (POS-<b>A</b>-2026-000123), so two counters never clash.</p>
       <div class="table-wrap"><table><thead><tr><th>Letter</th><th>Name</th><th>Paired</th><th>Last seen</th><th>Status</th><th></th></tr></thead><tbody>
         ${list.length ? list.map(d => `<tr class="${d.active === false ? 'muted-row' : ''}"><td><b>${esc(d.device_tag || '')}</b></td><td>${esc(d.device_name || '')}</td>
@@ -342,15 +364,8 @@ function renderDevices(){
     await boLoad().catch(() => {});
     toast('Counter removed'); renderDevices();
   });
-  content.querySelectorAll('[data-unlock]').forEach(b => b.onclick = () => busy(b, async () => {
-    const d = D(b.dataset.unlock);
-    try{
-      const r = await cloud.rpc('unlock_device_pin', {p_device_id: d.id});
-      if(r && r.error){ toast(friendlyError(r), 'error'); return; }
-      applyChanges([Ops.audit('Counter PIN pad unlocked', d.device_name || d.device_tag, d.id)]).catch(() => {});
-      toast(r && r.cleared ? `Unlocked — ${plural(r.cleared, 'wrong PIN')} forgotten` : 'Unlocked (it was not locked)');
-    }catch(e){ toast(friendlyError(e), 'error'); }
-  }, 'Unlocking…'));
+  wirePinLockoutAlert(content);
+  content.querySelectorAll('[data-unlock]').forEach(b => b.onclick = () => busy(b, () => unlockDevicePin(b.dataset.unlock), 'Unlocking…'));
   content.querySelectorAll('[data-rename]').forEach(b => b.onclick = () => {
     const d = D(b.dataset.rename);
     openModal({title: 'Rename counter', body: `<div class="form-row"><label for="dv-name">Name</label><input id="dv-name" maxlength="30" value="${esc(d.device_name || '')}"></div>`,
@@ -412,7 +427,7 @@ async function renderAuditLog(){
   const bar = setTopbarActions(`<button class="btn btn-outline" id="au-csv">Download CSV</button>`);
   bar.querySelector('#au-csv').onclick = () => {
     if(!AUDIT_ROWS.length){ toast('Nothing to export', 'warn'); return; }
-    downloadFile(`${fileNameSlug()}-audit-log-${shopTodayKey()}.csv`, toCSV(['When', 'Action', 'By', 'Details'], filteredAudit().map(e => [fmtShopDateTime(e.at), e.action, e.actor_name, e.details])), 'text/csv');
+    downloadFile(`${fileNameSlug()}-audit-log-${shopTodayKey()}.csv`, toCSV(['When', 'Action', 'By', 'Signed in at the counter', 'Details'], filteredAudit().map(e => [fmtShopDateTime(e.at), e.action, e.actor_name, auditSignedInOther(e), e.details])), 'text/csv');
   };
   const content = document.getElementById('content');
   content.innerHTML = `<div class="toolbar"><div class="toolbar-left">${rangePickerHtml(auditFilter, 'au')}
@@ -434,6 +449,11 @@ async function loadAudit(){
   wrap.classList.remove('dim');
   drawAudit();
 }
+// The staff member the server saw signed in, when it is not the person named on the entry.
+function auditSignedInOther(e){
+  if(!e || !e.signed_in_staff_id || (e.actor_id && String(e.actor_id) === String(e.signed_in_staff_id))) return '';
+  return staffName(e.signed_in_staff_id) || 'another staff member';
+}
 function filteredAudit(){
   if(!auditFilter.search) return AUDIT_ROWS;
   const q = auditFilter.search.toLowerCase();
@@ -444,7 +464,7 @@ function drawAudit(){
   const list = filteredAudit();
   document.getElementById('au-count').textContent = `${plural(list.length, 'entry', 'entries')}${AUDIT_ROWS.length >= 3000 ? ' (latest 3,000 — choose fewer days to see older ones)' : ''}`;
   wrap.innerHTML = list.length ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>Action</th><th>By</th><th>Details</th></tr></thead><tbody>
-    ${list.slice(0, 600).map(e => `<tr><td style="white-space:nowrap;">${esc(fmtShopDateTime(e.at))}</td><td><b>${esc(e.action)}</b></td><td>${esc(e.actor_name || '')}</td><td class="text-light">${esc(e.details || '')}</td></tr>`).join('')}
+    ${list.slice(0, 600).map(e => `<tr><td style="white-space:nowrap;">${esc(fmtShopDateTime(e.at))}</td><td><b>${esc(e.action)}</b></td><td>${esc(e.actor_name || '')}${auditSignedInOther(e) ? `<div class="signed-in-diff" title="The server saw a different staff member signed in at the counter">signed in: ${esc(auditSignedInOther(e))}</div>` : ''}</td><td class="text-light">${esc(e.details || '')}</td></tr>`).join('')}
   </tbody></table></div>${list.length > 600 ? '<p class="hint">Showing the latest 600. Search or download the CSV for the rest.</p>' : ''}` : emptyBlock('No entries for these dates.');
 }
 
@@ -467,6 +487,7 @@ async function saveSettings(changes, auditAction, auditDetails){
   const draft = Object.assign({}, state.settings, changes);
   const row = {};
   SERVER_SETTING_KEYS.forEach(k => { row[k] = draft[k]; });
+  if(BO.hasPayoutLimit) row.payout_review_limit = num(draft.payout_review_limit);
   row.updated_at = nowISO();
   const ops = [Ops.upsert('settings', row)];
   const name = String(draft.business_name || '').trim();
@@ -495,6 +516,8 @@ function renderSettings(){
         <div class="form-row"><label for="set-lowstock">Default low-stock level (new ingredients)</label><input type="number" min="0" step="any" id="set-lowstock" value="${esc(num(s.low_stock_default_threshold))}"></div>
         <div class="form-row"><label for="set-foodcost">Food cost warning %</label><input type="number" min="0" max="100" step="any" id="set-foodcost" value="${esc(num(s.food_cost_warning_pct))}"></div>
       </div>
+      <div class="form-row" style="max-width:360px;"><label for="set-payout-limit">Ask me to review cash pay-outs above (₱)</label><input type="number" min="0" step="any" id="set-payout-limit" value="${esc(num(s.payout_review_limit))}" ${BO.hasPayoutLimit ? '' : 'disabled'}>
+        <div class="hint">${BO.hasPayoutLimit ? 'A pay-out (cash taken out of a counter drawer) bigger than this shows in Transactions → "Needs review".' : 'Available after the latest database update is installed.'}</div></div>
       <div class="toggle-row" style="border:none;"><span>Dark theme<br><span class="hint">For the Back Office and the counters.</span></span><label class="switch"><input type="checkbox" id="set-dark" ${s.theme === 'dark' ? 'checked' : ''}><span class="slider-tog"></span></label></div>
       <button class="btn btn-primary" id="save-general">Save</button>
     </div>`;
@@ -571,7 +594,12 @@ function renderSettings(){
     $('save-general').onclick = (e) => busy(e.currentTarget, async () => {
       const ch = {costing_method: $('set-costing').value, low_stock_default_threshold: Math.max(0, num($('set-lowstock').value)),
         food_cost_warning_pct: Math.max(0, num($('set-foodcost').value)) || 35, theme: $('set-dark').checked ? 'dark' : 'light'};
-      await saveSettings(ch, 'Settings saved', `costing ${ch.costing_method === 'latest' ? 'latest purchase' : 'weighted average'}`);
+      if(BO.hasPayoutLimit){
+        const lim = $('set-payout-limit').value.trim();
+        if(lim === '' || !(num(lim) >= 0)){ toast('Enter the pay-out amount to review (₱0 or more)', 'error'); return; }
+        ch.payout_review_limit = Math.round(num(lim) * 100) / 100;
+      }
+      await saveSettings(ch, 'Settings saved', `costing ${ch.costing_method === 'latest' ? 'latest purchase' : 'weighted average'}${ch.payout_review_limit != null ? ' · review pay-outs above ' + fmtMoney(ch.payout_review_limit) : ''}`);
     });
   }
   if(tab === 'receipt'){

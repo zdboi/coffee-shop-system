@@ -11,11 +11,23 @@
 
 const cloud = Cloud.createClient({storageKey: 'cccc.admin.session'});
 
+// Web fonts: index.html loads them as media="print" (not blocking the first screen); use them once loaded.
+(function useWebFontsWhenLoaded(){
+  const l = document.getElementById('web-fonts');
+  if(!l || l.media === 'all') return;
+  const on = () => { l.media = 'all'; };
+  if(l.sheet) on(); else l.addEventListener('load', on, {once: true});
+})();
+
 const BO = {
   isOwner: false, rank: 0,
   ownerStaff: null,          // the owner's own row in `staff`
   profileName: '',
   counts: {open_qr_orders: 0, customer_count: 0, needs_review: 0},
+  reviewSales: 0, reviewRefunds: 0, reviewPayouts: 0,  // parts of counts.needs_review
+  pinUpdateNeeded: [],       // staff ids whose manager/admin PIN is shorter than 6 digits (server list)
+  pinLockouts: [],           // counters locked after wrong PINs in the last 7 days (server list)
+  hasPayoutLimit: false,     // the server knows settings.payout_review_limit
   lastLoadAt: 0,
   started: false,
   salesCache: new Map(),     // "from|to" -> {at, data}
@@ -116,6 +128,9 @@ async function boLoad(){
 function applyBoBootstrap(d){
   state.business = d.business || null;
   setSettingsFromServer(d.settings);
+  // Pay-outs above this amount are flagged for review by the server (default ₱1,000).
+  BO.hasPayoutLimit = !!(d.settings && Object.prototype.hasOwnProperty.call(d.settings, 'payout_review_limit'));
+  state.settings.payout_review_limit = BO.hasPayoutLimit && d.settings.payout_review_limit != null ? num(d.settings.payout_review_limit) : 1000;
   state.staff = d.staff || [];
   state.categories = d.categories || [];
   state.suppliers = d.suppliers || [];
@@ -134,6 +149,9 @@ function applyBoBootstrap(d){
   BO.rank = Number(d.rank) || 0;
   BO.counts.open_qr_orders = Number(d.open_qr_orders) || 0;
   BO.counts.customer_count = Number(d.customer_count) || 0;
+  BO.pinUpdateNeeded = (Array.isArray(d.pin_update_needed) ? d.pin_update_needed : []).map(x => x && typeof x === 'object' ? (x.id || x.staff_id) : x).filter(Boolean).map(String);
+  state.staff.forEach(st => { if(st.pin_update_needed === true && !BO.pinUpdateNeeded.includes(String(st.id))) BO.pinUpdateNeeded.push(String(st.id)); });
+  BO.pinLockouts = (Array.isArray(d.pin_lockouts) ? d.pin_lockouts : []).filter(x => x && typeof x === 'object');
   BO.ownerStaff = state.staff.find(s => s.profile_id && s.profile_id === cloud.userId()) || null;
   BO.lastLoadAt = Date.now();
 }
@@ -146,12 +164,87 @@ async function loadIngredientTxns(ingredientId, force){
   return state.ingredientTxns[ingredientId];
 }
 
+// Flagged sales + flagged pay-outs (cash_movements.needs_review, for pay-outs above the review limit).
 async function refreshReviewCount(){
   try{
     const rows = await cloud.select('sales', {select: 'id', eq: {needs_review: true}, limit: 500});
-    BO.counts.needs_review = (rows || []).length;
+    BO.reviewSales = (rows || []).length;
   }catch(e){ /* not important */ }
+  BO.reviewRefunds = (await loadRefundsToReview().catch(() => [])).length;
+  BO.reviewPayouts = (await loadPayoutsToReview().catch(() => [])).length;
+  BO.counts.needs_review = BO.reviewSales + BO.reviewRefunds + BO.reviewPayouts;
   updateNavBadges();
+}
+// Pay-outs / refunds the server flagged for review. These flags arrived with settings.payout_review_limit,
+// so an older database (without that setting) is not asked at all.
+async function loadFlagged(table, order){
+  if(!BO.hasPayoutLimit) return [];
+  try{ return await cloud.select(table, {eq: {needs_review: true}, order, limit: 500}) || []; }
+  catch(e){ if(/needs_review|column|42703/i.test(String(e && (e.message || e.code) || ''))) return []; throw e; }
+}
+function loadPayoutsToReview(){ return loadFlagged('cash_movements', 'at.desc'); }
+function loadRefundsToReview(){ return loadFlagged('refunds', 'date.desc'); }
+
+/* ================= PIN rules (owner decision 2026-10-19) =================
+   Managers and admins need a 6-digit PIN; cashiers 4 to 6 digits. The server refuses
+   shorter ones too (PIN_TOO_SHORT). */
+function pinNeedsSix(role){ return role === 'MANAGER' || role === 'ADMIN'; }
+function pinRuleText(role){ return pinNeedsSix(role) ? '6 digits' : '4–6 digits'; }
+function pinProblem(pin, role){
+  if(pinNeedsSix(role)) return /^\d{6}$/.test(pin) ? '' : 'Managers and admins need a PIN of exactly 6 digits';
+  return /^\d{4,6}$/.test(pin) ? '' : 'The PIN must be 4 to 6 digits';
+}
+function staffName(id){ const u = state.staff.find(x => x.id === id); return u ? u.name : ''; }
+// Staff members (still active) who must set a new 6-digit PIN.
+function staffNeedingNewPin(){
+  return BO.pinUpdateNeeded.map(id => state.staff.find(s => String(s.id) === id)).filter(u => u && u.active !== false);
+}
+function pinUpdateBannerHtml(){
+  const list = staffNeedingNewPin();
+  if(!list.length) return '';
+  return `<div class="notice warn pin-update-banner" id="pin-update-banner"><b>${list.length === 1 ? 'One person needs' : list.length + ' people need'} a new 6-digit PIN.</b>
+    Managers and admins now sign in with 6 digits. Until they set a new one, their old PIN won't work at the counter.
+    <ul class="pin-update-list">${list.map(u => `<li><b>${esc(u.name)}</b> <span class="text-light">(${esc(ROLE_LABEL_CORE[u.role] || u.role)})</span>
+      <button class="btn btn-sm btn-outline" data-newpin="${esc(u.id)}">Set new PIN</button></li>`).join('')}</ul></div>`;
+}
+const ROLE_LABEL_CORE = {CASHIER: 'Cashier', MANAGER: 'Manager', ADMIN: 'Admin'};
+function wirePinUpdateBanner(root){
+  root.querySelectorAll('[data-newpin]').forEach(b => b.onclick = () => openSetPinModal(b.dataset.newpin));
+}
+
+/* ================= counters locked after wrong PINs (last 7 days) ================= */
+function lockoutDevice(l){
+  return state.devices.find(d => (l.device_id && d.id === l.device_id))
+    || state.devices.find(d => d.active !== false && (l.device_name || l.device) && d.device_name === (l.device_name || l.device)) || null;
+}
+function pinLockoutAlertHtml(){
+  const list = BO.pinLockouts.slice().sort((a, b) => String(b.locked_at || b.at || '').localeCompare(String(a.locked_at || a.at || '')));
+  if(!list.length) return '';
+  const now = Date.now();
+  return `<div class="notice warn pin-lockout-alert" id="pin-lockout-alert"><b>A counter was locked after wrong PINs</b>
+    <span class="text-light">(last 7 days)</span>. Someone typed several wrong PINs in a row. If it wasn't a staff member who forgot their PIN, check who was at the counter.
+    <ul class="pin-update-list">${list.map(l => {
+      const d = lockoutDevice(l);
+      const name = l.device_name || l.device || (d && d.device_name) || 'A counter';
+      const at = l.locked_at || l.at, until = l.locked_until || l.until;
+      const still = until && new Date(until).getTime() > now;
+      return `<li><b>${esc(name)}</b> — locked ${esc(fmtShopDateTime(at))}${until ? (still ? `, <b>still locked until ${esc(fmtShopTime(until))}</b>` : `, unlocked since ${esc(fmtShopTime(until))}`) : ''}
+        ${d && d.active !== false ? `<button class="btn btn-sm btn-outline" data-lock-unlock="${esc(d.id)}">Unlock PIN pad</button>` : ''}</li>`;
+    }).join('')}</ul></div>`;
+}
+function wirePinLockoutAlert(root){
+  root.querySelectorAll('[data-lock-unlock]').forEach(b => b.onclick = () => busy(b, () => unlockDevicePin(b.dataset.lockUnlock), 'Unlocking…'));
+}
+// The same Unlock as on Devices: forgets the wrong PINs on that counter.
+async function unlockDevicePin(deviceId){
+  const d = state.devices.find(x => x.id === deviceId);
+  if(!d) return;
+  try{
+    const r = await cloud.rpc('unlock_device_pin', {p_device_id: d.id});
+    if(r && r.error){ toast(friendlyError(r), 'error'); return; }
+    applyChanges([Ops.audit('Counter PIN pad unlocked', d.device_name || d.device_tag, d.id)]).catch(() => {});
+    toast(r && r.cleared ? `Unlocked — ${plural(r.cleared, 'wrong PIN')} forgotten` : 'Unlocked (it was not locked)');
+  }catch(e){ toast(friendlyError(e), 'error'); }
 }
 
 /* ================= saving =================
@@ -693,11 +786,13 @@ function renderDashboard(){
   const noPins = !state.staff.some(s => s.active !== false && s.has_pin);
 
   content.innerHTML = `
+    ${pinUpdateBannerHtml()}
+    ${pinLockoutAlertHtml()}
     ${noPins ? `<div class="notice warn">No staff PIN is set yet, so nobody can sign in at the counter. <a class="linklike" data-go="staff">Set PINs in Staff &amp; PINs</a>.</div>` : ''}
     <div id="dash-review"></div>
     <div class="section-title" style="margin-top:0;">Today</div>
     <div class="grid grid-4 kpi-sans" id="dash-today">
-      ${statCard('Sales today', '…', 'loading')}${statCard('Transactions', '…', '')}${statCard('QR orders open', BO.counts.open_qr_orders, '<a class="linklike" data-go="qrOrders">see QR orders</a>')}${statCard('Customers', BO.counts.customer_count, '<a class="linklike" data-go="customers">see customers</a>')}
+      ${statCard('Net sales today', '…', 'loading')}${statCard('Transactions', '…', '')}${statCard('QR orders open', BO.counts.open_qr_orders, '<a class="linklike" data-go="qrOrders">see QR orders</a>')}${statCard('Customers', BO.counts.customer_count, '<a class="linklike" data-go="customers">see customers</a>')}
     </div>
     <div class="section-title">Stock &amp; menu</div>
     <div class="grid grid-4">
@@ -745,6 +840,8 @@ function renderDashboard(){
     </div>
     ${highestProfit ? `<div class="section-title">Highest profit recipe</div><div class="card"><b>${esc(highestProfit.recipe.name)}</b> — gross profit ${fmtMoney(highestProfit.profit)} on a selling price of ${fmtMoney(highestProfit.recipe.selling_price)}</div>` : ''}`;
   wireDashboardLinks(content);
+  wirePinUpdateBanner(content);
+  wirePinLockoutAlert(content);
   content.querySelectorAll('[data-produce]').forEach(b => b.onclick = () => openProductionForm((sourceRecipeForIngredient(ingredientById(b.dataset.produce)) || {}).id));
   loadDashboardSales();
 }
@@ -761,7 +858,7 @@ async function loadDashboardSales(){
     const sum = salesSummary(ds, salesIn(ds));          // same rule as the calendar: voided sales don't count
     const box = document.getElementById('dash-today');
     if(box){
-      box.innerHTML = statCard('Sales today', fmtMoney(sum.net), sum.refunds > 0 ? salesMinusRefundsText(sum.gross, sum.refunds) : '<a class="linklike" data-go="calendar">see the calendar</a>')
+      box.innerHTML = statCard('Net sales today', fmtMoney(sum.net), sum.refunds > 0 ? salesMinusRefundsText(sum.gross, sum.refunds) : '<a class="linklike" data-go="calendar">see the calendar</a>')
         + statCard('Transactions', sum.count.toLocaleString('en-PH'), sum.count ? `average ${fmtMoney(sum.avg)}` : 'none yet')
         + statCard('QR orders open', BO.counts.open_qr_orders, '<a class="linklike" data-go="qrOrders">see QR orders</a>')
         + statCard('Customers', BO.counts.customer_count, '<a class="linklike" data-go="customers">see customers</a>');
@@ -773,7 +870,11 @@ async function loadDashboardSales(){
   }
   const rv = document.getElementById('dash-review');
   if(rv && BO.counts.needs_review){
-    rv.innerHTML = `<div class="notice warn"><b>${plural(BO.counts.needs_review, 'sale needs', 'sales need')} your review</b> (for example sold below the menu price). <a class="linklike" id="dash-go-review">Check them</a>.</div>`;
+    const parts = [];
+    if(BO.reviewSales) parts.push(plural(BO.reviewSales, 'sale'));
+    if(BO.reviewRefunds) parts.push(plural(BO.reviewRefunds, 'refund'));
+    if(BO.reviewPayouts) parts.push(plural(BO.reviewPayouts, 'large pay-out'));
+    rv.innerHTML = `<div class="notice warn"><b>${esc(parts.join(' and ') || plural(BO.counts.needs_review, 'item'))} ${BO.counts.needs_review === 1 ? 'needs' : 'need'} your review</b> (for example sold below the menu price, totals that don't add up, or cash taken out of a drawer). <a class="linklike" id="dash-go-review">Check them</a>.</div>`;
     rv.querySelector('#dash-go-review').onclick = () => { if(typeof txFilter !== 'undefined') txFilter.review = true; navigate('transactions'); };
   }
 }

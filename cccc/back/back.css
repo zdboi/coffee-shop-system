@@ -144,3 +144,10 @@ details.table-twin[open] summary{margin-bottom:8px;}
   .modal-body{padding:16px 14px;}
   .ri-table{display:block;overflow-x:auto;}
 }
+
+/* ---- review reasons, signed-in staff, PIN banners (2026-10-19) ---- */
+.review-why{font-size:12px;color:var(--text-light);margin-top:3px;font-weight:400;}
+.signed-in-diff{font-size:12px;color:#9a3412;margin-top:2px;}
+.tag-pill.signed-in-diff{margin-top:0;}
+.pin-update-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px;}
+.pin-update-list li{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}

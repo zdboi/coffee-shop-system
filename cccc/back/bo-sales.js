@@ -451,8 +451,26 @@ function wireRangePicker(root, f, idp, onChange){
 
 /* ================= Transactions ================= */
 const txFilter = {preset: 'today', from: '', to: '', status: '', method: '', cashier: '', source: '', search: '', review: false};
-const REVIEW_TEXT = {PRICE_BELOW_MENU: 'Sold below the menu price', NOT_ON_MENU: 'An item was not on the menu'};
-function reviewText(reason){ return String(reason || '').split(/\s*,\s*/).filter(Boolean).map(x => REVIEW_TEXT[x] || x.replace(/_/g, ' ').toLowerCase()).join('; ') || 'Flagged by the server'; }
+// Plain words for the server's review codes come from the shared reviewReasonText() (ui.js); escape before use.
+function reviewText(reason){ return reviewReasonText(reason); }
+function reviewCodes(reason){ return String(reason || '').split(/\s*,\s*/).map(x => x.trim()).filter(Boolean); }
+// What to look at for each reason, shown in the sale window.
+const REVIEW_CHECK_HINT = {
+  PRICE_BELOW_MENU: 'compare the prices with today\'s menu prices below',
+  NOT_ON_MENU: 'check the items marked "not on the menu" below',
+  TAX_MISMATCH: 'compare the tax and service charge with Settings → Receipts & tax',
+  PAYMENT_MISMATCH: 'compare the payments with the total',
+  STAFF_MISMATCH: 'check who was signed in at the counter (shown above)',
+};
+function reviewHint(reason){
+  const h = reviewCodes(reason).map(c => REVIEW_CHECK_HINT[c]).filter(Boolean);
+  return h.length ? 'To check: ' + h.join('; ') + '.' : 'Check the sale below.';
+}
+// The staff member the server saw signed in at the counter, when it is not the recorded person.
+function signedInOther(row, recordedId){
+  if(!row || !row.signed_in_staff_id || (recordedId && String(recordedId) === String(row.signed_in_staff_id))) return '';
+  return staffName(row.signed_in_staff_id) || 'another staff member';
+}
 
 async function renderTransactions(){
   const content = document.getElementById('content');
@@ -489,12 +507,21 @@ async function loadTransactions(force){
   try{
     if(txFilter.review){
       // every flagged sale, whatever its date
-      const sales = await cloud.select('sales', {eq: {needs_review: true}, order: 'transaction_date.desc', limit: 500});
+      const [sales, payouts, flaggedRefunds] = await Promise.all([
+        cloud.select('sales', {eq: {needs_review: true}, order: 'transaction_date.desc', limit: 500}),
+        loadPayoutsToReview(),
+        loadRefundsToReview(),
+      ]);
       const ids = (sales || []).map(s => s.id);
       const payments = [];
       for(let i = 0; i < ids.length; i += 80){ payments.push(...(await cloud.select('payments', {in: {sale_id: ids.slice(i, i + 80)}}) || [])); }
-      TX_DATA = {sales: sales || [], payments, saleItems: [], refunds: [], review: true};
-      BO.counts.needs_review = TX_DATA.sales.length; updateNavBadges();
+      // the receipt numbers of flagged refunds' sales
+      const rSaleIds = [...new Set((flaggedRefunds || []).map(r => r.sale_id).filter(Boolean))];
+      const refundSales = [];
+      for(let i = 0; i < rSaleIds.length; i += 80){ refundSales.push(...(await cloud.select('sales', {select: 'id,transaction_number,cashier_name', in: {id: rSaleIds.slice(i, i + 80)}}) || [])); }
+      TX_DATA = {sales: sales || [], payments, saleItems: [], refunds: [], payouts: payouts || [], flaggedRefunds: flaggedRefunds || [], refundSales, review: true};
+      BO.reviewSales = TX_DATA.sales.length; BO.reviewPayouts = TX_DATA.payouts.length; BO.reviewRefunds = TX_DATA.flaggedRefunds.length;
+      BO.counts.needs_review = BO.reviewSales + BO.reviewRefunds + BO.reviewPayouts; updateNavBadges();
     } else {
       const [a, b] = presetKeys(txFilter.preset, txFilter);
       TX_DATA = await salesForRange(dayRange(a, b), force);
@@ -532,16 +559,70 @@ function drawTransactions(){
   const counted = list.filter(COUNTED);
   const total = counted.reduce((s, x) => s + num(x.grand_total), 0);
   document.getElementById('tx-count').textContent = `${plural(list.length, 'transaction')} · ${fmtMoney(total)} (voided not counted)`;
-  if(!list.length){ wrap.innerHTML = emptyBlock(ds.review ? 'No sales need review. 👍' : 'No transactions match. Try other dates or filters.'); return; }
+  const payoutsHtml = ds.review ? reviewPayoutsHtml(ds.payouts || []) + reviewRefundsHtml(ds) : '';
+  if(!list.length){
+    wrap.innerHTML = payoutsHtml + (ds.review ? (payoutsHtml ? '' : emptyBlock('Nothing needs review. 👍')) : emptyBlock('No transactions match. Try other dates or filters.'));
+    wireReviewPayouts(wrap);
+    return;
+  }
   const shown = list.slice(0, 400);
-  wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Receipt #</th><th>Date / time</th><th>Cashier</th><th>Payment</th><th>Status</th><th class="num">Total</th><th></th></tr></thead><tbody>
-    ${shown.map(s => `<tr class="clickable" data-sale="${esc(s.id)}"><td><b>${esc(s.transaction_number || '')}</b>${s.source === 'QR' ? ' <span class="badge badge-gray">QR</span>' : ''}${s.needs_review ? ` <span class="review-flag" title="${esc(reviewText(s.review_reason))}">Needs review</span>` : ''}${s.offline ? ' <span class="badge badge-gray" title="Rung up while the counter was offline">offline</span>' : ''}</td>
-      <td>${esc(fmtShopDateTime(s.transaction_date))}</td><td>${esc(s.cashier_name || '')}</td><td>${esc(payLabel(payMethod(ds, s.id)))}</td>
+  wrap.innerHTML = payoutsHtml + (payoutsHtml ? '<div class="section-title" style="font-size:16px;">Sales to review</div>' : '') + `<div class="table-wrap"><table><thead><tr><th>Receipt #</th><th>Date / time</th><th>Cashier</th><th>Payment</th><th>Status</th><th class="num">Total</th><th></th></tr></thead><tbody>
+    ${shown.map(s => `<tr class="clickable" data-sale="${esc(s.id)}"><td><b>${esc(s.transaction_number || '')}</b>${s.source === 'QR' ? ' <span class="badge badge-gray">QR</span>' : ''}${s.needs_review ? ` <span class="review-flag" title="${esc(reviewText(s.review_reason))}">Needs review</span>` : ''}${s.offline ? ' <span class="badge badge-gray" title="Rung up while the counter was offline">offline</span>' : ''}${s.needs_review && ds.review ? `<div class="review-why">${esc(reviewText(s.review_reason))}</div>` : ''}</td>
+      <td>${esc(fmtShopDateTime(s.transaction_date))}</td><td>${esc(s.cashier_name || '')}${signedInOther(s, s.cashier_id) ? `<div class="signed-in-diff" title="The server saw a different staff member signed in at the counter">signed in: ${esc(signedInOther(s, s.cashier_id))}</div>` : ''}</td><td>${esc(payLabel(payMethod(ds, s.id)))}</td>
       <td>${saleStatusBadge(s.status)}</td><td class="num">${fmtMoney(s.grand_total)}</td>
       <td><button class="btn btn-sm btn-ghost" data-reprint="${esc(s.id)}">Reprint</button></td></tr>`).join('')}
   </tbody></table></div>${list.length > shown.length ? `<p class="hint">Showing the latest ${shown.length} of ${list.length}. Narrow the dates or filters to see the others.</p>` : ''}`;
   wrap.querySelectorAll('tr[data-sale]').forEach(tr => tr.onclick = (e) => { if(e.target.closest('[data-reprint]')) return; openSaleModal(tr.dataset.sale); });
   wrap.querySelectorAll('[data-reprint]').forEach(b => b.onclick = (e) => { e.stopPropagation(); reprintSale(b.dataset.reprint); });
+  wireReviewPayouts(wrap);
+}
+// Pay-outs above the review limit (settings.payout_review_limit), flagged by the server.
+function reviewPayoutsHtml(list){
+  if(!list.length) return '';
+  return `<div class="section-title" style="margin-top:0;font-size:16px;">Large pay-outs to review</div>
+    <p class="hint" style="margin-top:-6px;">Cash taken out of a counter drawer above ${fmtMoney(state.settings.payout_review_limit)} (change the amount in Settings → General). Check the reason with the person who did it, then mark it reviewed.</p>
+    <div class="table-wrap" id="tx-payouts"><table><thead><tr><th>Date / time</th><th>By</th><th>Reason</th><th class="num">Amount</th><th></th></tr></thead><tbody>
+    ${list.map(m => `<tr data-payout="${esc(m.id)}"><td>${esc(fmtShopDateTime(m.at || m.created_at))}</td>
+      <td>${esc(m.performed_by_name || '')}${signedInOther(m, m.performed_by) ? `<div class="signed-in-diff">signed in: ${esc(signedInOther(m, m.performed_by))}</div>` : ''}</td>
+      <td>${esc(m.reason || '—')}</td><td class="num">${fmtMoney(m.amount)}</td>
+      <td><button class="btn btn-sm btn-outline" data-payout-reviewed="${esc(m.id)}">Mark as reviewed</button></td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+// Refunds the server flagged (e.g. STAFF_MISMATCH: done by someone other than who was signed in).
+const REFUND_TYPE_LABEL = {VOID: 'Void', FULL_REFUND: 'Full refund', PARTIAL_REFUND: 'Partial refund'};
+function reviewRefundsHtml(ds){
+  const list = ds.flaggedRefunds || [];
+  if(!list.length) return '';
+  const saleOf = (id) => (ds.refundSales || []).find(x => x.id === id) || {};
+  return `<div class="section-title" style="font-size:16px;${(ds.payouts || []).length ? '' : 'margin-top:0;'}">Refunds and voids to review</div>
+    <div class="table-wrap" id="tx-flagged-refunds"><table><thead><tr><th>Date / time</th><th>Sale</th><th>Type</th><th>Done by</th><th>Why</th><th class="num">Amount</th><th></th></tr></thead><tbody>
+    ${list.map(r => `<tr data-flagged-refund="${esc(r.id)}"><td>${esc(fmtShopDateTime(r.date || r.created_at))}</td>
+      <td><a class="linklike" data-open-sale="${esc(r.sale_id)}">${esc(saleOf(r.sale_id).transaction_number || 'Open sale')}</a></td>
+      <td>${esc(REFUND_TYPE_LABEL[r.type] || r.type || '')}</td>
+      <td>${esc(r.performed_by_name || r.approved_by_name || '')}${signedInOther(r, r.performed_by) ? `<div class="signed-in-diff">signed in: ${esc(signedInOther(r, r.performed_by))}</div>` : (r.signed_in_staff_id ? '' : '<div class="signed-in-diff">no online sign-in on that counter</div>')}</td>
+      <td>${esc(reviewText(r.review_reason))}</td><td class="num">${fmtMoney(r.amount)}</td>
+      <td><button class="btn btn-sm btn-outline" data-refund-reviewed="${esc(r.id)}">Mark as reviewed</button></td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+function wireReviewPayouts(root){
+  root.querySelectorAll('[data-open-sale]').forEach(a => a.onclick = () => openSaleModal(a.dataset.openSale));
+  root.querySelectorAll('[data-refund-reviewed]').forEach(b => b.onclick = () => busy(b, async () => {
+    const r = ((TX_DATA && TX_DATA.flaggedRefunds) || []).find(x => x.id === b.dataset.refundReviewed);
+    if(!r) return;
+    const sn = ((TX_DATA.refundSales || []).find(x => x.id === r.sale_id) || {}).transaction_number || '';
+    const ok = await boSave([Ops.update('refunds', {id: r.id, needs_review: false}),
+      Ops.audit('Refund reviewed', `${sn} — ${fmtMoney(r.amount)} — ${reviewText(r.review_reason)}`, r.id)],
+      {reload: false, dropSales: true, success: 'Marked as reviewed'});
+    if(ok){ await loadTransactions(true); }
+  }, '…'));
+  root.querySelectorAll('[data-payout-reviewed]').forEach(b => b.onclick = () => busy(b, async () => {
+    const m = ((TX_DATA && TX_DATA.payouts) || []).find(x => x.id === b.dataset.payoutReviewed);
+    if(!m) return;
+    const ok = await boSave([Ops.update('cash_movements', {id: m.id, needs_review: false}),
+      Ops.audit('Pay-out reviewed', `${fmtMoney(m.amount)} by ${m.performed_by_name || 'staff'}${m.reason ? ' — ' + m.reason : ''}`, m.id)],
+      {reload: false, dropSales: true, success: 'Marked as reviewed'});
+    if(ok){ await loadTransactions(true); }
+  }, '…'));
 }
 
 // Loads everything about one sale fresh from the server.
@@ -590,10 +671,12 @@ async function openSaleModal(saleId){
     <div class="pill-stack" style="margin-bottom:12px;">${saleStatusBadge(sale.status)}
       <span class="tag-pill">${esc(fmtShopDateTime(sale.transaction_date))}</span>
       <span class="tag-pill">Cashier: ${esc(sale.cashier_name || '')}</span>
+      ${signedInOther(sale, sale.cashier_id) ? `<span class="tag-pill signed-in-diff" title="The server saw a different staff member signed in at the counter when this sale was uploaded">Signed in at the counter: ${esc(signedInOther(sale, sale.cashier_id))}</span>`
+        : (!sale.signed_in_staff_id && reviewCodes(sale.review_reason).includes('STAFF_MISMATCH') ? '<span class="tag-pill signed-in-diff">No online sign-in recorded on that counter</span>' : '')}
       ${sale.source === 'QR' ? `<span class="tag-pill">QR order${qr ? ' ' + esc(qr.order_number) + (qr.table_label ? ' · ' + esc(qr.table_label) : '') : ''}</span>` : ''}
       ${customer ? `<span class="tag-pill">Customer: ${esc(customer.nickname)}</span>` : ''}
       ${sale.offline ? '<span class="tag-pill">Rung up offline</span>' : ''}</div>
-    ${sale.needs_review ? `<div class="notice warn"><b>Needs review:</b> ${esc(reviewText(sale.review_reason))}. Check the prices below, then mark it reviewed. <button class="btn btn-sm btn-outline" id="sm-reviewed" style="margin-left:6px;">Mark as reviewed</button></div>`
+    ${sale.needs_review ? `<div class="notice warn"><b>Needs review:</b> ${esc(reviewText(sale.review_reason))}. ${esc(reviewHint(sale.review_reason))} Then mark it reviewed. <button class="btn btn-sm btn-outline" id="sm-reviewed" style="margin-left:6px;">Mark as reviewed</button></div>`
       : (sale.review_reason ? `<p class="hint">Checked earlier — it was flagged: ${esc(reviewText(sale.review_reason))}.</p>` : '')}
     <div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Unit price</th>${sale.needs_review ? '<th class="num">Menu price today</th>' : ''}<th class="num">Total</th></tr></thead><tbody>
       ${items.map(i => { const mp = sale.needs_review ? menuPriceNow(i) : null; return `<tr><td><b>${esc(i.name)}</b>${(i.modifiers || []).length ? `<div class="text-light" style="font-size:12px;">${i.modifiers.map(m => esc(m.label)).join(', ')}</div>` : ''}${i.notes ? `<div class="text-light" style="font-size:12px;">“${esc(i.notes)}”</div>` : ''}</td>
@@ -605,7 +688,7 @@ async function openSaleModal(saleId){
       ${payments.map(p => `<div>Paid by <b>${esc(payLabel(p.method))}</b> ${fmtMoney(p.amount)}${p.method === 'CASH' && p.tendered != null ? ` (cash ${fmtMoney(p.tendered)}, change ${fmtMoney(p.change)})` : ''}${p.reference ? ' · ref ' + esc(p.reference) : ''}</div>`).join('') || '<div class="text-light">No payment recorded.</div>'}
     </div>
     ${refunds.length ? `<div class="section-title" style="font-size:15px;">Refunds and voids</div><div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Date</th><th>Type</th><th class="num">Amount</th><th>Reason</th><th>Approved by</th></tr></thead><tbody>
-      ${refunds.map(r => `<tr><td>${esc(fmtShopDateTime(r.date))}</td><td>${esc(({VOID: 'Void', FULL_REFUND: 'Full refund', PARTIAL_REFUND: 'Partial refund'})[r.type] || r.type)}</td><td class="num">${fmtMoney(r.amount)}</td><td>${esc(r.reason || '—')}</td><td>${esc(r.approved_by_name || '')}</td></tr>`).join('')}</tbody></table></div>` : ''}`,
+      ${refunds.map(r => `<tr><td>${esc(fmtShopDateTime(r.date))}</td><td>${esc(({VOID: 'Void', FULL_REFUND: 'Full refund', PARTIAL_REFUND: 'Partial refund'})[r.type] || r.type)}</td><td class="num">${fmtMoney(r.amount)}</td><td>${esc(r.reason || '—')}</td><td>${esc(r.approved_by_name || '')}${r.performed_by_name && r.performed_by_name !== r.approved_by_name ? `<div class="text-light" style="font-size:12px;">done by ${esc(r.performed_by_name)}</div>` : ''}${signedInOther(r, r.performed_by || r.approved_by) ? `<div class="signed-in-diff">signed in: ${esc(signedInOther(r, r.performed_by || r.approved_by))}</div>` : ''}</td></tr>`).join('')}</tbody></table></div>` : ''}`,
     foot: `${canVoid ? '<button class="btn btn-danger" id="sm-void">Void sale</button>' : ''}${canRefund ? '<button class="btn btn-amber" id="sm-refund">Refund</button>' : ''}<span style="flex:1;"></span><button class="btn btn-outline" id="sm-print">🖨 Reprint receipt</button><button class="btn btn-primary" data-close>Close</button>`,
     onMount: (root) => {
       root.querySelector('[data-close]').onclick = closeModal;
@@ -906,7 +989,7 @@ async function openCustomerModal(id){
     <div class="field-inline"><select class="filter" id="cu-merge" style="max-width:100%;"><option value="">Choose the duplicate…</option>${others.map(o => `<option value="${esc(o.id)}">${esc(o.nickname)}${o.phone ? ' · ' + esc(formatPhone(o.phone)) : ''} · ${num(o.visit_count)} visits</option>`).join('')}</select>
       <button class="btn btn-outline btn-sm" id="cu-merge-btn">Merge into ${esc(c.nickname)}</button></div>
     <div class="section-title" style="font-size:15px;">Delete on request</div>
-    <p class="hint">If the customer asks you to delete their data, this removes their nickname, number and notes for good. Their past sales stay (without their name), so your sales totals don't change.</p>
+    <p class="hint">If the customer asks you to delete their data, this removes their nickname, number and notes for good — also from records merged into this one, from their QR orders and order notes, and from earlier audit-log entries. Their past sales stay (without their name), so your sales totals don't change.</p>
     <button class="btn btn-danger btn-sm" id="cu-delete">Delete this customer's data</button>`,
     foot: `<button class="btn btn-outline" data-cancel>Close</button><button class="btn btn-primary" id="cu-save">Save changes</button>`,
     onMount: (root) => {
@@ -939,22 +1022,78 @@ async function openCustomerModal(id){
       }, 'Merging…');
       const del = root.querySelector('#cu-delete');
       del.onclick = () => busy(del, async () => {
-        const ok = await confirmDialog(`Delete <b>${esc(c.nickname)}</b>'s data for good? Their name and number are removed from the customer list and from their QR orders. This cannot be undone.`, 'Delete for good');
+        const ok = await confirmDialog(`Delete <b>${esc(c.nickname)}</b>'s data for good? Their name and number are removed from the customer list (with any records merged into it), their QR orders and order notes, and earlier audit-log entries. This cannot be undone.`, 'Delete for good');
         if(!ok) return;
         try{
-          const [ordersAll, salesAll, merged] = await Promise.all([
-            cloud.selectAll('qr_orders', {eq: {customer_id: c.id}}),
-            cloud.selectAll('sales', {eq: {customer_id: c.id}}),
-            cloud.selectAll('customers', {eq: {merged_into: c.id}}),
-          ]);
-          const ops = [];
-          ordersAll.forEach(o => ops.push(Ops.update('qr_orders', {id: o.id, customer_id: null, customer_nickname: null})));
-          salesAll.forEach(s => ops.push(Ops.update('sales', {id: s.id, customer_id: null})));
-          merged.forEach(m => ops.push(Ops.del('customers', m.id)));
-          ops.push(Ops.del('customers', c.id));
-          ops.push(Ops.audit('Customer data deleted on request', `1 customer record${merged.length ? ' + ' + merged.length + ' merged record(s)' : ''}`));
-          if(await boSave(ops, {reload: false, dropSales: true, success: 'Customer data deleted'})){ closeModal(); renderCustomers(); }
+          const plan = await customerDeletePlan(c);
+          if(await boSave(plan.ops, {reload: false, dropSales: true, success: 'Customer data deleted'})){ closeModal(); renderCustomers(); }
         }catch(e){ toast(friendlyError(e), 'error'); }
       }, 'Deleting…');
     }});
+}
+
+/* ================= deleting a customer's data (on request) =================
+   One all-or-nothing save that:
+   - follows merge chains all the way down (records merged into this one, and into those...);
+   - unlinks their sales and QR orders, and removes their nickname from the orders and order notes;
+   - replaces their nickname in earlier audit-log entries;
+   - deletes every record of the chain (deepest first, so no "merged into" link is left dangling). */
+const DELETED_CUSTOMER_TEXT = '[deleted customer]';
+function nicknameScrubber(names){
+  const list = [...new Set(names.map(n => String(n || '').trim()).filter(n => n.length >= 2))].sort((a, b) => b.length - a.length);
+  if(!list.length) return (t) => t;
+  const rx = new RegExp('(^|[^\\p{L}\\p{N}])(' + list.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?=$|[^\\p{L}\\p{N}])', 'giu');
+  return (t) => t == null ? t : String(t).replace(rx, (m, pre) => pre + DELETED_CUSTOMER_TEXT);
+}
+async function customerDeletePlan(c){
+  // 1) the whole merge chain
+  const chain = [c];
+  const seen = new Set([c.id]);
+  let frontier = [c.id];
+  for(let depth = 0; frontier.length && depth < 50; depth++){
+    const next = [];
+    for(let i = 0; i < frontier.length; i += 80){
+      const rows = await cloud.selectAll('customers', {in: {merged_into: frontier.slice(i, i + 80)}}) || [];
+      rows.forEach(r => { if(!seen.has(r.id)){ seen.add(r.id); chain.push(r); next.push(r.id); } });
+    }
+    frontier = next;
+  }
+  const ids = chain.map(x => x.id);
+  const scrub = nicknameScrubber(chain.map(x => x.nickname));
+  // 2) everything linked to any record of the chain
+  const orders = [], sales = [];
+  for(let i = 0; i < ids.length; i += 80){
+    const part = ids.slice(i, i + 80);
+    orders.push(...(await cloud.selectAll('qr_orders', {in: {customer_id: part}}) || []));
+    sales.push(...(await cloud.selectAll('sales', {in: {customer_id: part}}) || []));
+  }
+  // 3) audit entries naming them (by link or by nickname)
+  const audit = new Map();
+  for(let i = 0; i < ids.length; i += 80){
+    ((await cloud.selectAll('audit_log', {in: {reference_id: ids.slice(i, i + 80)}})) || []).forEach(r => audit.set(r.id, r));
+  }
+  for(const n of new Set(chain.map(x => String(x.nickname || '').trim()).filter(n => n.length >= 2))){
+    const pat = '*' + n.replace(/[*%,()]/g, '_') + '*';
+    ((await cloud.selectAll('audit_log', {ilike: {details: pat}})) || []).forEach(r => audit.set(r.id, r));
+  }
+  const ops = [];
+  orders.forEach(o => {
+    const row = {id: o.id, customer_id: null, customer_nickname: null};
+    if(o.customer_note) row.customer_note = scrub(o.customer_note);
+    if(Array.isArray(o.items) && o.items.some(it => it && it.notes && scrub(it.notes) !== it.notes)){
+      row.items = o.items.map(it => it && it.notes ? Object.assign({}, it, {notes: scrub(it.notes)}) : it);
+    }
+    ops.push(Ops.update('qr_orders', row));
+  });
+  sales.forEach(s => ops.push(Ops.update('sales', {id: s.id, customer_id: null})));
+  let auditChanged = 0;
+  audit.forEach(r => {
+    const details = scrub(r.details);
+    if(details !== r.details){ ops.push(Ops.update('audit_log', {id: r.id, details})); auditChanged++; }
+  });
+  // deepest records first (a record is deleted before the one it was merged into)
+  chain.slice().reverse().forEach(x => ops.push(Ops.del('customers', x.id)));
+  const merged = chain.length - 1;
+  ops.push(Ops.audit('Customer data deleted on request', `1 customer record${merged ? ' + ' + merged + ' merged record(s)' : ''}; ${plural(orders.length, 'QR order')} and ${plural(sales.length, 'sale')} unlinked; ${plural(auditChanged, 'audit entry', 'audit entries')} cleaned`));
+  return {ops, chain, orders, sales, auditChanged};
 }
