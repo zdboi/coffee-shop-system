@@ -258,7 +258,7 @@ function openStaffForm(id){
     <div class="form-row"><label for="sf-role">Role</label><select id="sf-role" ${isOwner ? 'disabled' : ''}>${['CASHIER', 'MANAGER', 'ADMIN'].map(r => `<option value="${r}" ${(u ? u.role : 'CASHIER') === r ? 'selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select>
       ${isOwner ? '<div class="hint">Your own role stays Admin.</div>' : '<div class="hint">Managers and admins can approve discounts, refunds and voids at the counter.</div>'}</div>
     <div id="sf-pin-block" style="${u ? 'display:none;' : ''}">
-      ${u ? `<div class="notice warn" style="margin-bottom:10px;">Managers and admins need a <b>6-digit PIN</b>. Set ${esc(u.name)}'s new PIN now — the old one stops working.</div>` : ''}
+      ${u ? `<div class="notice warn" style="margin-bottom:10px;">Managers and admins need a <b>6-digit PIN</b>. Set ${esc(u.name)}'s new PIN now (it replaces the old one). Without a 6-digit PIN they can still sell at the counter but can't approve refunds, voids or discounts.</div>` : ''}
       <div class="form-grid"><div class="form-row"><label for="sf-pin" id="sf-pin-label">PIN (${pinRuleText(u ? u.role : 'CASHIER')})</label><input id="sf-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div>
       <div class="form-row"><label for="sf-pin2">Type the PIN again</label><input id="sf-pin2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div></div>${u ? '' : '<div class="hint">You can also set the PIN later.</div>'}</div>`,
     foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="sf-save">${u ? 'Save' : 'Add staff member'}</button>`,

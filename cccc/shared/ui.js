@@ -115,6 +115,7 @@ const ERROR_TEXT = {
   TOO_MANY_SIGNUPS: 'Lots of new customers are joining right now. Please wait a few minutes, or save them without joining the loyalty list for now.',
   // Staff PINs
   PIN_TOO_SHORT: 'Managers and the owner need a 6-digit PIN.',
+  PIN_UPDATE_NEEDED: 'This manager PIN is too short to approve. Ask the owner to set a new 6-digit PIN in Back Office → Staff.',
   // Anything unexpected on the server
   SERVER_ERROR: 'Something went wrong on the server, so this wasn\'t saved. Please try again; if it keeps happening, tell the owner.',
 };

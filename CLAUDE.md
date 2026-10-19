@@ -69,6 +69,8 @@ plain-language, step-by-step instructions.
 
 8. **Manager/admin PINs are 6 digits** (owner decision 2026-10-19). Cashier PINs stay 4–6 digits.
    Existing 4–5 digit manager/admin PINs must be changed (Back Office shows who needs a new one).
+   Until changed (owner decision 2026-10-19): they can still sign in and sell, but can NOT approve
+   anything (OVERRIDE refused, and their own sign-in token can't approve) → `PIN_UPDATE_NEEDED`.
 9. **Hosting** (owner decision 2026-10-19): before go-live, the old `POS/`, `Inventory/` and
    `connection-test.html` pages are taken off the live site (they share browser storage with the
    apps). The lead does this as a move into `_archive/`, never by editing them.

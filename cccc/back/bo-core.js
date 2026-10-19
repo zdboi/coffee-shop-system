@@ -205,7 +205,7 @@ function pinUpdateBannerHtml(){
   const list = staffNeedingNewPin();
   if(!list.length) return '';
   return `<div class="notice warn pin-update-banner" id="pin-update-banner"><b>${list.length === 1 ? 'One person needs' : list.length + ' people need'} a new 6-digit PIN.</b>
-    Managers and admins now sign in with 6 digits. Until they set a new one, their old PIN won't work at the counter.
+    Managers and admins now need a 6-digit PIN. Until they have a new 6-digit PIN, they can still sell at the counter but can't approve refunds, voids or discounts.
     <ul class="pin-update-list">${list.map(u => `<li><b>${esc(u.name)}</b> <span class="text-light">(${esc(ROLE_LABEL_CORE[u.role] || u.role)})</span>
       <button class="btn btn-sm btn-outline" data-newpin="${esc(u.id)}">Set new PIN</button></li>`).join('')}</ul></div>`;
 }
