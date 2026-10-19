@@ -1182,7 +1182,7 @@ declare
   v_purpose text := upper(coalesce(nullif(btrim(p_purpose), ''), 'LOGIN'));
   v_min_role text := upper(coalesce(nullif(btrim(p_min_role), ''), 'CASHIER'));
   s record; v_id uuid; v_name text; v_role text; v_token text; v_ttl interval; v_locked timestamptz;
-  v_matches integer := 0; v_legacy boolean := false;
+  v_matches integer := 0; v_legacy boolean := false; v_short boolean;
 begin
   if v_uid is null or v_biz is null then return jsonb_build_object('error', 'NOT_A_MEMBER'); end if;
   if v_purpose not in ('LOGIN', 'OVERRIDE') then return jsonb_build_object('error', 'BAD_PURPOSE'); end if;
@@ -1235,6 +1235,13 @@ begin
   if public._role_rank(v_role) < public._role_rank(v_min_role) then
     return jsonb_build_object('error', 'ROLE_TOO_LOW', 'staff', jsonb_build_object('id', v_id, 'name', v_name, 'role', v_role));
   end if;
+  -- Security decision 8: a MANAGER / ADMIN whose PIN is shorter than 6 digits may
+  -- still sign in and sell, but approves NOTHING until the owner gives them a
+  -- 6-digit PIN. (The PIN just typed tells us its length.) Not a wrong PIN.
+  v_short := length(p_pin) < public._min_pin_length(v_role);
+  if v_purpose = 'OVERRIDE' and v_short then
+    return jsonb_build_object('error', 'PIN_UPDATE_NEEDED');
+  end if;
   v_token := encode(gen_random_bytes(32), 'hex');
   v_ttl := case when v_purpose = 'OVERRIDE' then interval '24 hours' else interval '16 hours' end;
   if v_purpose = 'LOGIN' then
@@ -1245,8 +1252,11 @@ begin
   insert into public.staff_sessions(staff_id, business_id, device_user_id, token_hash, purpose, expires_at)
     values (v_id, v_biz, v_uid, encode(digest(v_token, 'sha256'), 'hex'), v_purpose, now() + v_ttl);
   delete from public.staff_sessions where expires_at < now() - interval '2 days';
+  -- pin_update_needed = true: the counter shows "ask the owner for a 6-digit PIN";
+  -- this person's sign-in can't approve anything (see _use_approval).
   return jsonb_build_object('token', v_token, 'expires_at', now() + v_ttl,
-    'staff', jsonb_build_object('id', v_id, 'name', v_name, 'role', v_role));
+    'staff', jsonb_build_object('id', v_id, 'name', v_name, 'role', v_role),
+    'pin_update_needed', v_short);
 end $$;
 
 create or replace function public.staff_logout(p_token text) returns void
@@ -1652,6 +1662,8 @@ end $$;
 --     action (p_actor); for anyone else's action the manager types their PIN
 --     (OVERRIDE). The counter must upload such actions BEFORE ending that
 --     sign-in, or they are refused.
+-- A MANAGER / ADMIN whose PIN is shorter than 6 digits (or of unknown length)
+-- approves nothing (security decision 8): PIN_UPDATE_NEEDED.
 -- Errors: APPROVAL_REQUIRED (no approver or no token sent), UNKNOWN_STAFF,
 --         ROLE_TOO_LOW, APPROVAL_INVALID (wrong / used / expired / ended /
 --         from another counter / approver switched off / a sign-in token used
@@ -1686,6 +1698,9 @@ begin
      -- a sign-in token approves only its own staff member's actions
      or (v_sess.purpose = 'LOGIN' and p_actor is distinct from v_s.id) then
     raise exception 'APPROVAL_INVALID';
+  end if;
+  if coalesce((select pin_length from public.staff_pins where staff_id = v_s.id), 0) < public._min_pin_length(v_s.role) then
+    raise exception 'PIN_UPDATE_NEEDED';
   end if;
   if v_sess.purpose = 'OVERRIDE' then
     update public.staff_sessions set used_at = now(), used_for = left(p_used_for, 80) where id = v_sess.id;
@@ -2125,7 +2140,7 @@ language sql immutable as $$
   select case when c = any(array['DEVICE_MISMATCH','SHIFT_NOT_FOUND','UNKNOWN_STAFF','ROLE_TOO_LOW','APPROVAL_REQUIRED',
       'APPROVAL_INVALID','BAD_SALE','BAD_SALE_STATUS','QR_ORDER_ALREADY_PAID','SALE_TOTALS_MISMATCH','UNKNOWN_RECIPE',
       'UNKNOWN_INGREDIENT','FORBIDDEN_ROW','BAD_REFUND','SALE_NOT_FOUND','SALE_NOT_REFUNDABLE','BAD_REFUND_TYPE','BAD_AMOUNT',
-      'REFUND_TOO_LARGE','RETURN_TOO_LARGE','SALE_LOCKED','UNKNOWN_OP','BAD_OP'])
+      'REFUND_TOO_LARGE','RETURN_TOO_LARGE','SALE_LOCKED','UNKNOWN_OP','BAD_OP','PIN_UPDATE_NEEDED'])
     then c else 'SERVER_ERROR' end
   from (select substring(coalesce(p_msg, '') from '^[A-Z][A-Z_]+') as c) x
 $$;
