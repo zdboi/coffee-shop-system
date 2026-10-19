@@ -75,6 +75,16 @@ plain-language, step-by-step instructions.
    `connection-test.html` pages are taken off the live site (they share browser storage with the
    apps). The lead does this as a move into `_archive/`, never by editing them.
 
+10. **CAPTCHA** (lead decision 2026-10-19): the one allowed outside script is Cloudflare Turnstile
+   (`https://challenges.cloudflare.com/turnstile/v0/api.js`), loaded lazily ONLY when
+   `CCCC_CONFIG.CAPTCHA_SITE_KEY` is set and ONLY right before an anonymous sign-in (QR page first
+   visit, counter pairing). With the key empty, nothing loads and behaviour is unchanged. The site key
+   is public; the secret key lives only in Supabase.
+
+## Lead housekeeping
+- At every checkpoint the lead updates `docs/RESUME.md`, the project doc, and sends the owner an
+  updated Obsidian session note ("CCCC POS — session log.md"; the owner drops it into their vault).
+
 ## Counter → server contract (`fo_sync` ops)
 Each op is `{op_id, type, data}`; types: `shift_open`, `shift_close`, `cash_movement`, `sale`,
 `held_delete`, `refund`, `audit`, `sold_out`. Approval fields:
