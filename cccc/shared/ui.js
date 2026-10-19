@@ -116,6 +116,8 @@ const ERROR_TEXT = {
   // Staff PINs
   PIN_TOO_SHORT: 'Managers and the owner need a 6-digit PIN.',
   PIN_UPDATE_NEEDED: 'This manager PIN is too short to approve. Ask the owner to set a new 6-digit PIN in Back Office → Staff.',
+  // CAPTCHA (Cloudflare Turnstile) before an anonymous sign-in
+  CAPTCHA_FAILED: 'We couldn\'t confirm you\'re a person. Check your internet and try again.',
   // Anything unexpected on the server
   SERVER_ERROR: 'Something went wrong on the server, so this wasn\'t saved. Please try again; if it keeps happening, tell the owner.',
 };

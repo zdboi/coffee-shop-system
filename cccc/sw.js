@@ -6,7 +6,7 @@ const SHELL = [
   './', './index.html',
   './front/', './front/index.html', './front/front.js', './front/front.css', './front/manifest.json',
   './back/', './back/index.html',
-  './shared/config.js', './shared/cloud.js', './shared/local.js', './shared/ui.js', './shared/logic.js',
+  './shared/config.js', './shared/cloud.js', './shared/captcha.js', './shared/local.js', './shared/ui.js', './shared/logic.js',
   './shared/styles.css', './shared/vendor/qrcode.js',
 ];
 
@@ -20,6 +20,7 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if(req.method !== 'GET') return;
   const url = new URL(req.url);
+  if(url.hostname === 'challenges.cloudflare.com') return;       // CAPTCHA (Turnstile): never cached
   const isFont = url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com';
   if(url.origin !== location.origin && !isFont) return;          // Supabase etc: straight to network
   if(isFont){

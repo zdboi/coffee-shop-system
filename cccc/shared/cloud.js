@@ -33,10 +33,30 @@
     if(errCode === 'same_password') return 'Your new password must be different from your old one.';
     if(errCode === 'reauthentication_needed') return 'For your safety, sign out and sign in again, then change your password.';
     const msg = data.msg || data.error_description || data.message || data.error || ('Login failed (' + status + ')');
+    if(isCaptchaError(data)) return 'We couldn\'t confirm you\'re a person. Check your internet and try again.';
     if(/anonymous sign-ins are disabled/i.test(msg)) return 'Anonymous sign-ins are turned off in Supabase (Authentication → Sign In / Providers → Anonymous).';
     if(/email not confirmed/i.test(msg)) return 'Please confirm your email first (check your inbox), then sign in.';
     if(/invalid login credentials/i.test(msg)) return 'Wrong email or password.';
     return msg;
+  }
+
+  // Supabase Auth refuses a sign-in when CAPTCHA is on and the token is missing,
+  // expired or wrong (error_code "captcha_failed"; older servers only send a
+  // message such as "captcha verification process failed" / "captcha protection: ...").
+  function isCaptchaError(data){
+    if(!data) return false;
+    if(typeof data === 'string') return /captcha/i.test(data);
+    if(data.error_code === 'captcha_failed') return true;
+    const msg = data.msg || data.error_description || data.message || data.error || '';
+    return /captcha/i.test(String(msg));
+  }
+
+  // Adds the CAPTCHA token to an auth request body the way Supabase Auth expects
+  // (gotrue_meta_security.captcha_token). No token: the body is left unchanged.
+  function withCaptcha(body, options){
+    const t = options && options.captchaToken;
+    if(t) body.gotrue_meta_security = {captcha_token: String(t)};
+    return body;
   }
 
   async function parseBody(res){
@@ -182,7 +202,8 @@
         {method, headers, body: method === 'GET' ? undefined : JSON.stringify(body || {})});
       const data = await parseBody(res);
       if(!res.ok){
-        throw new CloudError(authErrorMessage(data, res.status), {status: res.status, code: data && (data.error_code || data.error || data.code)});
+        const code = isCaptchaError(data) ? 'CAPTCHA_FAILED' : (data && (data.error_code || data.error || data.code));
+        throw new CloudError(authErrorMessage(data, res.status), {status: res.status, code});
       }
       return data;
     }
@@ -289,27 +310,32 @@
       setStaffToken(t){ staffToken = t || null; },
       getStaffToken(){ return staffToken; },
 
-      async signInAnonymously(){
-        const data = await authRequest('/signup', {data: {}});
+      // options.captchaToken (optional): the Turnstile token from Captcha.getToken().
+      // Sent the way Supabase Auth expects; without it the request is unchanged.
+      // A refused CAPTCHA throws CloudError with code 'CAPTCHA_FAILED'.
+      async signInAnonymously(options){
+        const data = await authRequest('/signup', withCaptcha({data: {}}, options));
         if(!data || !data.access_token) throw new CloudError('Anonymous login did not return a session.');
         writeSession(sessionFrom(data));
         return session;
       },
-      async signInWithPassword(email, password){
-        const data = await authRequest('/token?grant_type=password', {email, password});
+      // options.captchaToken (optional), same as signInAnonymously.
+      async signInWithPassword(email, password, options){
+        const data = await authRequest('/token?grant_type=password', withCaptcha({email, password}, options));
         writeSession(sessionFrom(data));
         return session;
       },
       // Returns {session} when logged in straight away, or {needsConfirmation:true} when
-      // Supabase is set to require email confirmation first.
-      async signUp(email, password, metadata){
-        const data = await authRequest('/signup', {email, password, data: metadata || {}});
+      // Supabase is set to require email confirmation first. options.captchaToken optional.
+      async signUp(email, password, metadata, options){
+        const data = await authRequest('/signup', withCaptcha({email, password, data: metadata || {}}, options));
         if(data && data.access_token){ writeSession(sessionFrom(data)); return {session}; }
         return {needsConfirmation: true};
       },
-      async resetPassword(email, redirectTo){
+      // options.captchaToken (optional), same as signInAnonymously.
+      async resetPassword(email, redirectTo, options){
         const path = '/recover' + (redirectTo ? '?redirect_to=' + enc(redirectTo) : '');
-        return authRequest(path, {email});
+        return authRequest(path, withCaptcha({email}, options));
       },
       // Call once when the page loads (Back Office). When the owner arrives from an
       // email link (e.g. "Reset password"), Supabase puts a login in the page address:

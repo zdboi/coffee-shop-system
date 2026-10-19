@@ -77,8 +77,9 @@ plain-language, step-by-step instructions.
 
 10. **CAPTCHA** (lead decision 2026-10-19): the one allowed outside script is Cloudflare Turnstile
    (`https://challenges.cloudflare.com/turnstile/v0/api.js`), loaded lazily ONLY when
-   `CCCC_CONFIG.CAPTCHA_SITE_KEY` is set and ONLY right before an anonymous sign-in (QR page first
-   visit, counter pairing). With the key empty, nothing loads and behaviour is unchanged. The site key
+   `CCCC_CONFIG.CAPTCHA_SITE_KEY` is set and ONLY right before a Supabase auth request that
+   CAPTCHA protects (QR page first visit, counter pairing, Back Office email sign-in / sign-up /
+   password reset). With the key empty, nothing loads and behaviour is unchanged. The site key
    is public; the secret key lives only in Supabase.
 
 ## Lead housekeeping
