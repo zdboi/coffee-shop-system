@@ -67,6 +67,12 @@ plain-language, step-by-step instructions.
 7. **Only `qr_relink` links a phone to an existing customer.** Any answer that reveals whether a
    number is registered is rate-limited per login.
 
+8. **Manager/admin PINs are 6 digits** (owner decision 2026-10-19). Cashier PINs stay 4–6 digits.
+   Existing 4–5 digit manager/admin PINs must be changed (Back Office shows who needs a new one).
+9. **Hosting** (owner decision 2026-10-19): before go-live, the old `POS/`, `Inventory/` and
+   `connection-test.html` pages are taken off the live site (they share browser storage with the
+   apps). The lead does this as a move into `_archive/`, never by editing them.
+
 ## Counter → server contract (`fo_sync` ops)
 Each op is `{op_id, type, data}`; types: `shift_open`, `shift_close`, `cash_movement`, `sale`,
 `held_delete`, `refund`, `audit`, `sold_out`. Approval fields:

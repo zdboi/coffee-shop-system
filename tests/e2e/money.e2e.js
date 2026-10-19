@@ -8,11 +8,14 @@
 //                                                     sub 285 disc 57  tax 27.36 svc 22.80  = 278.16 cash
 //     V  Americano, then voided with manager PIN                     sub 110  tax 13.20 svc 11.00  = 134.20 cash
 //     pay in ₱100, pay out ₱50
-//     counter partial refund of A's Iced Latte (manager PIN): ₱200 cash out of the drawer
-//   Back Office (owner): refund of ONE Americano from C, taken from the open shift's drawer: ₱110
+//     counter partial refund of A's Iced Latte (manager PIN), pro-rated (owner decision 2026-10-12):
+//        200 x 323.30 / 265 = ₱244.00 cash out of the drawer
+//   Back Office (owner): refund of ONE Americano from C, pro-rated 110 x 278.16 / 285 = ₱107.36, from the drawer
 // Expected (one shift, all on one day):
-//   counted sales 1,150.46 (A+B+C) · refunds 310.00 · voids 134.20 · net 840.46 · transactions 3
-//   cash 601.46 · GCash 549.00 · expected cash 2000 + (601.46 - 310) + 100 - 50 = 2,341.46
+//   counted sales 1,150.46 (A+B+C) · refunds 351.36 · voids 134.20 · net 799.10 · transactions 3
+//   cash 601.46 · GCash 549.00 · expected cash 2000 + (601.46 - 351.36) + 100 - 50 = 2,300.10 (declared at close)
+// Labels (SALES_LABELS): X-report "Item sales (before discounts)" 1,000.00, "Sales" 1,150.46, "Net sales";
+//   Back Office calendar sub-text "Sales ₱1,150.46 − refunds ₱351.36".
 //   stock beans 1000 - 144 + 72 = 928 g · milk 5000 - 720 + 240 = 4,520 ml (option extras included)
 // Compared: counter shift screen + X-report + close-shift (Z) record, counter "Today · all counters",
 // Back Office dashboard + calendar day view + calendar shift view, sales_report(), the database.
@@ -36,15 +39,16 @@ const X = {
   B: {sub: 450, disc: 0, tax: 54.00, svc: 45.00, total: 549.00},
   C: {sub: 285, disc: 57, tax: 27.36, svc: 22.80, total: 278.16},
   V: {sub: 110, disc: 0, tax: 13.20, svc: 11.00, total: 134.20},
-  refundA: 200.00, refundC: 110.00,
+  refundA: 244.00, refundC: 107.36,
 };
 X.counted = r2(X.A.total + X.B.total + X.C.total);                 // 1150.46
-X.refunds = r2(X.refundA + X.refundC);                               // 310
-X.net = r2(X.counted - X.refunds);                                   // 840.46
+X.refunds = r2(X.refundA + X.refundC);                               // 351.36
+X.net = r2(X.counted - X.refunds);                                   // 799.10
 X.cash = r2(X.A.total + X.C.total);                                  // 601.46
 X.other = X.B.total;                                                 // 549
-X.grossSubtotals = X.A.sub + X.B.sub + X.C.sub;                      // 1000 (the counter's "Gross Sales" = subtotals)
-X.expectedCash = r2(2000 + (X.cash - X.refunds) + 100 - 50);         // 2341.46
+X.grossSubtotals = X.A.sub + X.B.sub + X.C.sub;                      // 1000 ("Item sales (before discounts)" = subtotals)
+X.expectedCash = r2(2000 + (X.cash - X.refunds) + 100 - 50);         // 2300.10
+X.cashLessRefunds = r2(X.cash - X.refunds);                          // 250.10 (drawer "Cash Sales" line)
 X.items = 2 + 3 + 3;                                                 // A 2, B 3, C 3
 // stock (seed: beans 1000 g, milk 5000 ml; latte = 18 g + 180 ml, 16oz +60 ml, extra shot +18 g, americano 18 g)
 X.beansUsed = 36 + 54 + 36 + 18;     // A, B, C, V = 144
@@ -185,7 +189,7 @@ async function manilaClock(){
     await fo.fill('#rv-reason', 'Wrong milk'); await fo.click('#rv-confirm');
     ok(await until(() => sql(`select count(*) from refunds where sale_id='${A.id}'`) === '1', 20000), 'A: partial refund uploaded');
     const rfA = one(`select type, amount, shift_id, approved_by from refunds where sale_id='${A.id}'`);
-    ok(rfA.type === 'PARTIAL_REFUND' && eq2(rfA.amount, X.refundA) && rfA.shift_id === shiftId && rfA.approved_by === MANNY, 'A: counter refund ₱200 (the latte line), from this shift, approved by the manager', rfA);
+    ok(rfA.type === 'PARTIAL_REFUND' && eq2(rfA.amount, X.refundA) && rfA.shift_id === shiftId && rfA.approved_by === MANNY, `A: counter refund ${peso(X.refundA)} (the latte line, pro-rated), from this shift, approved by the manager`, rfA);
     ok(sql(`select status from sales where id='${A.id}'`) === 'PARTIALLY_REFUNDED', 'A: sale marked partly refunded');
   }catch(e){ await H.shot(fo, 'money-stopped-counter'); await browser.close(); H.abort(NAME, e); }
 
@@ -201,12 +205,11 @@ async function manilaClock(){
     await bo.waitForSelector('[data-item] .rv-qty');
     const row = '[data-item]:has-text("Americano") .rv-qty';
     await bo.fill(row, '1'); await bo.dispatchEvent(row, 'input');
-    ok(eq2(await bo.inputValue('#rv-amount'), X.refundC), 'BO: refund amount worked out from the line: ₱110 (line price, capped at what is left)', await bo.inputValue('#rv-amount'));
-    console.log(`     note: the customer paid ${peso(r2(110 * 0.8 * 1.22))} for that Americano after the 20% discount + tax + service; the refund gives back ${peso(X.refundC)} (see report)`);
+    ok(eq2(await bo.inputValue('#rv-amount'), X.refundC), `BO: refund amount worked out from the line: ${peso(X.refundC)} (110 x 278.16 / 285, pro-rated)`, await bo.inputValue('#rv-amount'));
     await bo.fill('#rv-reason', 'Too bitter'); await bo.selectOption('#rv-shift', shiftId);
     await bo.click('#rv-confirm'); await B.modalGone(bo);
     const rfC = one(`select type, amount, shift_id from refunds where sale_id='${C.id}'`);
-    ok(rfC && rfC.type === 'PARTIAL_REFUND' && eq2(rfC.amount, X.refundC) && rfC.shift_id === shiftId, 'BO: owner refund ₱110 saved against the open shift\'s drawer', rfC);
+    ok(rfC && rfC.type === 'PARTIAL_REFUND' && eq2(rfC.amount, X.refundC) && rfC.shift_id === shiftId, `BO: owner refund ${peso(X.refundC)} saved against the open shift's drawer`, rfC);
   }catch(e){ await H.shot(bo, 'money-stopped-bo'); await browser.close(); H.abort(NAME, e); }
 
   // ---------- the counter must see the owner's refund before the drawer is counted ----------
@@ -218,7 +221,7 @@ async function manilaClock(){
       seen = money(await fo.textContent('.drawer-card .drow.total'));
       return eq2(seen, X.expectedCash);
     }, 25000, 2000);
-    ok(live, `counter (still running) shows the owner's drawer refund: expected cash ${peso(X.expectedCash)}`, 'counter shows ' + peso(seen) + ' (without the owner\'s ₱110 refund)');
+    ok(live, `counter (still running) shows the owner's drawer refund: expected cash ${peso(X.expectedCash)}`, 'counter shows ' + peso(seen) + ' (without the owner\'s ' + peso(X.refundC) + ' refund)');
     await fo.click('#close-shift-btn');
     await fo.waitForSelector('#cs-declared');
     const atClose = money(await fo.textContent('.modal .drawer-card .drow.total'));
@@ -233,17 +236,17 @@ async function manilaClock(){
     // ---- counter shift screen + X-report
     const stat = (label) => fo.$$eval('.stat-card', (cards, l) => { const c = cards.find(x => x.querySelector('.label') && x.querySelector('.label').textContent.trim() === l); return c ? c.querySelector('.value').textContent : null; }, label);
     const drawer = await fo.$$eval('.drawer-card .drow', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim()));
-    ok(eq2(money(await stat('Net Sales')), X.net) && Number(await stat('Transactions')) === 3 && eq2(money(await stat('Refunds')), X.refunds), `counter shift screen: net ${peso(X.net)}, 3 transactions, refunds ${peso(X.refunds)}`, [await stat('Net Sales'), await stat('Transactions'), await stat('Refunds')]);
+    ok(eq2(money(await stat('Net sales')), X.net) && Number(await stat('Transactions')) === 3 && eq2(money(await stat('Refunds')), X.refunds), `counter shift screen: net ${peso(X.net)}, 3 transactions, refunds ${peso(X.refunds)}`, [await stat('Net sales'), await stat('Transactions'), await stat('Refunds')]);
     ok(eq2(money(await stat('Cash')), X.cash) && eq2(money(await stat('GCash / Maya / Other')), X.other) && eq2(money(await stat('Card')), 0), `counter payment breakdown: cash ${peso(X.cash)}, GCash ${peso(X.other)}`);
-    ok(eq2(money(drawer[drawer.length - 1]), X.expectedCash) && drawer.some(d => /Cash Sales.*291\.46/.test(d)) && drawer.some(d => /Pay Ins \(1\).*100\.00/.test(d)) && drawer.some(d => /Pay Outs \(1\).*50\.00/.test(d)), `counter drawer: 2000 + 291.46 (cash sales less cash refunds) + 100 - 50 = ${peso(X.expectedCash)} after restart`, drawer);
+    ok(eq2(money(drawer[drawer.length - 1]), X.expectedCash) && drawer.some(d => new RegExp('Cash Sales.*' + X.cashLessRefunds.toFixed(2).replace('.', '\\.')).test(d)) && drawer.some(d => /Pay Ins \(1\).*100\.00/.test(d)) && drawer.some(d => /Pay Outs \(1\).*50\.00/.test(d)), `counter drawer: 2000 + ${X.cashLessRefunds} (cash sales less cash refunds) + 100 - 50 = ${peso(X.expectedCash)} after restart`, drawer);
     const [xr] = await Promise.all([fctx.waitForEvent('page'), fo.click('#xreport-btn')]);
     await xr.waitForLoadState();
     const xrow = await xr.$$eval('.row', rs => Object.fromEntries(rs.map(r => [r.querySelector('span').textContent.trim(), r.querySelector('b').textContent.trim()])));
     const xv = (k) => money(xrow[k]);
-    ok(eq2(xv('Net Sales'), X.net) && Number(xrow['Transactions']) === 3 && eq2(xv('Refunds'), X.refunds) && eq2(xv('Voids'), X.V.total), `X-report: net ${peso(X.net)}, 3 transactions, refunds ${peso(X.refunds)}, voids ${peso(X.V.total)}`, xrow);
+    ok(eq2(xv('Net sales'), X.net) && Number(xrow['Transactions']) === 3 && eq2(-xv('Refunds'), X.refunds) && eq2(xv('Voids'), X.V.total), `X-report: net ${peso(X.net)}, 3 transactions, refunds ${peso(X.refunds)}, voids ${peso(X.V.total)}`, xrow);
     ok(eq2(xv('Cash'), X.cash) && eq2(xv('Card'), 0) && eq2(xv('GCash / Maya / Other'), X.other) && eq2(xv('Opening Cash'), 2000) && eq2(xv('Expected Cash'), X.expectedCash), `X-report: cash ${peso(X.cash)}, GCash ${peso(X.other)}, opening ₱2,000, expected cash ${peso(X.expectedCash)}`, xrow);
     ok(/\+₱100\.00 \/ -₱50\.00/.test(xrow['Pay Ins / Outs'] || ''), 'X-report: pay ins / outs +₱100 / -₱50', xrow['Pay Ins / Outs']);
-    ok(eq2(xv('Gross Sales'), X.grossSubtotals), 'X-report: "Gross Sales" = ₱1,000.00 (sum of subtotals before discount, tax and service - see report)', xrow['Gross Sales']);
+    ok(eq2(xv('Item sales (before discounts)'), X.grossSubtotals) && eq2(xv('Sales'), X.counted), 'X-report: Item sales 1,000.00 and Sales 1,150.46', xrow);
     await xr.close();
     // counter "Today · all counters"
     await fo.click('.nav-item[data-route="sales"]'); await fo.click('[data-view="today"]'); await fo.waitForSelector('.stat-card');
@@ -259,7 +262,7 @@ async function manilaClock(){
     await B.go(bo, 'calendar'); await bo.click('[data-view="day"]'); await bo.waitForSelector('.cal-kpis');
     const kp = async (l) => B.statValue(bo, l);
     const netCard = await bo.$$eval('.stat-card', cs => { const c = cs.find(x => x.querySelector('.label').textContent.trim() === 'Net sales'); return c ? c.textContent.replace(/\s+/g, ' ') : ''; });
-    ok(eq2(money(await kp('Net sales')), X.net) && netCard.includes(peso(X.counted) + ' before ' + peso(X.refunds) + ' refunds'), `BO calendar day: net ${peso(X.net)} (${peso(X.counted)} before ${peso(X.refunds)} refunds)`, netCard);
+    ok(eq2(money(await kp('Net sales')), X.net) && netCard.includes('Sales ' + peso(X.counted) + ' − refunds ' + peso(X.refunds)), `BO calendar day: net ${peso(X.net)}, sub-text "Sales ${peso(X.counted)} − refunds ${peso(X.refunds)}"`, netCard);
     ok(Number(await kp('Transactions')) === 3 && Number(await kp('Items sold')) === X.items && eq2(money(await kp('Average sale')), r2(X.counted / 3)), `BO calendar day: 3 transactions (void left out), ${X.items} items, average ${peso(r2(X.counted / 3))}`, [await kp('Transactions'), await kp('Items sold'), await kp('Average sale')]);
     const payRows = await bo.$$eval('.cal-card', cards => { const c = cards.find(x => /Payment methods/.test(x.querySelector('h3') ? x.querySelector('h3').textContent : '')); return c ? [...c.querySelectorAll('tbody tr')].map(r => [...r.children].map(td => td.textContent.trim())) : []; });
     const pay = Object.fromEntries(payRows.map(r => [r[0], r]));

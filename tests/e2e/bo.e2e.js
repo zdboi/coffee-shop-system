@@ -1,4 +1,4 @@
-// Back Office browser suite: runs tests/e2e/bo/part0..part4 in order on ONE freshly seeded database
+// Back Office browser suite: runs tests/e2e/bo/part0..part6 in order on ONE freshly seeded database
 // (each part builds on the one before). Window size from BO_VIEWPORT (default 1280x900).
 //   tests/e2e_reset.sh [db] && tests/restart_fake.sh [port] [db]
 //   FAKE_PORT=8787 FAKE_DB=cccc BO_VIEWPORT=1280x900 node tests/e2e/bo.e2e.js
@@ -7,7 +7,7 @@
 // does not stop the run.
 const { spawnSync } = require('child_process');
 const path = require('path');
-const PARTS = ['part0_smoke.js', 'part1_setup.js', 'part2_sales.js', 'part3_import.js', 'part4_admin.js'];
+const PARTS = ['part0_smoke.js', 'part1_setup.js', 'part2_sales.js', 'part3_import.js', 'part4_admin.js', 'part5_import_refunds.js', 'part6_sale_lock.js'];
 const size = process.env.BO_VIEWPORT || '1280x900';
 let checks = 0, failed = 0, crashed = null;
 for(const p of PARTS){

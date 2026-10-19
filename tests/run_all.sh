@@ -45,11 +45,15 @@ run_sql_lines(){ # name file
   if [ "$f" -eq 0 ]; then record "$1" PASS "$n" 0 $((SECONDS-t0)) "$log"
   else record "$1" FAIL "$n" "$f" $((SECONDS-t0)) "$log"; grep -E '^FAIL|ERROR' "$log" | head -5 | sed 's/^/      /'; fi
 }
-# node script that ends with "SUMMARY <name>: <n> checks, <f> failed"
+# node script (or shell script with run_cmd) that ends with "SUMMARY <name>: <n> checks, <f> failed"
 run_node(){ # name script [args...]   (env passed through)
   local name="$1"; shift
+  run_cmd "$name" node "$@"
+}
+run_cmd(){ # name command [args...]
+  local name="$1"; shift
   local t0=$SECONDS log; log=$(logname "$name")
-  timeout 1500 node "$@" > "$log" 2>&1; local rc=$?
+  timeout 1500 "$@" > "$log" 2>&1; local rc=$?
   local line n f; line=$(grep -E '^SUMMARY ' "$log" | tail -1)
   n=$(sed -E 's/.*: ([0-9]+) checks.*/\1/' <<<"$line"); f=$(sed -E 's/.*checks, ([0-9]+) failed.*/\1/' <<<"$line")
   [ -z "$line" ] && n=0 && f=1
@@ -74,18 +78,27 @@ run_sql_assert sql/11_qr_tests "$DIR/sql/11_qr_tests.sql"
 run_sql_lines  sql/31_qa_extra_tests "$DIR/sql/31_qa_extra_tests.sql"
 "$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
 run_sql_assert sql/30_security_tests "$DIR/sql/30_security_tests.sql"
+"$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
+run_sql_assert sql/32_fix_round_tests "$DIR/sql/32_fix_round_tests.sql"
+run_cmd conc_checks "$DIR/conc_checks.sh" "$DB"       # two sessions at once, on the data 32 left
 
 echo "== unit checks (shared core)"
 run_node unit/core_check "$DIR/unit/core_check.js" "$REPO"
 run_node unit/error_codes_check "$DIR/unit/error_codes_check.js" "$REPO"
 run_node unit/core_browser "$DIR/unit/core_browser.js" "$REPO"
+run_node unit/logic_refund_check "$DIR/unit/logic_refund_check.js" "$REPO"
+run_node unit/email_link_check "$DIR/unit/email_link_check.js" "$REPO"
+"$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1          # parity check needs a shop (runs inside a rolled-back transaction)
+run_node unit/refund_parity_check "$DIR/unit/refund_parity_check.js" "$REPO" "$DB" 500
 
 if [ "$BROWSER" = 1 ]; then
   "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1
   "$DIR/restart_fake.sh" "$PORT" "$DB" > /dev/null || { echo "stand-in did not start (see tests/fake-$PORT.log)"; exit 1; }
   for run in $(seq 1 "$RUNS"); do
     echo "== browser suites, run $run of $RUNS (counter 1280 px, Back Office 1280 + 768 px, QR page 390x844)"
-    for t in "fo.e2e:fo.e2e.js:" "fo_security.e2e:fo_security.e2e.js:" "order.e2e:order.e2e.js:" "order_extra.e2e:order_extra.e2e.js:" \
+    for t in "fo.e2e:fo.e2e.js:" "fo_security.e2e:fo_security.e2e.js:" "fo_refunds.e2e:fo_refunds.e2e.js:" \
+             "fo_offline_manager.e2e:fo_offline_manager.e2e.js:" "fo_offline_pin.e2e:fo_offline_pin.e2e.js:" "fo_qr_paid_once.e2e:fo_qr_paid_once.e2e.js:" \
+             "order.e2e:order.e2e.js:" "order_extra.e2e:order_extra.e2e.js:" "order_ticket_states.e2e:order_ticket_states.e2e.js:" \
              "bo.e2e@1280:bo.e2e.js:1280x900" "bo.e2e@768:bo.e2e.js:768x1024" "bo_calendar_tips.e2e:bo_calendar_tips.e2e.js:" "money.e2e:money.e2e.js:"; do
       IFS=: read -r name file vp <<<"$t"
       "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1      # every browser suite starts from a fresh seed

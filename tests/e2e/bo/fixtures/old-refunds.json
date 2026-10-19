@@ -1,0 +1,2178 @@
+{
+ "app": "Coffee Shop System (Inventory + POS)",
+ "version": 4,
+ "exported_at": "2026-01-10T00:00:00.000Z",
+ "app_name_at_export": "Old Shop",
+ "data": {
+  "categories": [
+   {
+    "id": "cat_r1",
+    "name": "Coffee"
+   }
+  ],
+  "suppliers": [],
+  "ingredients": [
+   {
+    "id": "ing_rbeans",
+    "name": "Old House Beans",
+    "categoryId": "cat_r1",
+    "base_unit": "g",
+    "reorder_level": 500,
+    "active": true,
+    "created_at": "2026-01-02T00:00:00.000Z",
+    "updated_at": "2026-01-02T00:00:00.000Z"
+   },
+   {
+    "id": "ing_rmilk",
+    "name": "Old Fresh Milk",
+    "categoryId": "cat_r1",
+    "base_unit": "ml",
+    "reorder_level": 1000,
+    "active": true,
+    "created_at": "2026-01-02T00:00:00.000Z",
+    "updated_at": "2026-01-02T00:00:00.000Z"
+   }
+  ],
+  "recipes": [
+   {
+    "id": "rec_ramer",
+    "name": "Old Americano",
+    "recipe_type": "DRINKS",
+    "category": "Hot",
+    "selling_price": 110,
+    "active": true,
+    "created_at": "2026-01-04T00:00:00.000Z",
+    "updated_at": "2026-01-04T00:00:00.000Z"
+   },
+   {
+    "id": "rec_rlatte",
+    "name": "Old Latte",
+    "recipe_type": "DRINKS",
+    "category": "Iced",
+    "selling_price": 150,
+    "active": true,
+    "created_at": "2026-01-04T00:00:00.000Z",
+    "updated_at": "2026-01-04T00:00:00.000Z"
+   }
+  ],
+  "recipeIngredients": [
+   {
+    "id": "rri_1",
+    "recipeId": "rec_ramer",
+    "ingredientId": "ing_rbeans",
+    "quantity": 18,
+    "unit": "g"
+   },
+   {
+    "id": "rri_2",
+    "recipeId": "rec_rlatte",
+    "ingredientId": "ing_rbeans",
+    "quantity": 18,
+    "unit": "g"
+   },
+   {
+    "id": "rri_3",
+    "recipeId": "rec_rlatte",
+    "ingredientId": "ing_rmilk",
+    "quantity": 180,
+    "unit": "ml"
+   }
+  ],
+  "purchases": [],
+  "productionBatches": [],
+  "waste": [],
+  "users": [
+   {
+    "id": "user_rc",
+    "name": "Old Cashier",
+    "role": "CASHIER",
+    "active": true,
+    "created_at": "2026-01-01T00:00:00.000Z"
+   }
+  ],
+  "shifts": [
+   {
+    "id": "shift_r1",
+    "shift_number": "SHIFT-OLD-R001",
+    "cashier_id": "user_rc",
+    "cashier_name": "Old Cashier",
+    "opened_at": "2026-01-08T00:00:00.000Z",
+    "closed_at": "2026-01-08T09:00:00.000Z",
+    "status": "CLOSED",
+    "opening_cash": 1000,
+    "declared_cash": 1000,
+    "expected_cash": 1000,
+    "cash_variance": 0,
+    "gross_sales": 0,
+    "net_sales": 0,
+    "cash_sales": 0,
+    "card_sales": 0,
+    "other_sales": 0,
+    "refunds_total": 0,
+    "voids_total": 0,
+    "transaction_count": 5,
+    "created_at": "2026-01-08T00:00:00.000Z"
+   }
+  ],
+  "sales": [
+   {
+    "id": "sale_p",
+    "transaction_number": "POS-OLD-2026-000001",
+    "transaction_date": "2026-01-08T01:00:00.000Z",
+    "status": "PARTIALLY_REFUNDED",
+    "cashier": "Old Cashier",
+    "shift_id": "shift_r1",
+    "discount_type": "percent",
+    "discount_value": 20,
+    "discount_amount": 82,
+    "tax_amount": 39.36,
+    "service_charge_amount": 32.8,
+    "created_at": "2026-01-08T01:00:00.000Z",
+    "subtotal": 410,
+    "grand_total": 400.16
+   },
+   {
+    "id": "sale_h",
+    "transaction_number": "POS-OLD-2026-000002",
+    "transaction_date": "2026-01-08T03:00:00.000Z",
+    "status": "REFUNDED",
+    "cashier": "Old Cashier",
+    "shift_id": "shift_r1",
+    "discount_type": "percent",
+    "discount_value": 20,
+    "discount_amount": 52,
+    "tax_amount": 24.96,
+    "service_charge_amount": 20.8,
+    "created_at": "2026-01-08T03:00:00.000Z",
+    "subtotal": 260,
+    "grand_total": 253.76
+   },
+   {
+    "id": "sale_s",
+    "transaction_number": "POS-OLD-2026-000003",
+    "transaction_date": "2026-01-08T05:00:00.000Z",
+    "status": "REFUNDED",
+    "cashier": "Old Cashier",
+    "shift_id": "shift_r1",
+    "discount_type": null,
+    "discount_value": 0,
+    "discount_amount": 0,
+    "tax_amount": 0,
+    "service_charge_amount": 0,
+    "created_at": "2026-01-08T05:00:00.000Z",
+    "subtotal": 110,
+    "grand_total": 110
+   },
+   {
+    "id": "sale_v",
+    "transaction_number": "POS-OLD-2026-000004",
+    "transaction_date": "2026-01-08T06:00:00.000Z",
+    "status": "VOIDED",
+    "cashier": "Old Cashier",
+    "shift_id": "shift_r1",
+    "discount_type": null,
+    "discount_value": 0,
+    "discount_amount": 0,
+    "tax_amount": 0,
+    "service_charge_amount": 0,
+    "created_at": "2026-01-08T06:00:00.000Z",
+    "subtotal": 110,
+    "grand_total": 110
+   },
+   {
+    "id": "sale_ok",
+    "transaction_number": "POS-OLD-2026-000005",
+    "transaction_date": "2026-01-08T07:00:00.000Z",
+    "status": "COMPLETED",
+    "cashier": "Old Cashier",
+    "shift_id": "shift_r1",
+    "discount_type": null,
+    "discount_value": 0,
+    "discount_amount": 0,
+    "tax_amount": 0,
+    "service_charge_amount": 0,
+    "created_at": "2026-01-08T07:00:00.000Z",
+    "subtotal": 150,
+    "grand_total": 150
+   }
+  ],
+  "saleItems": [
+   {
+    "id": "sit_p1",
+    "saleId": "sale_p",
+    "recipeId": "rec_ramer",
+    "name": "Old Americano",
+    "quantity": 1,
+    "unit_price": 110,
+    "modifiers": [],
+    "line_total": 110
+   },
+   {
+    "id": "sit_p2",
+    "saleId": "sale_p",
+    "recipeId": "rec_rlatte",
+    "name": "Old Latte",
+    "quantity": 2,
+    "unit_price": 150,
+    "modifiers": [],
+    "line_total": 300
+   },
+   {
+    "id": "sit_h1",
+    "saleId": "sale_h",
+    "recipeId": "rec_ramer",
+    "name": "Old Americano",
+    "quantity": 1,
+    "unit_price": 110,
+    "modifiers": [],
+    "line_total": 110
+   },
+   {
+    "id": "sit_h2",
+    "saleId": "sale_h",
+    "recipeId": "rec_rlatte",
+    "name": "Old Latte",
+    "quantity": 1,
+    "unit_price": 150,
+    "modifiers": [],
+    "line_total": 150
+   },
+   {
+    "id": "sit_s1",
+    "saleId": "sale_s",
+    "recipeId": "rec_ramer",
+    "name": "Old Americano",
+    "quantity": 1,
+    "unit_price": 110,
+    "modifiers": [],
+    "line_total": 110
+   },
+   {
+    "id": "sit_v1",
+    "saleId": "sale_v",
+    "recipeId": "rec_ramer",
+    "name": "Old Americano",
+    "quantity": 1,
+    "unit_price": 110,
+    "modifiers": [],
+    "line_total": 110
+   },
+   {
+    "id": "sit_ok1",
+    "saleId": "sale_ok",
+    "recipeId": "rec_rlatte",
+    "name": "Old Latte",
+    "quantity": 1,
+    "unit_price": 150,
+    "modifiers": [],
+    "line_total": 150
+   }
+  ],
+  "payments": [
+   {
+    "id": "pay_sale_p",
+    "saleId": "sale_p",
+    "method": "CASH",
+    "amount": 400.16,
+    "tendered": 400.16,
+    "change": 0,
+    "status": "COMPLETED",
+    "created_at": "2026-01-08T01:00:00.000Z"
+   },
+   {
+    "id": "pay_sale_h",
+    "saleId": "sale_h",
+    "method": "CASH",
+    "amount": 253.76,
+    "tendered": 253.76,
+    "change": 0,
+    "status": "COMPLETED",
+    "created_at": "2026-01-08T03:00:00.000Z"
+   },
+   {
+    "id": "pay_sale_s",
+    "saleId": "sale_s",
+    "method": "CASH",
+    "amount": 110,
+    "tendered": 110,
+    "change": 0,
+    "status": "COMPLETED",
+    "created_at": "2026-01-08T05:00:00.000Z"
+   },
+   {
+    "id": "pay_sale_v",
+    "saleId": "sale_v",
+    "method": "CASH",
+    "amount": 110,
+    "tendered": 110,
+    "change": 0,
+    "status": "COMPLETED",
+    "created_at": "2026-01-08T06:00:00.000Z"
+   },
+   {
+    "id": "pay_sale_ok",
+    "saleId": "sale_ok",
+    "method": "CASH",
+    "amount": 150,
+    "tendered": 150,
+    "change": 0,
+    "status": "COMPLETED",
+    "created_at": "2026-01-08T07:00:00.000Z"
+   }
+  ],
+  "refunds": [
+   {
+    "id": "ref_p",
+    "saleId": "sale_p",
+    "shift_id": "shift_r1",
+    "type": "PARTIAL_REFUND",
+    "amount": 110,
+    "reason": "Too bitter",
+    "items": [
+     {
+      "saleItemId": "sit_p1",
+      "quantity": 1,
+      "recipeId": "rec_ramer",
+      "modifiers": []
+     }
+    ],
+    "approved_by": "Old Cashier",
+    "date": "2026-01-08T02:00:00.000Z",
+    "notes": ""
+   },
+   {
+    "id": "ref_h",
+    "saleId": "sale_h",
+    "shift_id": "shift_r1",
+    "type": "FULL_REFUND",
+    "amount": 260,
+    "reason": "Customer left",
+    "items": [
+     {
+      "saleItemId": "sit_h1",
+      "quantity": 1,
+      "recipeId": "rec_ramer"
+     },
+     {
+      "saleItemId": "sit_h2",
+      "quantity": 1,
+      "recipeId": "rec_rlatte"
+     }
+    ],
+    "approved_by": "Old Cashier",
+    "date": "2026-01-08T04:00:00.000Z",
+    "notes": ""
+   },
+   {
+    "id": "ref_s",
+    "saleId": "sale_s",
+    "shift_id": "shift_r1",
+    "type": "FULL_REFUND",
+    "amount": 110,
+    "reason": "Wrong order",
+    "items": [
+     {
+      "saleItemId": "sit_s1",
+      "quantity": 1,
+      "recipeId": "rec_ramer"
+     }
+    ],
+    "approved_by": "Old Cashier",
+    "date": "2026-01-08T06:00:00.000Z",
+    "notes": ""
+   },
+   {
+    "id": "ref_v",
+    "saleId": "sale_v",
+    "shift_id": "shift_r1",
+    "type": "VOID",
+    "amount": 110,
+    "reason": "Entered by mistake",
+    "items": [
+     {
+      "saleItemId": "sit_v1",
+      "quantity": 1,
+      "recipeId": "rec_ramer"
+     }
+    ],
+    "approved_by": "Old Cashier",
+    "date": "2026-01-08T07:00:00.000Z",
+    "notes": ""
+   }
+  ],
+  "inventoryTransactions": [
+   {
+    "id": "rrev_4",
+    "ingredientId": "ing_rbeans",
+    "transaction_type": "SALE_REVERSAL",
+    "quantity": 18,
+    "reference_id": "ref_p",
+    "transaction_date": "2026-01-08",
+    "notes": "Refund",
+    "created_at": "2026-01-08T02:00:00.000Z"
+   },
+   {
+    "id": "rrev_8",
+    "ingredientId": "ing_rbeans",
+    "transaction_type": "SALE_REVERSAL",
+    "quantity": 36,
+    "reference_id": "ref_h",
+    "transaction_date": "2026-01-08",
+    "notes": "Refund",
+    "created_at": "2026-01-08T04:00:00.000Z"
+   },
+   {
+    "id": "rrev_9",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "SALE_REVERSAL",
+    "quantity": 180,
+    "reference_id": "ref_h",
+    "transaction_date": "2026-01-08",
+    "notes": "Refund",
+    "created_at": "2026-01-08T04:00:00.000Z"
+   },
+   {
+    "id": "rrev_11",
+    "ingredientId": "ing_rbeans",
+    "transaction_type": "SALE_REVERSAL",
+    "quantity": 36,
+    "reference_id": "ref_s",
+    "transaction_date": "2026-01-08",
+    "notes": "Refund",
+    "created_at": "2026-01-08T06:00:00.000Z"
+   },
+   {
+    "id": "rrev_13",
+    "ingredientId": "ing_rbeans",
+    "transaction_type": "SALE_REVERSAL",
+    "quantity": 18,
+    "reference_id": "ref_v",
+    "transaction_date": "2026-01-08",
+    "notes": "Refund",
+    "created_at": "2026-01-08T07:00:00.000Z"
+   },
+   {
+    "id": "radj_0",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 0",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_1",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 1",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_2",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 2",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_3",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 3",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_4",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 4",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_5",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 5",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_6",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 6",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_7",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 7",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_8",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 8",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_9",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 9",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_10",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 10",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_11",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 11",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_12",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 12",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_13",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 13",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_14",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 14",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_15",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 15",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_16",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 16",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_17",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 17",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_18",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 18",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_19",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 19",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_20",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 20",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_21",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 21",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_22",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 22",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_23",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 23",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_24",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 24",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_25",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 25",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_26",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 26",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_27",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 27",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_28",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 28",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_29",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 29",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_30",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 30",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_31",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 31",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_32",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 32",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_33",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 33",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_34",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 34",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_35",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 35",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_36",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 36",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_37",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 37",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_38",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 38",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_39",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 39",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_40",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 40",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_41",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 41",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_42",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 42",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_43",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 43",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_44",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 44",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_45",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 45",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_46",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 46",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_47",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 47",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_48",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 48",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_49",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 49",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_50",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 50",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_51",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 51",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_52",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 52",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_53",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 53",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_54",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 54",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_55",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 55",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_56",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 56",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_57",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 57",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_58",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 58",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_59",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 59",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_60",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 60",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_61",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 61",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_62",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 62",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_63",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 63",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_64",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 64",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_65",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 65",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_66",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 66",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_67",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 67",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_68",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 68",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_69",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 69",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_70",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 70",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_71",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 71",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_72",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 72",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_73",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 73",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_74",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 74",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_75",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 75",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_76",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 76",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_77",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 77",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_78",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 78",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_79",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 79",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_80",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 80",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_81",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 81",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_82",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 82",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_83",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 83",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_84",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 84",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_85",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 85",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_86",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 86",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_87",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 87",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_88",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 88",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_89",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 89",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_90",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 90",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_91",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 91",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_92",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 92",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_93",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 93",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_94",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 94",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_95",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 95",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_96",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 96",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_97",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 97",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_98",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 98",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_99",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 99",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_100",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 100",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_101",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 101",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_102",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 102",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_103",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 103",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_104",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 104",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_105",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 105",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_106",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 106",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_107",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 107",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_108",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 108",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_109",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 109",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_110",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 110",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_111",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 111",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_112",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 112",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_113",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 113",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_114",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 114",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_115",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 115",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_116",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 116",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_117",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 117",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_118",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 118",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_119",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 119",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_120",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 120",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_121",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 121",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_122",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 122",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_123",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 123",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_124",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 124",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_125",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 125",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_126",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 126",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_127",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 127",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_128",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 128",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_129",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 129",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_130",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 130",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_131",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 131",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_132",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 132",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_133",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 133",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_134",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 134",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_135",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 135",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_136",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 136",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_137",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 137",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_138",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 138",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_139",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 139",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_140",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 140",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_141",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 141",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_142",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 142",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_143",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 143",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_144",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 144",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_145",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 145",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_146",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 146",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_147",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 147",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_148",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 148",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_149",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 149",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_150",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 150",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_151",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 151",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_152",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 152",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_153",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 153",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_154",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 154",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_155",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 155",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_156",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 156",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_157",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 157",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_158",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 158",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "radj_159",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "ADJUSTMENT",
+    "quantity": 1,
+    "reference_id": null,
+    "transaction_date": "2026-01-07",
+    "notes": "Count 159",
+    "created_at": "2026-01-07T00:00:00.000Z"
+   },
+   {
+    "id": "rbuy_1",
+    "ingredientId": "ing_rbeans",
+    "transaction_type": "INITIAL_STOCK",
+    "quantity": 5000,
+    "reference_id": null,
+    "transaction_date": "2026-01-02",
+    "notes": "Start",
+    "created_at": "2026-01-02T00:00:00.000Z"
+   },
+   {
+    "id": "rbuy_2",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "INITIAL_STOCK",
+    "quantity": 9000,
+    "reference_id": null,
+    "transaction_date": "2026-01-02",
+    "notes": "Start",
+    "created_at": "2026-01-02T00:00:00.000Z"
+   },
+   {
+    "id": "ruse_1",
+    "ingredientId": "ing_rbeans",
+    "transaction_type": "SALE_USAGE",
+    "quantity": 18,
+    "reference_id": "sale_p",
+    "transaction_date": "2026-01-08",
+    "notes": "Sold",
+    "created_at": "2026-01-08T01:00:00.000Z"
+   },
+   {
+    "id": "ruse_2",
+    "ingredientId": "ing_rbeans",
+    "transaction_type": "SALE_USAGE",
+    "quantity": 36,
+    "reference_id": "sale_p",
+    "transaction_date": "2026-01-08",
+    "notes": "Sold",
+    "created_at": "2026-01-08T01:00:00.000Z"
+   },
+   {
+    "id": "ruse_3",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "SALE_USAGE",
+    "quantity": 360,
+    "reference_id": "sale_p",
+    "transaction_date": "2026-01-08",
+    "notes": "Sold",
+    "created_at": "2026-01-08T01:00:00.000Z"
+   },
+   {
+    "id": "ruse_5",
+    "ingredientId": "ing_rbeans",
+    "transaction_type": "SALE_USAGE",
+    "quantity": 18,
+    "reference_id": "sale_h",
+    "transaction_date": "2026-01-08",
+    "notes": "Sold",
+    "created_at": "2026-01-08T03:00:00.000Z"
+   },
+   {
+    "id": "ruse_6",
+    "ingredientId": "ing_rbeans",
+    "transaction_type": "SALE_USAGE",
+    "quantity": 18,
+    "reference_id": "sale_h",
+    "transaction_date": "2026-01-08",
+    "notes": "Sold",
+    "created_at": "2026-01-08T03:00:00.000Z"
+   },
+   {
+    "id": "ruse_7",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "SALE_USAGE",
+    "quantity": 180,
+    "reference_id": "sale_h",
+    "transaction_date": "2026-01-08",
+    "notes": "Sold",
+    "created_at": "2026-01-08T03:00:00.000Z"
+   },
+   {
+    "id": "ruse_10",
+    "ingredientId": "ing_rbeans",
+    "transaction_type": "SALE_USAGE",
+    "quantity": 18,
+    "reference_id": "sale_s",
+    "transaction_date": "2026-01-08",
+    "notes": "Sold",
+    "created_at": "2026-01-08T05:00:00.000Z"
+   },
+   {
+    "id": "ruse_12",
+    "ingredientId": "ing_rbeans",
+    "transaction_type": "SALE_USAGE",
+    "quantity": 18,
+    "reference_id": "sale_v",
+    "transaction_date": "2026-01-08",
+    "notes": "Sold",
+    "created_at": "2026-01-08T06:00:00.000Z"
+   },
+   {
+    "id": "ruse_14",
+    "ingredientId": "ing_rbeans",
+    "transaction_type": "SALE_USAGE",
+    "quantity": 18,
+    "reference_id": "sale_ok",
+    "transaction_date": "2026-01-08",
+    "notes": "Sold",
+    "created_at": "2026-01-08T07:00:00.000Z"
+   },
+   {
+    "id": "ruse_15",
+    "ingredientId": "ing_rmilk",
+    "transaction_type": "SALE_USAGE",
+    "quantity": 180,
+    "reference_id": "sale_ok",
+    "transaction_date": "2026-01-08",
+    "notes": "Sold",
+    "created_at": "2026-01-08T07:00:00.000Z"
+   }
+  ],
+  "cashMovements": [],
+  "auditLog": []
+ }
+}
