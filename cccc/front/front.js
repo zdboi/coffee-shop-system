@@ -295,7 +295,7 @@ function showPinGate(mode){
     if(pausedUntil) showPinError(offlinePinLockText(pausedUntil));
   } else {
     document.getElementById('pin-title').textContent = `${pinOverrideMinRole.charAt(0)+pinOverrideMinRole.slice(1).toLowerCase()} PIN required`;
-    document.getElementById('pin-sub').textContent = hasRole(pinOverrideMinRole)
+    document.getElementById('pin-sub').textContent = hasRole(pinOverrideMinRole) && !shortPinUser()
       ? 'Enter your PIN again to approve. This needs internet.'
       : 'Ask a manager to enter their PIN to approve. This needs internet.';
     foot.innerHTML = `<a href="#" class="pin-link" id="pin-cancel">← Cancel</a>`;
@@ -350,7 +350,7 @@ async function submitPin(opts){
     if(r.error){ pinBuffer=''; renderPinDisplay(); showPinError(pinErrorText(r)); return; }
     if(r.token && !r.offline) await markEarlierLoginsEnded(r.token);
     await signIn(r.staff, r.token, r.expires_at, !!r.offline,
-      opts.signedInAnyway ? ` — signed in before ${opts.signedInAnyway} approved action(s) uploaded` : '');
+      opts.signedInAnyway ? ` — signed in before ${opts.signedInAnyway} approved action(s) uploaded` : '', !!r.needs_new_pin);
     if(r.needs_new_pin){
       addAlert({id: 'pin6:' + r.staff.id, kind: 'note', title: 'Your PIN needs updating.', text: 'Ask the owner to give you a new 6-digit PIN.'});
     }
@@ -536,11 +536,12 @@ async function offlineVerifyPin(pin){
   return found;
 }
 
-async function signIn(staff, token, expiresAt, offline, auditNote){
-  posState.currentUser = {id: staff.id, name: staff.name, role: staff.role, offline: !!offline};
+async function signIn(staff, token, expiresAt, offline, auditNote, needsNewPin){
+  // needs_new_pin (decision 8): a manager/admin with a PIN shorter than 6 digits can sell, but approves nothing.
+  posState.currentUser = {id: staff.id, name: staff.name, role: staff.role, offline: !!offline, needs_new_pin: !!needsNewPin};
   posState.loginExpiresAt = token ? (expiresAt || null) : null;
   cloud.setStaffToken(token || null);
-  try{ sessionStorage.setItem(STAFF_SESSION_STORAGE, JSON.stringify({staff, token: token||null, expires_at: expiresAt||null})); }catch(e){}
+  try{ sessionStorage.setItem(STAFF_SESSION_STORAGE, JSON.stringify({staff, token: token||null, expires_at: expiresAt||null, needs_new_pin: !!needsNewPin})); }catch(e){}
   if(token && ROLE_RANK[staff.role] >= ROLE_RANK.MANAGER) rememberLoginToken(token, expiresAt, staff.name);
   queueAudit('User login', `Role: ${staff.role}${offline?' (offline)':''}${auditNote||''}`);
   document.getElementById('pin-gate').style.display='none';
@@ -556,7 +557,7 @@ function resumeStaffSession(){
     if(s.expires_at && new Date(s.expires_at).getTime() < Date.now()) return false;
     const st = state.staff.find(x=>x.id===s.staff.id);
     if(!st || st.active===false) return false;
-    posState.currentUser = {id: st.id, name: st.name, role: st.role, offline: !s.token};
+    posState.currentUser = {id: st.id, name: st.name, role: st.role, offline: !s.token, needs_new_pin: !!s.needs_new_pin};
     posState.loginExpiresAt = s.token ? (s.expires_at || null) : null;
     cloud.setStaffToken(s.token);
     show('app', true);
@@ -699,10 +700,22 @@ function ownLoginToken(){
 //    without internet (owner decision 2026-10-12);
 //  * anyone else's action (a cashier's) needs a manager to type their PIN, which only the
 //    server can check, so that needs internet. Manager PINs are never checked offline.
+// The signed-in manager/admin still has a PIN shorter than 6 digits (decision 8): they can sell,
+// but their own sign-in approves nothing (the server would refuse it with PIN_UPDATE_NEEDED).
+function shortPinUser(){
+  const me = posState.currentUser;
+  return !!(me && me.needs_new_pin && ROLE_RANK[me.role] >= ROLE_RANK.MANAGER);
+}
 function requireOverride(minRole='MANAGER'){
   const me = posState.currentUser;
-  const own = me && hasRole(minRole) ? ownLoginToken() : null;
+  const shortPin = shortPinUser();
+  const own = me && hasRole(minRole) && !shortPin ? ownLoginToken() : null;
   if(own) return Promise.resolve({id: me.id, name: me.name, role: me.role, token: own, own: true});
+  if(shortPin){
+    // No approval with their own sign-in. Online, another manager can approve on the PIN pad.
+    if(!isOnline()){ toast(friendlyError('PIN_UPDATE_NEEDED'), 'warn'); return Promise.resolve(null); }
+    toast(friendlyError('PIN_UPDATE_NEEDED') + ' Another manager can approve with their PIN.', 'warn');
+  }
   if(!isOnline()){
     toast(me && hasRole(minRole) && cloud.getStaffToken() ? APPROVAL_ENDED_TEXT : APPROVAL_OFFLINE_TEXT, 'warn');
     return Promise.resolve(null);
