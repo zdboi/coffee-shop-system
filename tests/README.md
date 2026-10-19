@@ -24,6 +24,7 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 | `sql/31_qa_extra_tests.sql` | QA extras (after 10 + 11): a refused pairing must leave nothing behind | — |
 | `sql/30_security_tests.sql` | 172 checks for the 2026-10-12 security decisions (own fresh database) | — |
 | `sql/32_fix_round_tests.sql` | 130 fix-round checks (own fresh database): QR order paid once (`QR_ORDER_ALREADY_PAID`), refund caps for every login incl. the owner, pro-rated refunds, `SALE_LOCKED`, `PIN_AMBIGUOUS`, sign-in token approves only its own staff member, `refunds.imported_at` | — |
+| `sql/33_security_round3_tests.sql` | 125 checks for the 2026-10-19 security round (own fresh database; adopted from the database engineer): F1 F2 F4 / 6-digit manager PINs, F5 QR flood limits, F6–F11, F13, `qr_cancel_order` | — |
 | `conc_checks.sh` | two sessions at the same moment (on the data 32 leaves): two owner refunds of one sale, two counters paying one QR order -> only one passes | — |
 | `unit/core_check.js` | `friendlyError` / `ERROR_TEXT`, `parseAuthRedirect`, `sessionFromUrl`, `updatePassword`, `resetPassword` (node, mocked fetch) | — |
 | `unit/error_codes_check.js` | every error code the database can send to an app has a plain-language text in that app | — |
@@ -43,6 +44,12 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 | `e2e/bo.e2e.js` | Back Office parts 0–6 in order (`e2e/bo/`): every screen, stock / menu / options / photos / production, staff + PINs, pairing, tables + QR sheet, sales vs counter, owner refund + void, customers, settings, reports, importer, password reset, new shop, suppliers, escaping; part 5 old-app refunds in the importer (`fixtures/old-refunds.json`); part 6 `SALE_LOCKED` + "Mark as reviewed" | 1280 and 768 |
 | `e2e/bo_calendar_tips.e2e.js` | calendar day view: the hover label sits over the hour it describes | 1280 and 768 |
 | `e2e/money.e2e.js` | one shift across all three apps: sale with options, QR order paid at the counter, manager-approved discount, void, counter partial refund (pro-rated ₱244.00), owner refund in the Back Office (₱107.36); X-report = calendar day + shift view = `sales_report` = closed shift, to the centavo; stock = start − deducted + returned (incl. option extras) | 1280 / 390×844 |
+| `e2e/fo_round3.e2e.js` | counter, 2026-10-19 round: 4-digit manager sees the 6-digit PIN note; consent tick required (`p_consent`); QR sign-up limit doesn't block the counter; sign-in while a manager-approved item waits and the server refuses uploads → "cancel those approvals" warning, "Upload first" / "Sign in anyway" | 1280 |
+| `e2e/bo_round3.e2e.js` | Back Office, 2026-10-19 round (+ one counter): PIN banner + `PIN_TOO_SHORT`, promoting a cashier asks for 6 digits, lockout alert + unlock (survives reload), review reasons in plain words, pay-out / refund "Mark as reviewed", pay-out limit setting, "Net sales today", full customer delete across a merge chain | 1280 |
+| `e2e/order_limits.e2e.js` | QR page: `TOO_MANY_SIGNUPS` / `TOO_MANY_ORDERS` (real server limits + intercepted answers), page usable while the web font never arrives | 390×844 |
+
+`run_all.sh` also writes `logs/review_flags.log`: every sale / refund / pay-out the server flagged for review in
+each browser suite (a normal, correct flow should not appear there).
 
 A browser suite fails on any page error, `console.error`, unexpected dialog, or HTTP answer ≥ 400 — except a
 refusal the test provokes on purpose (allowed with `net.allow(...)` around that one step).

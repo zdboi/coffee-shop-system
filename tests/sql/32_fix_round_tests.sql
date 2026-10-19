@@ -290,8 +290,8 @@ select test.ok(test.bo(test.bo_refund('dddddddd-0000-0000-0000-000000000061', '9
 select test.ok(test.bo(test.bo_refund('dddddddd-0000-0000-0000-000000000062', '99999999-0000-0000-0000-000000000006', 'PARTIAL_REFUND', 0, '[]', '[]', 'VOIDED')) = 'SALE_NOT_REFUNDABLE',
    '3 BO: second refund of a voided sale -> SALE_NOT_REFUNDABLE');
 select test.ok(test.bo(jsonb_build_array(jsonb_build_object('op','upsert','table','refunds','row', jsonb_build_object('id','dddddddd-0000-0000-0000-0000000000b1',
-   'sale_id','99999999-0000-0000-0000-0000000000b1','type','PARTIAL_REFUND','amount',1)))) = 'SALE_NOT_FOUND',
-   '3 BO: refund pointing at another shop''s sale -> SALE_NOT_FOUND');
+   'sale_id','99999999-0000-0000-0000-0000000000b1','type','PARTIAL_REFUND','amount',1)))) = 'FORBIDDEN_ROW',
+   '3 BO: refund pointing at another shop''s sale -> FORBIDDEN_ROW (R2, approved 2026-10-19)');
 select test.ok(test.bo(jsonb_build_array(jsonb_build_object('op','upsert','table','refunds','row', jsonb_build_object('id','dddddddd-0000-0000-0000-000000000071',
    'sale_id','99999999-0000-0000-0000-000000000007','type','PARTIAL_REFUND','amount',-1)))) = 'BAD_AMOUNT', '3 BO: negative refund -> BAD_AMOUNT');
 select test.ok(test.bo(jsonb_build_array(jsonb_build_object('op','insert_ignore','table','refunds','row', jsonb_build_object('id','dddddddd-0000-0000-0000-000000000071',

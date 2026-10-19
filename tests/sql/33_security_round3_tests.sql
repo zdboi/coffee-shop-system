@@ -1,5 +1,5 @@
 -- Checks for the security fix round of 2026-10-19 (F1 F2 F4/decision 8 F5 F6 F7 F8 F9 F10 F11 F13 + qr_cancel_order).
--- Adopted into the QA regression (tests/run_all.sh) on 2026-10-19 from the database engineer's round-3 checks.
+-- Adopted into the QA regression (tests/run_all.sh) on 2026-10-19 from the database engineer's round-3 checks (updated for R1-R4 + delete_customer_data).
 -- Needs a FRESH database:  tests/reset_db.sh "" db_sec && psql ... -d db_sec -f this file
 -- Prints "ok  ..." / "FAIL ..." for every check and keeps going.
 \set QUIET on
@@ -280,7 +280,7 @@ from pg_proc p where p.pronamespace = 'public'::regnamespace
   and p.proname not in ('get_qr_menu','qr_session','qr_register','qr_relink','qr_set_phone','qr_forget_device','qr_place_order','qr_my_orders','qr_cancel_order',
     'current_business_id','current_role_rank','app_rank','is_owner','apply_changes','staff_pin_ids','staff_pin_update_needed','staff_pin_login','staff_logout',
     'staff_set_pin','staff_import_legacy_pin','create_device_pairing_code','redeem_device_pairing','revoke_device','unlock_device_pin','fo_bootstrap',
-    'bo_bootstrap','sales_report','search_customers','fo_sync','fo_add_customer','qr_update_order','merge_customers');
+    'bo_bootstrap','sales_report','search_customers','fo_sync','fo_add_customer','qr_update_order','merge_customers','delete_customer_data');
 select test.chk(not has_function_privilege('authenticated', 'public._write_row(text,jsonb,text,text,uuid)', 'execute')
            and not has_function_privilege('authenticated', 'public._update_row(text,jsonb,text,uuid)', 'execute')
            and not has_function_privilege('authenticated', 'public._writable_tables()', 'execute')
@@ -339,7 +339,8 @@ update qr_orders set created_at = now() - interval '11 minutes' where order_numb
 select test.chk(test.place(11, 'tok-t2') = 'ok', 'F5: after 10 minutes orders come in again');
 reset role;
 -- shop-wide: 40 new customers per hour (QR + counter)
-select count(*) as nc from customers where business_id = :'biz' and created_at > now() - interval '1 hour' \gset
+select count(*) as nc from customers where business_id = :'biz' and source = 'QR' and created_at > now() - interval '1 hour' \gset
+insert into customers(business_id, nickname, source) select :'biz', 'CounterBulk' || g, 'COUNTER' from generate_series(1, 30) g;   -- R4: counter adds don't count
 insert into customers(business_id, nickname, source) select :'biz', 'Bulk' || g, 'QR' from generate_series(1, 40 - :nc - 1) g;
 select test.login('00000000-0000-0000-0000-0000000c0020'); set role authenticated;
 select test.chk((public.qr_register('tok-t1', 'Fortieth', null, true)->'customer') is not null, 'F5: the 40th new customer this hour registers');
@@ -349,7 +350,7 @@ select test.chk(public.qr_register('tok-t1', 'FortyFirst', null, true)->>'error'
 select test.chk((public.qr_session('tok-t1')->'customer') = 'null'::jsonb, 'F5: ... and nothing linked');
 reset role;
 select test.login(:'d1'); set role authenticated;
-select test.chk(public.fo_add_customer('Walk-in', null, true)->>'error' = 'TOO_MANY_SIGNUPS', 'F5: counter add also limited -> TOO_MANY_SIGNUPS');
+select test.chk((public.fo_add_customer('Walk-in', null, true)->'customer') is not null, 'R4: a counter add is NOT limited by the QR sign-up limit');
 select test.chk((public.fo_add_customer('Nina again', '0917 000 1111', true)->>'existing')::boolean, 'F5: finding an EXISTING customer still works');
 reset role;
 select test.login(:'owner_uid'); set role authenticated;
@@ -394,4 +395,104 @@ reset role;
 select test.login(:'d1'); set role authenticated;
 select test.chk((select count(*) from pin_lock_events) = 0, 'F4: a counter can''t read the lock events');
 reset role;
+
+-- ================= R1: the audit trail can't be changed or erased =================
+select test.login(:'owner_uid'); set role authenticated;
+select test.chk(test.err($$select public.apply_changes('[{"op":"insert_ignore","table":"audit_log","row":{"id":"abababab-0000-0000-0000-0000000000a1","action":"BO test"}}]')$$) = 'NO ERROR', 'R1: new audit row (insert_ignore) ok');
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"audit_log","row":{"id":"abababab-0000-0000-0000-0000000000a2","action":"BO test 2"}}]')$$) = 'NO ERROR', 'R1: upsert of a NEW audit id ok');
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"audit_log","row":{"id":"abababab-0000-0000-0000-0000000000a1","action":"rewritten"}}]')$$) = 'FORBIDDEN_ROW', 'R1: upsert of an existing audit row -> FORBIDDEN_ROW');
+select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"audit_log","row":{"id":"abababab-0000-0000-0000-0000000000a1","details":"x"}}]')$$) = 'FORBIDDEN_ROW', 'R1: update -> FORBIDDEN_ROW');
+select test.chk(test.err($$select public.apply_changes('[{"op":"delete","table":"audit_log","id":"abababab-0000-0000-0000-0000000000a1"}]')$$) = 'FORBIDDEN_ROW', 'R1: delete -> FORBIDDEN_ROW');
+select test.chk(test.err($$select public.apply_changes('[{"op":"delete_where","table":"audit_log","where":{"action":"BO test"}}]')$$) = 'FORBIDDEN_ROW', 'R1: delete_where -> FORBIDDEN_ROW');
+select test.chk(test.err($$select public.apply_changes('[{"op":"insert_ignore","table":"audit_log","row":{"id":"abababab-0000-0000-0000-000000000001","action":"same id"}}]')$$) = 'NO ERROR', 'R1: insert_ignore of an existing id is a no-op');
+update audit_log set details = 'direct' where id = 'abababab-0000-0000-0000-0000000000a1';
+delete from audit_log where id = 'abababab-0000-0000-0000-0000000000a1';
+reset role;
+select test.chk((select action = 'BO test' and details is null from audit_log where id = 'abababab-0000-0000-0000-0000000000a1')
+           and (select action = 'Test' from audit_log where id = 'abababab-0000-0000-0000-000000000001'), 'R1: audit rows unchanged, also by direct table update / delete');
+
+-- ================= R2: links must stay inside the shop =================
+insert into recipes(id, business_id, name, selling_price) values ('33333333-0000-0000-0000-0000000000b2', :'biz2', 'Other latte', 10);
+insert into ingredients(id, business_id, name, base_unit) values ('22222222-0000-0000-0000-0000000000b2', :'biz2', 'Other beans', 'g');
+insert into customers(id, business_id, nickname) values ('cccccccc-0000-0000-0000-0000000000b1', :'biz2', 'Other cust');
+insert into dining_tables(id, business_id, label) values ('77777777-0000-0000-0000-0000000000b1', :'biz2', 'Other table');
+insert into staff(id, business_id, name) values ('66666666-0000-0000-0000-0000000000b1', :'biz2', 'Other staff');
+insert into shifts(id, business_id, status) values ('88888888-0000-0000-0000-0000000000b1', :'biz2', 'ACTIVE');
+select test.login(:'owner_uid'); set role authenticated;
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"sale_items","row":{"id":"aaaaaaaa-0000-0000-0000-00000000b001","sale_id":"99999999-0000-0000-0000-0000000000b1","name":"x"}}]')$$) = 'FORBIDDEN_ROW', 'R2: sale item on another shop''s sale');
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"recipe_ingredients","row":{"id":"44444444-0000-0000-0000-00000000b001","recipe_id":"33333333-0000-0000-0000-000000000001","ingredient_id":"22222222-0000-0000-0000-0000000000b2","quantity":1}}]')$$) = 'FORBIDDEN_ROW', 'R2: recipe line with another shop''s ingredient');
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"recipe_ingredients","row":{"id":"44444444-0000-0000-0000-00000000b002","recipe_id":"33333333-0000-0000-0000-0000000000b2","ingredient_id":"22222222-0000-0000-0000-000000000001","quantity":1}}]')$$) = 'FORBIDDEN_ROW', 'R2: recipe line on another shop''s recipe');
+select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"sales","row":{"id":"99999999-0000-0000-0000-000000000002","customer_id":"cccccccc-0000-0000-0000-0000000000b1"}}]')$$) = 'FORBIDDEN_ROW', 'R2: sale linked to another shop''s customer (no foreign key)');
+select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"sales","row":{"id":"99999999-0000-0000-0000-000000000002","cashier_id":"66666666-0000-0000-0000-0000000000b1"}}]')$$) = 'FORBIDDEN_ROW', 'R2: sale with another shop''s staff member');
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"cash_movements","row":{"id":"cdcdcdcd-0000-0000-0000-00000000b001","shift_id":"88888888-0000-0000-0000-0000000000b1","type":"PAY_IN","amount":1}}]')$$) = 'FORBIDDEN_ROW', 'R2: pay-in on another shop''s shift');
+select test.chk(test.err(format($q$select public.apply_changes('[{"op":"update","table":"qr_orders","row":{"id":"%s","table_id":"77777777-0000-0000-0000-0000000000b1"}}]')$q$, :'q1')) = 'FORBIDDEN_ROW', 'R2: QR order moved to another shop''s table');
+select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"customers","row":{"id":"cccccccc-0000-0000-0000-0000000000b1","merged_into":null}}]')$$) = 'NO ERROR', 'R2: (another shop''s customer is simply not touched)');
+select id as nina from customers where nickname = 'Nina' \gset
+select test.chk(test.err(format($q$select public.apply_changes('[{"op":"update","table":"customers","row":{"id":"%s","merged_into":"cccccccc-0000-0000-0000-0000000000b1"}}]')$q$, :'nina')) = 'FORBIDDEN_ROW', 'R2: merged_into another shop''s customer');
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"refunds","row":{"id":"dddddddd-0000-0000-0000-00000000b001","sale_id":"99999999-0000-0000-0000-0000000000b1","type":"PARTIAL_REFUND","amount":1}}]')$$) = 'FORBIDDEN_ROW', 'R2: refund of another shop''s sale -> FORBIDDEN_ROW');
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"sales","row":{"id":"99999999-0000-0000-0000-00000000b0a1","status":"HELD","cashier_id":"66666666-0000-0000-0000-00000000dead","grand_total":1}}]')$$) = 'NO ERROR', 'R2: a link to a row that doesn''t exist (old-app import) is still allowed');
+reset role;
+select test.login(:'d1'); set role authenticated;
+select test.chk(test.res(test.op(:'key1', 'cash_movement', jsonb_build_object('id','cdcdcdcd-0000-0000-0000-00000000b002','shift_id','88888888-0000-0000-0000-0000000000b1','type','PAY_IN','amount',1,'performed_by', :'manager'))) = 'FORBIDDEN_ROW', 'R2: the counter path checks links too');
+reset role;
+-- _refund_items_cap only counts this shop's sale lines
+insert into sale_items(id, business_id, sale_id, name, quantity, unit_price, line_total) values ('aaaaaaaa-0000-0000-0000-00000000b0f1', :'biz2', '99999999-0000-0000-0000-000000000003', 'planted', 1, 1000, 1000);
+select test.chk(public._refund_items_cap(s, gen_random_uuid(), '[{"sale_item_id":"aaaaaaaa-0000-0000-0000-00000000b0f1","quantity":1}]', 999) = 0, 'R2: another shop''s line planted on our sale counts as nothing in _refund_items_cap')
+  from sales s where s.id = '99999999-0000-0000-0000-000000000003';
+
+-- ================= R3: apply_changes never sets / changes qr_orders.auth_user_id =================
+select auth_user_id as q1_user from qr_orders where id = :'q1' \gset
+select test.login(:'owner_uid'); set role authenticated;
+select public.apply_changes(jsonb_build_array(jsonb_build_object('op','update','table','qr_orders','row', jsonb_build_object('id', :'q1', 'auth_user_id', :'d1', 'customer_note', 'n'))));
+select public.apply_changes(jsonb_build_array(jsonb_build_object('op','upsert','table','qr_orders','row', jsonb_build_object('id', 'eeeeeeee-0000-0000-0000-00000000b0a1', 'order_number', 'Q-X', 'order_day', current_date, 'auth_user_id', :'d1'))));
+reset role;
+select test.chk((select auth_user_id = :'q1_user'::uuid and customer_note = 'n' from qr_orders where id = :'q1'), 'R3: update keeps the stored auth_user_id');
+select test.chk((select auth_user_id is null from qr_orders where id = 'eeeeeeee-0000-0000-0000-00000000b0a1'), 'R3: insert ignores auth_user_id');
+
+-- ================= R4: QR sign-ups are taken one at a time =================
+select test.chk(prosrc like '%pg_advisory_xact_lock%' , 'R4: qr_register takes the shop''s sign-up lock') from pg_proc where proname = 'qr_register';
+
+-- ================= delete_customer_data (privacy erasure on the server) =================
+insert into customers(id, business_id, nickname, phone, source) values
+  ('cccccccc-0000-0000-0000-00000000d001', :'biz', 'Zed.Ro', '+639170009001', 'QR'),
+  ('cccccccc-0000-0000-0000-00000000d002', :'biz', 'Zeddy', null, 'QR'),
+  ('cccccccc-0000-0000-0000-00000000d003', :'biz', 'Z3', null, 'COUNTER'),
+  ('cccccccc-0000-0000-0000-00000000d009', :'biz', 'Zedekiah', null, 'QR');      -- someone else whose name CONTAINS "Zed"
+update customers set merged_into = 'cccccccc-0000-0000-0000-00000000d001' where id = 'cccccccc-0000-0000-0000-00000000d002';
+update customers set merged_into = 'cccccccc-0000-0000-0000-00000000d002' where id = 'cccccccc-0000-0000-0000-00000000d003';
+insert into customer_devices(auth_user_id, business_id, customer_id) values ('00000000-0000-0000-0000-0000000c0070', :'biz', 'cccccccc-0000-0000-0000-00000000d003');
+insert into qr_orders(id, business_id, order_number, order_day, customer_id, customer_nickname, customer_note, items) values
+  ('eeeeeeee-0000-0000-0000-00000000d001', :'biz', 'Q-D1', current_date, 'cccccccc-0000-0000-0000-00000000d003', 'Z3',
+   'for zeddy (ZED.RO)', '[{"name":"Latte","notes":"Zeddy likes it hot, Zedekiah too"},{"name":"Bun"}]');
+insert into sales(id, business_id, status, grand_total, customer_id, notes) values ('99999999-0000-0000-0000-00000000d001', :'biz', 'COMPLETED', 10, 'cccccccc-0000-0000-0000-00000000d002', 'paid by Zeddy');
+insert into audit_log(id, business_id, action, details) values
+  ('abababab-0000-0000-0000-00000000d001', :'biz', 'Customer added', 'Zed.Ro added at the counter'),
+  ('abababab-0000-0000-0000-00000000d002', :'biz', 'Note', 'Zedekiah and Zedro unrelated'),
+  ('abababab-0000-0000-0000-00000000d003', :'biz2', 'Other shop', 'Zeddy in another shop');
+select test.login(:'d1'); set role authenticated;
+select test.chk(test.err($$select public.delete_customer_data('cccccccc-0000-0000-0000-00000000d001')$$) like '%permission denied%' or test.err($$select public.delete_customer_data('cccccccc-0000-0000-0000-00000000d001')$$) = 'ADMIN_ONLY', 'erase: a counter can''t call it');
+reset role;
+select test.chk(not has_function_privilege('anon', 'public.delete_customer_data(uuid)', 'execute') and has_function_privilege('authenticated', 'public.delete_customer_data(uuid)', 'execute'), 'erase: owner-login function (not for anon)');
+select test.login('00000000-0000-0000-0000-0000000000b1'); set role authenticated;
+select test.chk(test.err($$select public.delete_customer_data('cccccccc-0000-0000-0000-00000000d001')$$) = 'UNKNOWN_CUSTOMER', 'erase: another shop''s owner -> UNKNOWN_CUSTOMER');
+reset role;
+select test.login(:'owner_uid'); set role authenticated;
+select test.chk(public.delete_customer_data('cccccccc-0000-0000-0000-00000000d001') = '{"deleted": 3}'::jsonb, 'erase: returns {deleted: 3} (record + 2 levels of merged records)');
+select test.chk(test.err($$select public.delete_customer_data('cccccccc-0000-0000-0000-00000000d001')$$) = 'UNKNOWN_CUSTOMER', 'erase: second time -> UNKNOWN_CUSTOMER');
+reset role;
+select test.chk((select count(*) from customers where id::text like 'cccccccc-0000-0000-0000-00000000d00%' and id <> 'cccccccc-0000-0000-0000-00000000d009') = 0
+           and (select count(*) from customer_devices where customer_id::text like 'cccccccc-0000-0000-0000-00000000d00%') = 0, 'erase: chain and phone links deleted');
+select test.chk((select count(*) from customers where id = 'cccccccc-0000-0000-0000-00000000d009') = 1, 'erase: an unrelated customer stays');
+select test.chk((select customer_id is null and customer_nickname is null
+                        and customer_note = 'for [deleted customer] ([deleted customer])'
+                        and items->0->>'notes' = '[deleted customer] likes it hot, Zedekiah too' and items->1 = '{"name":"Bun"}'
+                 from qr_orders where id = 'eeeeeeee-0000-0000-0000-00000000d001'), 'erase: QR order unlinked, names blanked in notes / item notes (whole words, any case)',
+  (select customer_note || ' | ' || (items->0->>'notes') from qr_orders where id = 'eeeeeeee-0000-0000-0000-00000000d001'));
+select test.chk((select customer_id is null and notes = 'paid by [deleted customer]' and grand_total = 10 from sales where id = '99999999-0000-0000-0000-00000000d001'), 'erase: sale kept, unlinked, note blanked');
+select test.chk((select details from audit_log where id = 'abababab-0000-0000-0000-00000000d001') = '[deleted customer] added at the counter'
+           and (select details from audit_log where id = 'abababab-0000-0000-0000-00000000d002') = 'Zedekiah and Zedro unrelated'
+           and (select details from audit_log where id = 'abababab-0000-0000-0000-00000000d003') = 'Zeddy in another shop', 'erase: audit details blanked (only whole names, only this shop)');
+select test.chk((select count(*) from audit_log where business_id = :'biz' and action = 'Customer data deleted on request'
+                 and details !~* 'zed|z3') = 1, 'erase: one closing audit entry without names',
+  (select string_agg(details, ' / ') from audit_log where action = 'Customer data deleted on request'));
 select 'ROUND 3 CHECKS DONE';
