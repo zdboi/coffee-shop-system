@@ -28,6 +28,7 @@ const BO = {
   pinUpdateNeeded: [],       // staff ids whose manager/admin PIN is shorter than 6 digits (server list)
   pinLockouts: [],           // counters locked after wrong PINs in the last 7 days (server list)
   hasPayoutLimit: false,     // the server knows settings.payout_review_limit
+  unlockedAt: {},            // device id -> when the owner pressed Unlock here (the lock list doesn't record it)
   lastLoadAt: 0,
   started: false,
   salesCache: new Map(),     // "from|to" -> {at, data}
@@ -174,6 +175,7 @@ async function refreshReviewCount(){
   BO.reviewPayouts = (await loadPayoutsToReview().catch(() => [])).length;
   BO.counts.needs_review = BO.reviewSales + BO.reviewRefunds + BO.reviewPayouts;
   updateNavBadges();
+  renderDashReview();
 }
 // Pay-outs / refunds the server flagged for review. These flags arrived with settings.payout_review_limit,
 // so an older database (without that setting) is not asked at all.
@@ -226,7 +228,10 @@ function pinLockoutAlertHtml(){
     <ul class="pin-update-list">${list.map(l => {
       const d = lockoutDevice(l);
       const name = l.device_name || l.device || (d && d.device_name) || 'A counter';
-      const at = l.locked_at || l.at, until = l.locked_until || l.until;
+      const at = l.locked_at || l.at;
+      let until = l.locked_until || l.until;
+      const unl = d && BO.unlockedAt[d.id];
+      if(unl && until && unl >= new Date(at).getTime() && unl < new Date(until).getTime()) until = new Date(unl).toISOString();
       const still = until && new Date(until).getTime() > now;
       return `<li><b>${esc(name)}</b> — locked ${esc(fmtShopDateTime(at))}${until ? (still ? `, <b>still locked until ${esc(fmtShopTime(until))}</b>` : `, unlocked since ${esc(fmtShopTime(until))}`) : ''}
         ${d && d.active !== false ? `<button class="btn btn-sm btn-outline" data-lock-unlock="${esc(d.id)}">Unlock PIN pad</button>` : ''}</li>`;
@@ -243,8 +248,20 @@ async function unlockDevicePin(deviceId){
     const r = await cloud.rpc('unlock_device_pin', {p_device_id: d.id});
     if(r && r.error){ toast(friendlyError(r), 'error'); return; }
     applyChanges([Ops.audit('Counter PIN pad unlocked', d.device_name || d.device_tag, d.id)]).catch(() => {});
+    BO.unlockedAt[d.id] = Date.now();
     toast(r && r.cleared ? `Unlocked — ${plural(r.cleared, 'wrong PIN')} forgotten` : 'Unlocked (it was not locked)');
+    refreshPinLockoutAlert();
   }catch(e){ toast(friendlyError(e), 'error'); }
+}
+function refreshPinLockoutAlert(){
+  const old = document.getElementById('pin-lockout-alert');
+  if(!old) return;
+  const t = document.createElement('div');
+  t.innerHTML = pinLockoutAlertHtml();
+  const fresh = t.firstElementChild;
+  if(!fresh){ old.remove(); return; }
+  old.replaceWith(fresh);
+  wirePinLockoutAlert(fresh);
 }
 
 /* ================= saving =================
@@ -868,13 +885,17 @@ async function loadDashboardSales(){
     const box = document.getElementById('dash-today');
     if(box && state.route === 'dashboard'){ const v = box.querySelector('.stat-card .sub'); if(v) v.textContent = friendlyError(e); }
   }
+  renderDashReview();
+}
+function renderDashReview(){
   const rv = document.getElementById('dash-review');
-  if(rv && BO.counts.needs_review){
+  if(rv && state.route === 'dashboard' && !BO.counts.needs_review) rv.innerHTML = '';
+  if(rv && state.route === 'dashboard' && BO.counts.needs_review){
     const parts = [];
     if(BO.reviewSales) parts.push(plural(BO.reviewSales, 'sale'));
     if(BO.reviewRefunds) parts.push(plural(BO.reviewRefunds, 'refund'));
     if(BO.reviewPayouts) parts.push(plural(BO.reviewPayouts, 'large pay-out'));
-    rv.innerHTML = `<div class="notice warn"><b>${esc(parts.join(' and ') || plural(BO.counts.needs_review, 'item'))} ${BO.counts.needs_review === 1 ? 'needs' : 'need'} your review</b> (for example sold below the menu price, totals that don't add up, or cash taken out of a drawer). <a class="linklike" id="dash-go-review">Check them</a>.</div>`;
+    rv.innerHTML = `<div class="notice warn"><b>${esc(parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : (parts[0] || plural(BO.counts.needs_review, 'item')))} ${BO.counts.needs_review === 1 ? 'needs' : 'need'} your review</b> (for example sold below the menu price, totals that don't add up, or cash taken out of a drawer). <a class="linklike" id="dash-go-review">Check them</a>.</div>`;
     rv.querySelector('#dash-go-review').onclick = () => { if(typeof txFilter !== 'undefined') txFilter.review = true; navigate('transactions'); };
   }
 }
