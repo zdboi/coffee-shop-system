@@ -75,7 +75,7 @@ const ERROR_TEXT = {
   UNKNOWN_STAFF: 'That staff member is not in this shop any more. Ask the owner to check Back Office → Staff.',
   BAD_CODE: 'That pairing code is wrong or has expired. Make a new one in Back Office → Devices.',
   PIN_IN_USE: 'Another staff member already uses that PIN. Choose a different one.',
-  PIN_FORMAT: 'PIN must be 4 to 6 digits.',
+  PIN_FORMAT: 'PIN must be 4 to 6 digits (managers and the owner: 6 digits).',
   DEVICE_NOT_REGISTERED: 'This counter is not registered (it may have been removed in Back Office → Devices).',
   DEVICE_MISMATCH: 'This counter\'s login does not match its pairing. Pair it again in Back Office → Devices.',
   UNKNOWN_DEVICE: 'That counter was not found (it may have been removed already). Refresh the page and try again.',
@@ -110,7 +110,31 @@ const ERROR_TEXT = {
   QR_ORDER_ALREADY_PAID: 'This QR order was already paid on another counter.',
   BAD_PHONE: 'Enter a Philippine mobile number, e.g. 0917 123 4567.',
   NAME_REQUIRED: 'Enter the customer\'s name.',
+  CONSENT_REQUIRED: 'Tick the box to confirm the customer agreed to join the loyalty list.',
+  TOO_MANY_ORDERS: 'Too many orders are coming in right now. Please wait a few minutes.',
+  TOO_MANY_SIGNUPS: 'Lots of new customers are joining right now. Please wait a few minutes, or save them without joining the loyalty list for now.',
+  // Staff PINs
+  PIN_TOO_SHORT: 'Managers and the owner need a 6-digit PIN.',
+  // Anything unexpected on the server
+  SERVER_ERROR: 'Something went wrong on the server, so this wasn\'t saved. Please try again; if it keeps happening, tell the owner.',
 };
+
+// Why the server flagged a sale "needs review" (sales.review_reason holds codes joined by ", ").
+const REVIEW_REASON_TEXT = {
+  PRICE_BELOW_MENU: 'Sold below the menu price',
+  NOT_ON_MENU: 'Item not on the menu',
+  TAX_MISMATCH: 'Tax or service charge doesn\'t match your settings',
+  PAYMENT_MISMATCH: 'Payments don\'t add up to the total',
+  STAFF_MISMATCH: 'Recorded cashier differs from who was signed in',
+};
+// "PRICE_BELOW_MENU, TAX_MISMATCH" -> "Sold below the menu price; Tax or service charge doesn't match your settings".
+// Unknown codes become plain lower-case words; an empty reason gives 'Flagged by the server'.
+// Returns plain text: escape it (esc / escapeHtml) before putting it into HTML.
+function reviewReasonText(reasonString){
+  const parts = String(reasonString == null ? '' : reasonString).split(/\s*,\s*/).map(s => s.trim()).filter(Boolean);
+  if(!parts.length) return 'Flagged by the server';
+  return parts.map(c => REVIEW_REASON_TEXT[c] || c.replace(/_/g, ' ').toLowerCase()).join('; ');
+}
 // The error code at the very start of a message: "APPROVAL_INVALID", "TABLE_NOT_ALLOWED: sales" ...
 // Matches whole codes only, so "BAD_REFUND_TYPE" is never read as "BAD_REFUND".
 function errorCode(text){
