@@ -626,8 +626,9 @@ begin
     -- Counter sales/shifts do NOT use these: they go through fo_sync() below.
     if t not in ('sync_operations') then
       execute format('create policy %I on public.%I for insert to authenticated with check (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3)', t || '_admin_insert', t);
-      execute format('create policy %I on public.%I for update to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3) with check (business_id = (select public.current_business_id()))', t || '_admin_update', t);
+      -- audit_log: new rows only, never changed or deleted (the audit trail can't be erased)
       if t <> 'audit_log' then
+        execute format('create policy %I on public.%I for update to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3) with check (business_id = (select public.current_business_id()))', t || '_admin_update', t);
         execute format('create policy %I on public.%I for delete to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3)', t || '_admin_delete', t);
       end if;
     end if;
@@ -673,6 +674,48 @@ language sql immutable as $$
     'sale_items','payments','refunds','shifts','cash_movements','audit_log','qr_orders','businesses']
 $$;
 
+-- Links to other rows must stay inside the shop (security review 2026-10-19, R2).
+-- For every link column present in p_row (a foreign key to a table that has a
+-- business_id, plus the links listed below that have no foreign key), the row it
+-- points at must belong to p_biz; a link to ANOTHER shop's row -> FORBIDDEN_ROW.
+-- (A link to a row that doesn't exist at all is left to the foreign key, if any:
+-- data imported from the old app may name staff that were never imported.)
+create or replace function public._check_links(p_table text, p_row jsonb, p_biz uuid) returns void
+language plpgsql stable security definer set search_path = public as $$
+declare r record; v_id uuid; v_owner uuid;
+begin
+  if p_biz is null then return; end if;
+  for r in
+    with links(col, ref) as (
+      -- links that have a foreign key in the database
+      select a.attname::text, cl.relname::text
+      from pg_constraint c
+      join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+      join pg_class cl on cl.oid = c.confrelid and cl.relnamespace = 'public'::regnamespace
+      where c.conrelid = format('public.%I', p_table)::regclass and c.contype = 'f' and array_length(c.conkey, 1) = 1
+        and cl.relname <> 'businesses'
+        and exists (select 1 from pg_attribute b where b.attrelid = c.confrelid and b.attname = 'business_id' and not b.attisdropped)
+      union
+      -- links without a foreign key (columns added later / pointing at staff)
+      select v.col, v.ref from (values
+        ('sale_id','sales'), ('shift_id','shifts'), ('customer_id','customers'), ('qr_order_id','qr_orders'),
+        ('table_id','dining_tables'), ('recipe_id','recipes'), ('ingredient_id','ingredients'), ('merged_into','customers'),
+        ('device_id','devices'), ('store_id','stores'), ('supplier_id','suppliers'), ('category_id','categories'),
+        ('source_recipe_id','recipes'), ('produced_ingredient_id','ingredients'),
+        ('cashier_id','staff'), ('performed_by','staff'), ('approved_by','staff'), ('discount_approved_by','staff'),
+        ('closed_by','staff'), ('resolved_by','staff'), ('signed_in_staff_id','staff'), ('actor_id','staff')) v(col, ref)
+      where exists (select 1 from pg_attribute a where a.attrelid = format('public.%I', p_table)::regclass
+                    and a.attname = v.col and not a.attisdropped)
+    )
+    select distinct col, ref from links where p_row ? col
+  loop
+    v_id := public._to_uuid(p_row->>r.col);
+    if v_id is null then continue; end if;
+    execute format('select business_id from public.%I where id = $1', r.ref) into v_owner using v_id;
+    if v_owner is not null and v_owner <> p_biz then raise exception 'FORBIDDEN_ROW'; end if;
+  end loop;
+end $$;
+
 -- Insert-or-update ONE row from JSON. Only columns present in the JSON are written,
 -- so missing columns keep their defaults / current values. Runs with the CALLER's
 -- rights (Row Level Security applies), except when called from fo_sync.
@@ -691,6 +734,7 @@ begin
     execute format('select business_id from public.%I where id = $1', p_table) into v_owner using (p_row->>'id')::uuid;
     if v_owner is not null and v_owner <> p_biz then raise exception 'FORBIDDEN_ROW'; end if;
   end if;
+  perform public._check_links(p_table, p_row, p_biz);
   select string_agg(quote_ident(a.attname), ', ' order by a.attnum),
          string_agg(case when a.attname = p_key or a.attname in ('business_id','created_at') then null
                          else format('%1$I = excluded.%1$I', a.attname) end, ', ' order by a.attnum)
@@ -722,6 +766,7 @@ returns integer language plpgsql security invoker set search_path = public as $$
 declare v_set text; v_n integer;
 begin
   if not (p_table = any(public._writable_tables())) then raise exception 'TABLE_NOT_ALLOWED: %', p_table; end if;
+  perform public._check_links(p_table, p_row, p_biz);
   select string_agg(format('%1$I = r.%1$I', a.attname), ', ' order by a.attnum) into v_set
   from pg_attribute a
   where a.attrelid = format('public.%I', p_table)::regclass and a.attnum > 0 and not a.attisdropped
@@ -757,6 +802,19 @@ begin
     if not (v_table = any(public._writable_tables())) then raise exception 'TABLE_NOT_ALLOWED: %', v_table; end if;
     v_key := case v_table when 'settings' then 'business_id' else 'id' end;
     v_row := coalesce(v_op->'row', '{}'::jsonb) || jsonb_build_object('business_id', v_biz);
+    -- The audit trail can't be changed or erased (R1): only NEW audit rows
+    -- (insert_ignore, or an upsert of an id that doesn't exist yet) -> FORBIDDEN_ROW.
+    if v_table = 'audit_log' then
+      if v_op->>'op' not in ('insert_ignore', 'upsert')
+         or (v_op->>'op' = 'upsert' and exists (select 1 from public.audit_log where id = public._to_uuid(v_row->>'id'))) then
+        raise exception 'FORBIDDEN_ROW';
+      end if;
+      perform public._write_row(v_table, v_row, v_key, 'nothing', v_biz);
+      v_n := v_n + 1;
+      continue;
+    end if;
+    -- Which phone placed a QR order is never set or changed from here (R3).
+    if v_table = 'qr_orders' then v_row := v_row - 'auth_user_id'; end if;
     if v_table = 'businesses' then
       -- only the shop name can be changed here
       if v_op->>'op' = 'upsert' and coalesce(btrim(v_row->>'name'), '') <> '' then
@@ -863,7 +921,7 @@ begin
                      from jsonb_array_elements(p_items) it
                      where it->>'sale_item_id' = si.id::text), 0) as now
     from public.sale_items si
-    where si.sale_id = p_sale.id
+    where si.sale_id = p_sale.id and si.business_id = p_sale.business_id
   loop
     v_l := v_l + r.unit * least(r.now, greatest(r.sold - r.before, 0));
     if r.before + r.now < r.sold - 0.0001 then v_all := false; end if;
@@ -2126,8 +2184,8 @@ end $$;
 -- p_consent (F11): the customer agreed to be saved (the counter asks them).
 -- Without it nothing is looked up or saved: {error:'CONSENT_REQUIRED'}; the new
 -- customer's consent_at is the moment of that agreement.
--- A counter can create at most the shop-wide limit of new customers per hour
--- (_qr_limits) -> {error:'TOO_MANY_SIGNUPS'} (the owner's login is not limited).
+-- Customers added at a counter do NOT count toward the QR sign-up limit (13a);
+-- a counter's look-ups by number keep their own limit (60 per hour).
 -- (The earlier version without p_consent is removed.)
 drop function if exists public.fo_add_customer(text, text);
 create or replace function public.fo_add_customer(p_nickname text, p_phone text default null, p_consent boolean default false) returns jsonb
@@ -2149,9 +2207,6 @@ begin
     end if;
     select * into v_c from public.customers where business_id = v_biz and phone = v_phone and merged_into is null;
     if found then return jsonb_build_object('customer', public._customer_for_staff(v_c, v_owner), 'existing', true); end if;
-  end if;
-  if not v_owner and public._shop_signups_full(v_biz) then
-    return jsonb_build_object('error', 'TOO_MANY_SIGNUPS');
   end if;
   insert into public.customers(business_id, nickname, phone, source, consent_at)
     values (v_biz, v_name, v_phone, 'COUNTER', case when p_consent then now() end) returning * into v_c;
@@ -2229,8 +2284,8 @@ end $$;
 -- live HERE; change them in this one place.
 --   table_open_orders   10  orders still waiting (PENDING) at ONE table
 --   shop_orders_10min   60  new QR orders for the whole shop in 10 minutes
---   shop_signups_hour   40  new customers for the whole shop in 1 hour
---                           (QR sign-ups + customers added at a counter)
+--   shop_signups_hour   40  new QR sign-ups for the whole shop in 1 hour
+--                           (customers added at a counter don't count)
 -- Per login (unchanged): 3 open orders, 10 orders per hour, 5 phone reveals per
 -- 15 minutes. Answers: TOO_MANY_ORDERS (orders), TOO_MANY_SIGNUPS (new customers).
 create or replace function public._qr_limits() returns jsonb
@@ -2238,11 +2293,11 @@ language sql immutable as $$
   select '{"table_open_orders": 10, "shop_orders_10min": 60, "shop_signups_hour": 40}'::jsonb
 $$;
 
--- True when the shop already got its hourly number of new customers.
+-- True when the shop already got its hourly number of QR sign-ups.
 create or replace function public._shop_signups_full(p_biz uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select count(*) >= (public._qr_limits()->>'shop_signups_hour')::int
-  from public.customers where business_id = p_biz and created_at > now() - interval '1 hour'
+  from public.customers where business_id = p_biz and source = 'QR' and created_at > now() - interval '1 hour'
 $$;
 
 -- -----------------------------------------------------------------------------
@@ -2375,7 +2430,9 @@ begin
       return jsonb_build_object('error', 'PHONE_TAKEN');
     end if;
   end if;
-  -- shop-wide limit on new customers (section 13a)
+  -- shop-wide limit on new customers (section 13a); sign-ups of one shop are
+  -- saved one at a time, so two phones at the same moment can't pass the limit
+  perform pg_advisory_xact_lock(hashtext('cccc.qr_signup:' || v_t.business_id::text));
   if public._shop_signups_full(v_t.business_id) then return jsonb_build_object('error', 'TOO_MANY_SIGNUPS'); end if;
   insert into public.customers(business_id, nickname, phone, source, consent_at)
     values (v_t.business_id, v_name, v_phone, 'QR', now()) returning * into v_c;
