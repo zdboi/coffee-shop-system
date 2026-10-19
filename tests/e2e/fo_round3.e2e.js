@@ -103,6 +103,7 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
 
     // ---- 2. consent box
     await page.click('#cust-add');
+    await H.focusSettled(page, 'cp-q');                // the picker focuses its search box after 50 ms: type after that
     await page.click('.cp-new summary');
     await page.fill('#cp-name', 'Lia'); await page.fill('#cp-phone', '0918 222 3344');
     const nAdd = rpc.filter(c => c.name === 'fo_add_customer').length;
@@ -114,7 +115,7 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
     await must(async () => sql(`select count(*) from customers where nickname='Lia'`) === '1', 'customer saved after the tick', 8000);
     const call = rpc.filter(c => c.name === 'fo_add_customer').pop();
     ok(call && JSON.parse(call.body).p_consent === true, 'fo_add_customer sent with p_consent: true', call && call.body);
-    ok(sql(`select (consent_at is not null)||'|'||source||'|'||phone from customers where nickname='Lia'`) === 'true|COUNTER|+639182223344', 'saved with consent_at, source COUNTER, number normalised');
+    ok(sql(`select (consent_at is not null)||'|'||source||'|'||phone from customers where nickname='Lia'`) === 'true|COUNTER|+639182223344', 'saved with consent_at, source COUNTER, number normalised', sql(`select (consent_at is not null)||'|'||source||'|'||coalesce(phone,'-') from customers where nickname='Lia'`));
     ok(await until(async () => /Lia/.test((await page.textContent('.customer-chip').catch(() => '')) || ''), 4000), 'the new customer is on the sale');
     await page.click('#cust-remove');
 
@@ -122,6 +123,7 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
     //      (004 section 13a: customers added at a counter don't count and aren't limited)
     sql(`insert into customers(business_id, nickname, source) select business_id, 'Bulk ' || g, 'QR' from staff, generate_series(1, 40) g where staff.id='${CATHY}'`);
     await page.click('#cust-add');
+    await H.focusSettled(page, 'cp-q');                // the picker focuses its search box after 50 ms: type after that
     await page.click('.cp-new summary');
     await page.fill('#cp-name', 'Nina'); await page.check('#cp-consent'); await page.click('#cp-create');
     ok(await until(async () => sql(`select count(*) from customers where nickname='Nina'`) === '1', 6000), 'counter can still add a customer while the QR sign-up limit is reached', await toasts());

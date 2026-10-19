@@ -24,13 +24,14 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 | `sql/31_qa_extra_tests.sql` | QA extras (after 10 + 11): a refused pairing must leave nothing behind | — |
 | `sql/30_security_tests.sql` | 172 checks for the 2026-10-12 security decisions (own fresh database) | — |
 | `sql/32_fix_round_tests.sql` | 130 fix-round checks (own fresh database): QR order paid once (`QR_ORDER_ALREADY_PAID`), refund caps for every login incl. the owner, pro-rated refunds, `SALE_LOCKED`, `PIN_AMBIGUOUS`, sign-in token approves only its own staff member, `refunds.imported_at` | — |
-| `sql/33_security_round3_tests.sql` | 125 checks for the 2026-10-19 security round (own fresh database; adopted from the database engineer): F1 F2 F4 / 6-digit manager PINs, F5 QR flood limits, F6–F11, F13, `qr_cancel_order` | — |
+| `sql/33_security_round3_tests.sql` | 169 checks for the 2026-10-19 security round (own fresh database; adopted from the database engineer): F1 F2 F4 / 6-digit manager PINs, F5 QR flood limits, F6–F11, F13, `qr_cancel_order`, customer erasure (incl. sale item notes, refund reason / notes) | — |
 | `conc_checks.sh` | two sessions at the same moment (on the data 32 leaves): two owner refunds of one sale, two counters paying one QR order -> only one passes | — |
 | `unit/core_check.js` | `friendlyError` / `ERROR_TEXT`, `parseAuthRedirect`, `sessionFromUrl`, `updatePassword`, `resetPassword` (node, mocked fetch) | — |
 | `unit/error_codes_check.js` | every error code the database can send to an app has a plain-language text in that app | — |
 | `unit/core_browser.js` | the same auth helpers in a real browser (address bar cleaned, session key) | — |
 | `unit/logic_refund_check.js` | `refundAmountForItems` / `refundLeft` / `refundPriorFor`, `SALES_LABELS`, `salesSummaryRows`, receipt words (96) | — |
 | `unit/email_link_check.js` | email links: only recovery / signup links sign in, never over another signed-in account (53) | — |
+| `unit/captcha_check.js` | optional CAPTCHA, shared code: `Captcha.enabled()` / `getToken()` (key empty → nothing loaded; script URL, site key, widget removed, loaded once; error / timeout / empty token → `CAPTCHA_FAILED`; blocked script or offline → offline), `{captchaToken}` → `gotrue_meta_security.captcha_token` in the four auth calls (bodies unchanged without), server `captcha_failed` → plain message (30) | — |
 | `unit/refund_parity_check.js` | 500 random refunds: `logic.js` and the database's `_refund_items_cap` give the same amount (seeded db, rolled back) | — |
 | `e2e/fo.e2e.js` | counter: pair, PIN, shift, sale with options, offline sale → reload → uploads once, void, close shift | 1280 |
 | `e2e/fo_security.e2e.js` | counter security: pairing only, cashier-only offline PINs, manager-PIN discount (token used), offline approval message, full refund of a discounted sale, masked phones + escaping + look-up limit, manager's own token + deferred logout, closing another cashier's shift, PIN lockout text | 1280 |
@@ -46,6 +47,7 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 | `e2e/money.e2e.js` | one shift across all three apps: sale with options, QR order paid at the counter, manager-approved discount, void, counter partial refund (pro-rated ₱244.00), owner refund in the Back Office (₱107.36); X-report = calendar day + shift view = `sales_report` = closed shift, to the centavo; stock = start − deducted + returned (incl. option extras) | 1280 / 390×844 |
 | `e2e/fo_round3.e2e.js` | counter, 2026-10-19 round: 4-digit manager sees the 6-digit PIN note; consent tick required (`p_consent`); QR sign-up limit doesn't block the counter; sign-in while a manager-approved item waits and the server refuses uploads → "cancel those approvals" warning, "Upload first" / "Sign in anyway" | 1280 |
 | `e2e/bo_round3.e2e.js` | Back Office, 2026-10-19 round (+ one counter): PIN banner + `PIN_TOO_SHORT`, promoting a cashier asks for 6 digits, lockout alert + unlock (survives reload), review reasons in plain words, pay-out / refund "Mark as reviewed", pay-out limit setting, "Net sales today", full customer delete across a merge chain | 1280 |
+| `e2e/captcha.e2e.js` | optional CAPTCHA in all three apps (config.js fulfilled with a test key, service workers blocked, `challenges.cloudflare.com` answered by a fake `turnstile.render` or blocked — never reached). Key empty: no Cloudflare request, no `gotrue_meta_security` in any auth body. Key set — counter pairing, QR first sign-in (+ "Not me?"), Back Office sign-in / forgot password / sign-up: blocked script → no-connection message; failed check → plain message, typed input kept, nothing sent; server `captcha_failed` → plain message; try again works; a fresh token every attempt; no Turnstile after sign-in, while selling / ordering, after a reload or on other Back Office screens (77) | 1280 / 390×844 |
 | `e2e/order_limits.e2e.js` | QR page: `TOO_MANY_SIGNUPS` / `TOO_MANY_ORDERS` (real server limits + intercepted answers), page usable while the web font never arrives | 390×844 |
 
 `run_all.sh` also writes `logs/review_flags.log`: every sale / refund / pay-out the server flagged for review in
@@ -83,7 +85,9 @@ port you give it. Run each line as its own command.
 - One Back Office part on its own only works on the data the parts before it left behind (run `bo.e2e.js`).
 - SQL suites: `tests/reset_db.sh "" db_sec && psql -h /tmp -p 54329 -U postgres -d db_sec -v ON_ERROR_STOP=1 -f tests/sql/30_security_tests.sql`
   (10, 11 and then 31 run one after the other on the same fresh database; 32 on its own fresh database, then `tests/conc_checks.sh <db>`).
-- Unit checks: `node tests/unit/core_check.js`, `node tests/unit/error_codes_check.js`, `node tests/unit/core_browser.js`.
+- Unit checks: `node tests/unit/core_check.js`, `node tests/unit/error_codes_check.js`, `node tests/unit/core_browser.js`, `node tests/unit/captcha_check.js`.
+- CAPTCHA browser suite on your own stand-in: `tests/e2e_reset.sh db_qr && tests/restart_fake.sh 8792 db_qr && FAKE_PORT=8792 FAKE_DB=db_qr node tests/e2e/captcha.e2e.js`
+  (needs a fresh seed: it pairs two counters and registers QR customers).
 - Log for each stand-in: `tests/fake-<port>.log`. App pages are read from disk on every request, so editing them
   needs no restart; after editing `fake-supabase/server.js`, restart the stand-in.
 - Try a different migration file: `tests/reset_db.sh path/to/file.sql db_bo` (no seed data).

@@ -90,6 +90,7 @@ run_node unit/error_codes_check "$DIR/unit/error_codes_check.js" "$REPO"
 run_node unit/core_browser "$DIR/unit/core_browser.js" "$REPO"
 run_node unit/logic_refund_check "$DIR/unit/logic_refund_check.js" "$REPO"
 run_node unit/email_link_check "$DIR/unit/email_link_check.js" "$REPO"
+run_node unit/captcha_check "$DIR/unit/captcha_check.js" "$REPO"
 "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1          # parity check needs a shop (runs inside a rolled-back transaction)
 run_node unit/refund_parity_check "$DIR/unit/refund_parity_check.js" "$REPO" "$DB" 500
 
@@ -102,7 +103,8 @@ if [ "$BROWSER" = 1 ]; then
              "fo_offline_manager.e2e:fo_offline_manager.e2e.js:" "fo_offline_pin.e2e:fo_offline_pin.e2e.js:" "fo_qr_paid_once.e2e:fo_qr_paid_once.e2e.js:" \
              "order.e2e:order.e2e.js:" "order_extra.e2e:order_extra.e2e.js:" "order_ticket_states.e2e:order_ticket_states.e2e.js:" \
              "bo.e2e@1280:bo.e2e.js:1280x900" "bo.e2e@768:bo.e2e.js:768x1024" "bo_calendar_tips.e2e:bo_calendar_tips.e2e.js:" "money.e2e:money.e2e.js:" \
-             "fo_round3.e2e:fo_round3.e2e.js:" "bo_round3.e2e:bo_round3.e2e.js:" "order_limits.e2e:order_limits.e2e.js:"; do
+             "fo_round3.e2e:fo_round3.e2e.js:" "bo_round3.e2e:bo_round3.e2e.js:" "order_limits.e2e:order_limits.e2e.js:" \
+             "captcha.e2e:captcha.e2e.js:"; do
       IFS=: read -r name file vp <<<"$t"
       "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1      # every browser suite starts from a fresh seed
       BO_VIEWPORT="${vp:-1280x900}" run_node "e2e/$name#$run" "$DIR/e2e/$file"

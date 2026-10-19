@@ -1,5 +1,5 @@
 -- Checks for the security fix round of 2026-10-19 (F1 F2 F4/decision 8 F5 F6 F7 F8 F9 F10 F11 F13 + qr_cancel_order).
--- Adopted into the QA regression (tests/run_all.sh) on 2026-10-19 from the database engineer's round-3 checks (R1-R4, delete_customer_data, PIN_UPDATE_NEEDED).
+-- Adopted into the QA regression (tests/run_all.sh) on 2026-10-19 from the database engineer's round-3 checks (R1-R4, delete_customer_data, PIN_UPDATE_NEEDED); 2026-10-20: +2 erasure checks (sale_items.notes, refunds.reason/notes).
 -- Needs a FRESH database:  tests/reset_db.sh "" db_sec && psql ... -d db_sec -f this file
 -- Prints "ok  ..." / "FAIL ..." for every check and keeps going.
 \set QUIET on
@@ -475,6 +475,12 @@ insert into qr_orders(id, business_id, order_number, order_day, customer_id, cus
   ('eeeeeeee-0000-0000-0000-00000000d001', :'biz', 'Q-D1', current_date, 'cccccccc-0000-0000-0000-00000000d003', 'Z3',
    'for zeddy (ZED.RO)', '[{"name":"Latte","notes":"Zeddy likes it hot, Zedekiah too"},{"name":"Bun"}]');
 insert into sales(id, business_id, status, grand_total, customer_id, notes) values ('99999999-0000-0000-0000-00000000d001', :'biz', 'COMPLETED', 10, 'cccccccc-0000-0000-0000-00000000d002', 'paid by Zeddy');
+insert into sale_items(id, business_id, sale_id, name, quantity, unit_price, line_total, notes) values
+  ('aaaaaaaa-0000-0000-0000-00000000d001', :'biz', '99999999-0000-0000-0000-00000000d001', 'Latte', 1, 10, 10, 'zeddy: no sugar'),
+  ('aaaaaaaa-0000-0000-0000-00000000d002', :'biz', '99999999-0000-0000-0000-000000000002', 'Latte', 1, 150, 150, 'Zeddy again');   -- another sale: untouched
+insert into refunds(id, business_id, sale_id, type, amount, reason, notes) values
+  ('dddddddd-0000-0000-0000-00000000d001', :'biz', '99999999-0000-0000-0000-00000000d001', 'PARTIAL_REFUND', 5, 'Z3 changed mind', 'told Zed.Ro'),
+  ('dddddddd-0000-0000-0000-00000000d002', :'biz', '99999999-0000-0000-0000-00000000d001', 'PARTIAL_REFUND', 1, 'wrong size', null);
 insert into audit_log(id, business_id, action, details) values
   ('abababab-0000-0000-0000-00000000d001', :'biz', 'Customer added', 'Zed.Ro added at the counter'),
   ('abababab-0000-0000-0000-00000000d002', :'biz', 'Note', 'Zedekiah and Zedro unrelated'),
@@ -499,6 +505,10 @@ select test.chk((select customer_id is null and customer_nickname is null
                  from qr_orders where id = 'eeeeeeee-0000-0000-0000-00000000d001'), 'erase: QR order unlinked, names blanked in notes / item notes (whole words, any case)',
   (select customer_note || ' | ' || (items->0->>'notes') from qr_orders where id = 'eeeeeeee-0000-0000-0000-00000000d001'));
 select test.chk((select customer_id is null and notes = 'paid by [deleted customer]' and grand_total = 10 from sales where id = '99999999-0000-0000-0000-00000000d001'), 'erase: sale kept, unlinked, note blanked');
+select test.chk((select notes from sale_items where id = 'aaaaaaaa-0000-0000-0000-00000000d001') = '[deleted customer]: no sugar'
+           and (select notes from sale_items where id = 'aaaaaaaa-0000-0000-0000-00000000d002') = 'Zeddy again', 'erase: sale item notes blanked (only that customer''s sales)');
+select test.chk((select reason = '[deleted customer] changed mind' and notes = 'told [deleted customer]' and amount = 5 from refunds where id = 'dddddddd-0000-0000-0000-00000000d001')
+           and (select reason = 'wrong size' and notes is null from refunds where id = 'dddddddd-0000-0000-0000-00000000d002'), 'erase: refund reason / notes blanked, nothing else changed');
 select test.chk((select details from audit_log where id = 'abababab-0000-0000-0000-00000000d001') = '[deleted customer] added at the counter'
            and (select details from audit_log where id = 'abababab-0000-0000-0000-00000000d002') = 'Zedekiah and Zedro unrelated'
            and (select details from audit_log where id = 'abababab-0000-0000-0000-00000000d003') = 'Zeddy in another shop', 'erase: audit details blanked (only whole names, only this shop)');

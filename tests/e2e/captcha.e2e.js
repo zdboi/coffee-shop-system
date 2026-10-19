@@ -105,7 +105,7 @@ async function refuseOnce(page, glob){
       H.ok(await page.$eval('#w-captcha', e => e.hidden), 'QR: no CAPTCHA area on the welcome screen');
       await page.fill('#w-name', 'Ana'); await page.check('#w-consent');
       await page.click('#w-go');
-      H.ok(await H.until(() => page.isVisible('.member-name'), 10000), 'QR: registered straight away (member card)');
+      H.ok(await H.until(async () => await page.isVisible('#not-me') && !(await page.isVisible('#w-name')), 10000), 'QR: registered straight away (member card)');
       const su = st.auth.filter(a => a.path === 'signup');
       H.ok(su.length === 1 && !('gotrue_meta_security' in su[0].body), 'QR: one anonymous sign-up, no gotrue_meta_security', su);
       H.ok(st.cf.length === 0 && (await scriptTags(page)) === 0, 'QR: no Turnstile request or script tag', st.cf);
@@ -152,6 +152,7 @@ async function refuseOnce(page, glob){
       const signups = () => st.auth.filter(a => a.path === 'signup');
       const errText = () => page.textContent('#su-error');
       const waitErr = async (re, what) => H.until(async () => re.test(await errText()) && !(await page.$eval('#su-pair', b => b.disabled)), 10000) || console.log('   (waited for ' + what + ')');
+      const dev0 = H.num(`select count(*) from public.devices`);
       await page.goto(H.BASE + '/cccc/front/');
       await page.waitForSelector('#su-code', {timeout: 15000});
       H.ok(await page.evaluate(() => Captcha.enabled()), 'counter: Captcha.enabled() true with the key set');
@@ -187,7 +188,7 @@ async function refuseOnce(page, glob){
       await waitErr(PERSON, 'server refusal message');
       H.ok(PERSON.test(await errText()), 'counter: server "captcha_failed" -> the same plain message', await errText());
       H.ok((await page.inputValue('#su-code')) === 'capfo1', 'counter: code kept (server refusal)');
-      H.ok(H.num(`select count(*) from public.devices where device_name = 'Captcha Counter'`) === 0, 'counter: not paired after the refusal');
+      H.ok(H.num(`select count(*) from public.devices`) === dev0 && H.num(`select count(*) from public.device_pairing_codes where code = 'CAPFO1' and used_at is null`) === 1, 'counter: not paired after the refusal, code still unused');
       net.disallow();
 
       // 4. try again -> fresh token, paired
@@ -196,7 +197,7 @@ async function refuseOnce(page, glob){
       const toks = signups().map(capTok);
       H.ok(toks.length === 2 && toks.every(t => /^tok-/.test(t || '')), 'counter: the token reaches the sign-up body (gotrue_meta_security.captcha_token)', toks);
       H.ok(toks[0] !== toks[1], 'counter: a fresh token for each attempt', toks);
-      H.ok(H.num(`select count(*) from public.devices where device_name = 'Captcha Counter'`) === 1, 'counter: paired on "try again"');
+      H.ok(H.num(`select count(*) from public.devices`) === dev0 + 1, 'counter: paired on "try again"');
 
       // 5. after pairing: PIN sign-in, sale, lock, reload -> no Turnstile
       const cf0 = st.cf.length, su0 = signups().length;
@@ -206,12 +207,11 @@ async function refuseOnce(page, glob){
       await page.click('#checkout-btn');
       await page.click('[data-quick]');
       await page.click('#complete-sale-btn');
-      H.ok(await H.until(() => H.num(`select count(*) from public.sales s join public.devices d on d.id = s.device_id where d.device_name = 'Captcha Counter' and s.status = 'COMPLETED'`) === 1, 15000)
-        || await H.until(() => H.num(`select count(*) from public.sales where status = 'COMPLETED' and grand_total = 65`) >= 1, 3000), 'counter: sale uploaded');
+      H.ok(await H.until(() => H.num(`select count(*) from public.sales s join public.devices d on d.id = s.device_id where d.device_tag = 'B' and s.status = 'COMPLETED' and s.grand_total = 65`) === 1, 15000), 'counter: sale uploaded');
       await page.reload();
-      await page.waitForSelector('.pos-product-card, #pin-gate', {timeout: 15000});
+      await page.waitForFunction(() => document.getElementById('app').style.display === 'flex' || document.getElementById('pin-gate').style.display === 'flex', null, {timeout: 20000});
+      if(!(await page.isVisible('#app'))){ await H.typePin(page, '1111'); await page.waitForSelector('#app', {state: 'visible', timeout: 15000}); }
       await H.sleep(1500);
-      if(await page.isVisible('#pin-gate')){ await H.typePin(page, '1111'); await page.waitForSelector('.pos-product-card', {timeout: 15000}); }
       H.ok(st.cf.length === cf0 && (await scriptTags(page)) === 0, 'counter: no Turnstile after pairing (PIN sign-in, sale, reload)', st.cf.slice(cf0));
       H.ok(signups().length === su0, 'counter: no further anonymous sign-ups', signups().length);
       await H.shot(page, 'captcha-fo-after');
@@ -264,8 +264,8 @@ async function refuseOnce(page, glob){
       H.ok(toks[0] !== toks[1], 'QR: a fresh token for each attempt', toks);
       H.ok((await page.inputValue('#w-name')) === 'Bea' && (await page.inputValue('#w-phone')) === '0917 555 0101' && await page.isChecked('#w-consent'), 'QR: typed name, number and consent kept through all failures');
       await page.click('#w-go');
-      H.ok(await H.until(() => page.isVisible('.member-name'), 10000), 'QR: registered after the check passed');
-      H.ok(H.num(`select count(*) from public.customers where nickname = 'Bea'`) === 1, 'QR: one customer "Bea" in the database');
+      H.ok(await H.until(async () => await page.isVisible('#not-me') && !(await page.isVisible('#w-name')), 10000), 'QR: registered after the check passed (member card, "Not Bea?")');
+      H.ok(await H.until(() => H.num(`select count(*) from public.customers where nickname = 'Bea'`) === 1, 5000), 'QR: one customer "Bea" in the database');
       await H.shot(page, 'captcha-qr-registered');
 
       // 5. ordering + reload: no Turnstile
