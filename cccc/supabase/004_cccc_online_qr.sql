@@ -2276,6 +2276,86 @@ begin
   return to_jsonb(v_keep);
 end $$;
 
+-- Owner deletes a customer's data on request (privacy). Everything happens in ONE
+-- go (all or nothing), here on the server:
+--   * the customer record AND every record merged into it (all the way down);
+--   * their sales and QR orders stay (they are the shop's money history) but are
+--     unlinked: customer_id cleared, the order's customer_nickname cleared;
+--   * the nicknames are replaced with '[deleted customer]' wherever they were
+--     typed in free text: QR order notes and item notes, notes of their sales,
+--     and existing audit-log details of this shop. This function is the ONLY
+--     place where an audit row is ever changed (apply_changes can't);
+--   * their phone links (customer_devices) and the customer rows are deleted
+--     (the "merged into" links inside the chain are cleared first, so no record
+--     is left pointing at a deleted one);
+--   * one closing audit entry is written, without any customer name.
+-- Only the owner's email login (rank 3), only for their own shop.
+-- Returns {deleted: <number of customer records removed>}.
+-- Errors: ADMIN_ONLY, UNKNOWN_CUSTOMER.
+create or replace function public.delete_customer_data(p_customer_id uuid) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  v_biz uuid := public.current_business_id();
+  v_ids uuid[]; v_names text[]; v_rx text; v_n integer; v_orders integer; v_sales integer; v_audit integer;
+  c_repl constant text := '[deleted customer]';
+begin
+  if v_biz is null or public.app_rank() < 3 then raise exception 'ADMIN_ONLY'; end if;
+  if not exists (select 1 from public.customers where id = p_customer_id and business_id = v_biz) then
+    raise exception 'UNKNOWN_CUSTOMER';
+  end if;
+  -- 1) the whole merge chain (records merged into this one, and into those, ...)
+  with recursive chain(id, depth) as (
+    select p_customer_id, 0
+    union
+    select c.id, ch.depth + 1 from public.customers c join chain ch on c.merged_into = ch.id
+    where c.business_id = v_biz and ch.depth < 50
+  )
+  select array_agg(id) into v_ids from (select id, max(depth) d from chain group by id) x;
+  -- 2) nicknames to blank out in free text (2+ characters), longest first;
+  --    whole words only, any upper/lower case (like the Back Office used to do)
+  select array_agg(n order by length(n) desc) into v_names
+  from (select distinct btrim(nickname) n from public.customers where id = any(v_ids) and length(btrim(nickname)) >= 2) x;
+  if v_names is not null then
+    v_rx := '(^|[^[:alnum:]])(' || (select string_agg(regexp_replace(n, '([.*+?^${}()|\[\]\\])', '\\\1', 'g'), '|') from unnest(v_names) n)
+            || ')(?=$|[^[:alnum:]])';
+  end if;
+  -- 3) QR orders: unlink + blank the name in notes / item notes
+  update public.qr_orders o set
+      customer_id = null, customer_nickname = null,
+      customer_note = case when v_rx is null then o.customer_note else regexp_replace(o.customer_note, v_rx, '\1' || c_repl, 'gi') end,
+      items = case when v_rx is null or jsonb_typeof(o.items) <> 'array' then o.items else (
+        select coalesce(jsonb_agg(case when jsonb_typeof(it) = 'object' and it ? 'notes' and jsonb_typeof(it->'notes') = 'string'
+                                       then jsonb_set(it, '{notes}', to_jsonb(regexp_replace(it->>'notes', v_rx, '\1' || c_repl, 'gi')))
+                                       else it end order by ord), '[]'::jsonb)
+        from jsonb_array_elements(o.items) with ordinality t(it, ord)) end
+    where o.business_id = v_biz and o.customer_id = any(v_ids);
+  get diagnostics v_orders = row_count;
+  -- 4) sales: unlink (+ blank the name in their notes)
+  update public.sales s set customer_id = null,
+      notes = case when v_rx is null then s.notes else regexp_replace(s.notes, v_rx, '\1' || c_repl, 'gi') end
+    where s.business_id = v_biz and s.customer_id = any(v_ids);
+  get diagnostics v_sales = row_count;
+  -- 5) audit log: blank the name in existing entries of this shop
+  if v_rx is not null then
+    update public.audit_log a set details = regexp_replace(a.details, v_rx, '\1' || c_repl, 'gi')
+      where a.business_id = v_biz and a.details ~* v_rx;
+    get diagnostics v_audit = row_count;
+  end if;
+  -- 6) phone links, then the records (merge links cleared first)
+  delete from public.customer_devices where business_id = v_biz and customer_id = any(v_ids);
+  update public.customers set merged_into = null where business_id = v_biz and id = any(v_ids);
+  delete from public.customers where business_id = v_biz and id = any(v_ids);
+  get diagnostics v_n = row_count;
+  -- 7) one closing entry, no names
+  insert into public.audit_log(business_id, action, actor_name, details, at)
+    values (v_biz, 'Customer data deleted on request',
+            coalesce((select name from public.profiles where id = auth.uid()), 'Owner'),
+            format('%s customer record(s); %s QR order(s) and %s sale(s) unlinked; %s audit entr%s cleaned',
+                   v_n, v_orders, v_sales, coalesce(v_audit, 0), case when coalesce(v_audit, 0) = 1 then 'y' else 'ies' end),
+            now());
+  return jsonb_build_object('deleted', v_n);
+end $$;
+
 -- -----------------------------------------------------------------------------
 -- 13a. Flood limits for QR ordering (security review 2026-10-19, F5)
 -- -----------------------------------------------------------------------------
@@ -2643,7 +2723,7 @@ declare f record;
   member_fns text[] := array['current_business_id','current_role_rank','app_rank','is_owner','apply_changes','staff_pin_ids',
     'staff_pin_update_needed','staff_pin_login','staff_logout','staff_set_pin','staff_import_legacy_pin','create_device_pairing_code',
     'redeem_device_pairing','revoke_device','unlock_device_pin','fo_bootstrap','bo_bootstrap','sales_report','search_customers',
-    'fo_sync','fo_add_customer','qr_update_order','merge_customers'];
+    'fo_sync','fo_add_customer','qr_update_order','merge_customers','delete_customer_data'];
 begin
   for f in
     select p.oid::regprocedure as sig, p.proname from pg_proc p
