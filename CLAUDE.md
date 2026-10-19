@@ -30,7 +30,7 @@ plain-language, step-by-step instructions.
 ## Golden rules (everyone)
 1. **Own only your files.** Each file has exactly one owner (table below). Need a change in
    someone else's file? Stop and report what you need to the lead.
-2. **Never modify** `Inventory/`, `POS/`, `connection-test.html`, `_archive/**`.
+2. **Never modify** `_archive/**` (incl. the retired old apps, moved to `_archive/old-apps/` on 2026-10-20).
 3. **Never** put a Supabase `service_role` key (or any secret) in any file. The anon key in
    `cccc/shared/config.js` is public by design.
 4. **Never connect to the real Supabase project** (`qtkoxzuedxvqoktobtyg.supabase.co`), never run
@@ -123,7 +123,7 @@ The server answers per op: `ok | duplicate | skipped | error` (+ `message`).
 | `customer-qr-dev` | `cccc/order/**` |
 | `qa-test-engineer` | `tests/**` |
 | `security-reviewer` | nothing (read-only) |
-| lead (C) | `CLAUDE.md`, `.claude/**`, `README.md`, `index.html`, `docs/**`, `.gitignore`, `cccc/shared/vendor/**`, `_archive/**` (moves only) |
+| lead (C) | `CLAUDE.md`, `.claude/**`, `README.md`, `index.html`, `_config.yml`, `docs/**`, `.gitignore`, `cccc/shared/vendor/**`, `_archive/**` (moves only) |
 
 ## How work flows
 1. Lead writes a brief: goal, acceptance checks, files in scope.

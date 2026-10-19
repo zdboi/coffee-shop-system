@@ -1,0 +1,8 @@
+# GitHub Pages settings. Folders starting with "_" (like _archive/) are never published.
+# These are also kept off the live site: developer tests and team notes.
+exclude:
+  - tests
+  - .claude
+  - CLAUDE.md
+  - docs/handoff
+  - docs/prototype
