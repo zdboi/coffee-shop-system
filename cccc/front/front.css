@@ -1,5 +1,9 @@
 /* Front Office styles — layered on top of shared/styles.css */
 
+/* Optional CAPTCHA box on the pairing card (empty and hidden when CAPTCHA is off). */
+.setup-captcha{display:flex;justify-content:center;margin:4px 0 12px;}
+.setup-captcha:empty{display:none;}
+
 /* ---- PIN gate ---- */
 /* PIN gate must yield to modals opened on top of it (e.g. first-run admin setup, manager
    override prompts that might layer under a confirm dialog) */

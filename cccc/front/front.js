@@ -245,7 +245,7 @@ function showSetup(prefillCode, message){
       if(name) localStorage.setItem('cccc.device.name', name);
       toast('Counter paired');
       location.replace(location.pathname);
-    }catch(e){ failed(e.offline ? 'No internet. Pairing needs internet — check the connection and try again.' : friendlyError(e)); }
+    }catch(e){ failed((e && (e.offline || e.code==='offline')) ? 'No internet. Pairing needs internet — check the connection and try again.' : friendlyError(e)); }
   };
   document.getElementById('su-pair').onclick = pair;
   document.getElementById('su-code').addEventListener('keydown', (e)=>{ if(e.key==='Enter') pair(); });

@@ -81,6 +81,14 @@ img{display:block;max-width:100%;}
 .taken p{font-size:14px;color:var(--muted);margin:0 0 10px;}
 .taken .btn{width:100%;}
 .card-quiet .taken{margin:10px 0 0;background:var(--paper);}
+/* Optional person check (Captcha) above "Start ordering": small, centred, never wider than the screen */
+.captcha{margin:0 0 14px;}
+.captcha[hidden],.captcha [hidden]{display:none;}
+.captcha:has(.captcha-box:empty):not(:has(.inline-alert)){margin:0;}
+.captcha-box{display:flex;justify-content:center;max-width:100%;overflow:hidden;}
+.captcha-box iframe{max-width:100%;}
+.captcha .inline-alert p{margin:0 0 10px;}
+.captcha .inline-alert .btn{width:100%;}
 .inline-alert{border:1.5px solid var(--danger);background:var(--sheet);color:var(--danger);border-radius:14px;padding:12px 14px;font-size:14.5px;font-weight:600;}
 
 /* ---------- open orders strip ---------- */

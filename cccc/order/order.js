@@ -22,6 +22,7 @@
     cart: [], orders: [], view: 'menu', orderId: null,
     orderType: 'DINE_IN', note: '', justRegistered: false, pollTimer: null,
     ticketAlert: null,   // {id, text}: a problem with cancelling, shown under the ticket's buttons
+    signIn: null, signInErr: '', signInPromise: null,   // first sign-in with the person check (beginSignIn)
   };
 
   /* ---------------- helpers ---------------- */
@@ -70,6 +71,8 @@
     ORDER_TOO_BIG: 'That order is too big for the app. Please order at the counter.',
     CANNOT_CANCEL: 'The shop already started this order, so it can\'t be cancelled here. Please talk to our staff.',
     NOT_SIGNED_IN: 'Your phone isn\'t connected. Reload the page and try again.',
+    // The optional "are you a person" check before a new phone's first sign-in (Captcha).
+    CAPTCHA_FAILED: 'We couldn\'t confirm you\'re a person. Check your internet and try again.',
   };
   // This page does not load cccc/shared/ui.js (that file's wording is written for staff at the
   // counter, e.g. its NOT_SIGNED_IN talks about "this tablet's counter login"). Every message a
@@ -84,7 +87,10 @@
   }
   function errText(r){
     if(!r) return FALLBACK;
-    if(r.offline) return 'No connection. Check your internet and try again.';
+    if(r.offline || r.code === 'offline') return 'No connection. Check your internet and try again.';
+    // Supabase answers a refused check with error_code "captcha_failed"; Captcha.getToken
+    // rejects with code CAPTCHA_FAILED.
+    if(/captcha/i.test(String(r.code || '')) || /captcha/i.test(String(r.error || r.message || ''))) return MSG.CAPTCHA_FAILED;
     const code = codeOf(r);
     if(code === 'ITEM_UNAVAILABLE') return `${r.name || 'An item'} just sold out. Remove it to continue.`;
     if(code === 'OPTION_REQUIRED') return `Choose a ${r.group || 'option'} for ${r.name}.`;
@@ -165,17 +171,23 @@
     if(menu.table.kind === 'TAKEAWAY') S.orderType = 'TAKEAWAY';
     applyTheme(menu);
     S.cart = loadCart().filter(l => itemById(l.recipe_id));
+    // A new phone with the person check switched on: show the welcome screen first and sign in
+    // while the customer types their name (see beginSignIn). There's no customer or order yet.
+    let signInLater = false;
     if(!menu.ordering_enabled){ S.canOrder = false; S.blockedReason = MSG.ORDERING_OFF; }
     else{
       try{
         const sess = await cloud.ensureSession();
-        if(!sess) await cloud.signInAnonymously();
+        if(!sess){
+          if(captchaOn()) signInLater = true;
+          else await cloud.signInAnonymously();
+        }
       }catch(e){
         S.canOrder = false;
         S.blockedReason = 'Ordering from your phone isn\'t available right now. You can still look at the menu and order at the counter.';
       }
     }
-    if(S.canOrder){
+    if(S.canOrder && !signInLater){
       try{
         const r = await cloud.rpc('qr_session', {p_token: token});
         S.customer = r.customer || null;
@@ -185,7 +197,55 @@
     const openOne = S.orders.find(o => ['PENDING','PREPARING','READY'].includes(o.status));
     if(openOne && params.get('view') !== 'menu'){ S.view = 'order'; S.orderId = openOne.id; }
     render();
+    if(signInLater) beginSignIn();
     schedulePoll();
+  }
+
+  /* ---------------- first sign-in with the optional person check ---------------- */
+  // With CCCC_CONFIG.CAPTCHA_SITE_KEY empty, Captcha.enabled() is false and nothing here runs:
+  // the page signs in straight away, exactly as before. With a key, a new phone gets a token
+  // from a small box above "Start ordering" (usually it passes by itself), then signs in.
+  // S.signIn: null = done / not needed · 'pending' · 'failed' (message in S.signInErr).
+  function captchaOn(){
+    try{ return !!(window.Captcha && Captcha.enabled()); }catch(e){ return false; }
+  }
+  function beginSignIn(){
+    if(S.signIn === 'pending') return S.signInPromise;
+    S.signIn = 'pending'; S.signInErr = '';
+    paintCaptcha();
+    S.signInPromise = (async () => {
+      try{
+        const box = $('#w-captcha-box');
+        if(!box) throw {error: 'CAPTCHA_FAILED'};
+        const captchaToken = await Captcha.getToken(box, {timeoutMs: 60000});
+        await cloud.signInAnonymously(captchaToken ? {captchaToken} : undefined);
+        S.signIn = null;
+      }catch(e){
+        S.signIn = 'failed'; S.signInErr = errText(e);
+      }
+      paintCaptcha();
+    })();
+    return S.signInPromise;
+  }
+  // Wait for the sign-in to finish. true = signed in; false = the check failed (its message
+  // and "Try again" are shown in the welcome screen).
+  async function signedIn(){
+    if(S.signIn === 'pending') await S.signInPromise;
+    return S.signIn !== 'failed';
+  }
+  function paintCaptcha(){
+    const wrap = $('#w-captcha');
+    if(!wrap) return;
+    const st = S.signIn;
+    wrap.hidden = !st;
+    // Most people see nothing here (the check runs by itself); a few get one tick box.
+    $('#w-captcha-box').hidden = st !== 'pending';
+    const fail = $('#w-captcha-fail');
+    if(st === 'failed'){
+      fail.innerHTML = `<div class="inline-alert" role="alert"><p>${esc(S.signInErr)}</p>
+        <button class="btn btn-quiet" type="button" id="w-captcha-retry">Try again</button></div>`;
+      $('#w-captcha-retry').onclick = () => { beginSignIn(); const go = $('#w-go'); if(go) go.focus(); };
+    } else fail.innerHTML = '';
   }
 
   async function loadOrders(){
@@ -261,6 +321,8 @@
   }
 
   function renderWelcome(){
+    // Keep a person check that is still running (its box holds the check's own frame).
+    const runningBox = S.signIn === 'pending' ? $('#w-captcha-box') : null;
     $('#main').innerHTML = `
       <section class="member" aria-hidden="true">
         <div class="member-shop">${esc(shop())}</div>
@@ -281,6 +343,10 @@
         <span>Save my name and number with ${esc(shop())} to keep track of my orders, visits and rewards. I can ask the staff to delete them anytime.</span></label>
       <div class="form-error" id="w-err" role="alert"></div>
       <div id="w-help"></div>
+      <div class="captcha" id="w-captcha" hidden>
+        <div class="captcha-box" id="w-captcha-box"></div>
+        <div id="w-captcha-fail"></div>
+      </div>
       <button class="btn btn-main" id="w-go">Start ordering</button>
       <p style="text-align:center;margin-top:12px;"><button class="textlink" id="w-relink">I've ordered here before on another phone</button></p>
       ${menuHtml(true)}`;
@@ -294,6 +360,8 @@
     $('#w-go').onclick = register;
     $('#w-relink').onclick = () => openRelinkSheet();
     wireMenu();
+    if(runningBox) $('#w-captcha-box').replaceWith(runningBox);
+    paintCaptcha();
   }
 
   // First visit. qr_register only ever creates a new customer; an existing number answers
@@ -306,6 +374,12 @@
     if(!nickname){ err.textContent = MSG.NAME_REQUIRED; $('#w-name').focus(); return; }
     if(!$('#w-consent').checked){ err.textContent = MSG.CONSENT_REQUIRED; return; }
     btn.disabled = true; err.textContent = '';
+    if(S.signIn){
+      btn.textContent = 'Just a moment…';
+      const ok = await signedIn();
+      btn.textContent = 'Start ordering';
+      if(!ok){ btn.disabled = false; const retry = $('#w-captcha-retry'); if(retry) retry.focus(); return; }
+    }
     try{
       const r = (await cloud.rpc('qr_register', {p_token: token, p_nickname: nickname, p_phone: phone || null, p_consent: true})) || {};
       if(r.error || !r.customer){
@@ -560,6 +634,9 @@
         $('#r-go').onclick = async () => {
           const btn = $('#r-go'), err = $('#r-err');
           btn.disabled = true; err.textContent = '';
+          if(S.signIn && !(await signedIn())){
+            err.textContent = S.signInErr + ' Close this and tap "Try again".'; btn.disabled = false; return;
+          }
           try{
             const r = await cloud.rpc('qr_relink', {p_token: token, p_phone: $('#r-phone').value.trim(), p_nickname: $('#r-name').value.trim()});
             if(r.error){ err.textContent = errFor(r, 'relink'); btn.disabled = false; return; }
@@ -582,9 +659,12 @@
           $('#nm-go').disabled = true;
           try{ await cloud.rpc('qr_forget_device', {p_token: token}); }catch(e){}
           await cloud.signOut();
-          try{ await cloud.signInAnonymously(); }catch(e){ S.canOrder = false; S.blockedReason = errText(e); }
+          // With the person check on, show the name screen first: the check's box lives there.
+          const later = captchaOn();
+          if(!later){ try{ await cloud.signInAnonymously(); }catch(e){ S.canOrder = false; S.blockedReason = errText(e); } }
           S.customer = null; S.orders = []; S.cart = []; saveCart(); S.view = 'menu';
           closeSheet(); render();
+          if(later) beginSignIn();
         };
       });
   }

@@ -365,6 +365,7 @@ const AUTH_VIEWS = {
     <form id="f-login" autocomplete="on">
       <div class="form-row"><label for="li-email">Email</label><input id="li-email" type="email" autocomplete="username" required></div>
       <div class="form-row"><label for="li-pass">Password</label><input id="li-pass" type="password" autocomplete="current-password" required></div>
+      <div class="auth-captcha" id="li-captcha"></div>
       <button type="submit" class="btn btn-primary btn-block">Sign in</button>
     </form>
     <div class="auth-alt"><a class="linklike" data-view="forgot">Forgot password?</a><br><a class="linklike" data-view="signup">Create a new shop account</a></div>`,
@@ -373,6 +374,7 @@ const AUTH_VIEWS = {
     <p class="auth-sub">We will email you a link. Open it on this device to choose a new password.</p>
     <form id="f-forgot">
       <div class="form-row"><label for="fp-email">Email</label><input id="fp-email" type="email" autocomplete="username" required></div>
+      <div class="auth-captcha" id="fp-captcha"></div>
       <button type="submit" class="btn btn-primary btn-block">Send the reset link</button>
     </form>
     <div class="auth-alt"><a class="linklike" data-view="login">← Back to sign in</a></div>`,
@@ -399,10 +401,21 @@ const AUTH_VIEWS = {
       <div class="form-row"><label for="su-name">Your name</label><input id="su-name" autocomplete="name" maxlength="60" required></div>
       <div class="form-row"><label for="su-email">Email</label><input id="su-email" type="email" autocomplete="username" required></div>
       <div class="form-row"><label for="su-pass">Password (8 or more characters)</label><input id="su-pass" type="password" autocomplete="new-password" minlength="8" required></div>
+      <div class="auth-captcha" id="su-captcha"></div>
       <button type="submit" class="btn btn-primary btn-block">Create shop account</button>
     </form>
     <div class="auth-alt"><a class="linklike" data-view="login">← Back to sign in</a></div>`,
 };
+
+// Optional CAPTCHA (CLAUDE.md decision 10): only when the owner set a site key.
+// Gets a FRESH token for each attempt (Turnstile tokens work once) in the small box
+// on the form. Returns {} when CAPTCHA is off, so the request is exactly as before.
+// Rejects with CAPTCHA_FAILED / offline; callers show friendlyError and keep the form.
+async function authCaptcha(boxId){
+  if(!(window.Captcha && Captcha.enabled())) return {};
+  const token = await Captcha.getToken(document.getElementById(boxId), {timeoutMs: 60000});
+  return token ? {captchaToken: token} : {};
+}
 
 function showAuth(view, msg, isError){
   show('boot-screen', false); show('app', false);
@@ -431,7 +444,8 @@ function showAuth(view, msg, isError){
     setMsg('Signing in…');
     await busy(btn, async () => {
       try{
-        await cloud.signInWithPassword(email, pass);
+        const cap = await authCaptcha('li-captcha');
+        await cloud.signInWithPassword(email, pass, cap);
         await startBackOffice();
       }catch(err){ setMsg(friendlyError(err), true); }
     }, 'Signing in…');
@@ -443,7 +457,8 @@ function showAuth(view, msg, isError){
     const btn = forgot.querySelector('button[type=submit]');
     await busy(btn, async () => {
       try{
-        await cloud.resetPassword(email, location.origin + location.pathname);
+        const cap = await authCaptcha('fp-captcha');
+        await cloud.resetPassword(email, location.origin + location.pathname, cap);
         setMsg('If that email has a login, a reset link is on its way. Check your inbox (and spam folder).');
       }catch(err){ setMsg(friendlyError(err), true); }
     }, 'Sending…');
@@ -486,7 +501,8 @@ function showAuth(view, msg, isError){
     const btn = su.querySelector('button[type=submit]');
     await busy(btn, async () => {
       try{
-        const r = await cloud.signUp(email, pass, {business_name: biz, admin_name: name});
+        const cap = await authCaptcha('su-captcha');
+        const r = await cloud.signUp(email, pass, {business_name: biz, admin_name: name}, cap);
         if(r && r.session){ toast('Shop account created'); await startBackOffice(); return; }
         showAuth('login', 'Account created. Check your email and tap the confirmation link, then sign in here.');
         const em = document.getElementById('li-email'); if(em) em.value = email;
