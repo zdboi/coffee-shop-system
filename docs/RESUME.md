@@ -1,43 +1,44 @@
-# Resume here (save point: 2026-10-19, checkpoint 5)
+# Resume here (save point: 2026-10-20, checkpoint 6)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
-## Where we are
-- Branch `wip/cccc-online-qr`, checkpoint 5 = commit `69df9a8`, pushed to GitHub.
-- **Stage 3 (test + security + fix loop) is done.**
-  - Full regression: 46 suites, about 3,050 checks. The last full run's only 2 failures were
-    fixed, and the counter suites re-pass.
-  - **Security:** all 14 review findings fixed (F1–F14), plus R1–R4 from the second
-    review of `apply_changes`:
-    - audit log add-only;
-    - links stay in the same shop;
-    - QR order owner link locked;
-    - counter adds outside the shop sign-up limit.
-  - **Owner decisions 2026-10-19 (CLAUDE.md decisions 8 and 9):**
-    - manager/admin PINs are 6 digits;
-    - a short-PIN manager can sell but can't approve;
-    - the old POS/Inventory/test pages come off the live site at go-live.
-- **Owner setup guide written:** `docs/SETUP_GUIDE.md`.
-- The database script `004` has still **not** been run on the live Supabase. Your live shop is unchanged.
+## Where we are: ready for go-live
+- Branch `wip/cccc-online-qr`, checkpoint 6, pushed to GitHub. **Pull request #1** (→ `main`) is
+  open for the owner. It says to merge only after setup guide Parts 1–3.
+- Tests: 49 suites, 3,238 checks, all passing (two runs).
+- Final security verdict: **ready for go-live**. Every finding is fixed, including the last
+  privacy fix: customer erasure now also covers item notes and refund reasons.
+- CAPTCHA (Cloudflare Turnstile) is supported in all apps but **off**. Owner decision: go live
+  without it; turn it on later only if fake orders appear. Order when the time comes: owner sends the
+  site key → C adds it → C confirms → owner switches it on in Supabase.
+- The old POS/Inventory/test pages are moved to `_archive/old-apps/`. They come off the live site
+  when PR #1 is merged.
+- Live Supabase and the live site are still unchanged.
 
-## Next steps (in order)
-1. **CAPTCHA support** (core + QR page + counter pairing). Turnstile token on anonymous sign-ins,
-   with the site key in `config.js`. Until this is done, the owner must NOT switch CAPTCHA on in
-   Supabase (the guide says so).
-2. **Final security re-check:** a quick look at the short-PIN rule and CAPTCHA.
-3. **Go-live prep (lead):**
-   - move `POS/`, `Inventory/` and `connection-test.html` into `_archive/` (decision 9);
-   - root landing page;
-   - open a pull request `wip/cccc-online-qr` → `main` for the owner to merge (setup guide Part 4).
-4. **Owner runs the setup guide**; C on standby.
-5. **Later:** a `005` script drops `profiles.pin_hash` once the old apps are offline.
-6. **Then:**
-   - resume the paused prototype walkthrough (`docs/prototype/NOTES.md`);
-   - Senior/PWD 20% discount button (owner said "later");
+## Next steps
+1. **Owner follows `docs/SETUP_GUIDE.md`** (about 45 min); C is on standby:
+   - backup;
+   - run 004;
+   - Supabase settings;
+   - merge PR #1;
+   - Back Office first setup;
+   - test.
+2. **After go-live:**
+   - a `005` script drops `profiles.pin_hash`;
+   - optional copy polish: the Back Office "Could not reach the CAPTCHA check" message says "CAPTCHA"
+     (core-sync, `captcha.js`).
+3. **Later list:**
+   - prototype walkthrough (`docs/prototype/NOTES.md`);
+   - Senior/PWD 20% discount button;
    - loyalty stamps rewards.
 
+## Saving to Obsidian
+The session note lives at `docs/obsidian/CCCC POS — session log.md` and is updated at every
+checkpoint. The owner's local Claude Code copies it into the vault: "Pull the latest from GitHub and
+copy docs/obsidian/CCCC POS — session log.md into my vault."
+
 ## How the team works
-Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md` (`tests/run_all.sh --runs 2`, about 25 min).
+Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md` (`tests/run_all.sh --runs 2`, about 30 min).
 Save points: `docs/checkpoints.md`.
 - Each agent uses its own database and port: FO `db_fo`/8790, BO `db_bo`/8791, QR `db_qr`/8792,
   DB `db_sec`, QA `cccc`/8787.

@@ -55,9 +55,9 @@ Supabase — otherwise every sign-in (yours too) is refused. When you do it:
 
 ## Part 4 — Publish the new apps (5 min)
 
-C prepares this for you (moving the finished work to the main branch and taking the old
-POS, Inventory and test pages off the live site, as you decided). When C says it's ready:
-1. Open **github.com/zdboi/coffee-shop-system** → **Pull requests** → open the one C made.
+It's ready: **pull request #1** (it also takes the old POS, Inventory and test pages off the live
+site, as you decided). Only after Parts 1–3 are done:
+1. Open **https://github.com/zdboi/coffee-shop-system/pull/1**.
 2. Click **Merge pull request** → **Confirm merge**.
 3. Wait 2 minutes. Your apps are now at:
    - **Back Office:** `https://zdboi.github.io/coffee-shop-system/cccc/back/`

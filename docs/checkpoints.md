@@ -14,6 +14,7 @@ New checkpoints are added at the end of every stage.
 | 3 | **Back Office built** | 2026-10-12 09:01 | The full Back Office, counter approvals with manager PINs, QR page fixes. |
 | 4 | **Fix round 2 (resume point)** | 2026-10-13 | All 6 bugs from testing fixed; your refund and offline-approval decisions built in. Re-testing still to do — see `docs/RESUME.md`. |
 | 5 | **Security round done** | 2026-10-19 | All 14 security findings fixed; 6-digit manager PINs; audit log add-only; full customer erasure; 3,054 tests. Setup guide written. |
+| 6 | **Ready for go-live** | 2026-10-20 | Optional CAPTCHA built (off); final security verdict "ready"; 3,238 tests pass; old pages archived; pull request #1 open for you. |
 
 ## Look at or download a checkpoint
 
@@ -27,6 +28,7 @@ Each link opens the project exactly as it was at that checkpoint. The ZIP link d
 | 3 | [Back Office built](https://github.com/zdboi/coffee-shop-system/tree/1944accae41d4d9dd6b4d93db97a876be36a7ebb) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/1944accae41d4d9dd6b4d93db97a876be36a7ebb.zip) |
 | 4 | [Fix round 2](https://github.com/zdboi/coffee-shop-system/tree/4fc56e17bea891ea0dfce8292ded9d75783ca1ac) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/4fc56e17bea891ea0dfce8292ded9d75783ca1ac.zip) |
 | 5 | [Security round done](https://github.com/zdboi/coffee-shop-system/tree/69df9a838dd3fd41752ac02d932a073c58f23569) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/69df9a838dd3fd41752ac02d932a073c58f23569.zip) |
+| 6 | [Ready for go-live](https://github.com/zdboi/coffee-shop-system/tree/9705cb9e6b72b1a6dd2759282ff460d88334b664) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/9705cb9e6b72b1a6dd2759282ff460d88334b664.zip) |
 
 ## Go back to a checkpoint
 
