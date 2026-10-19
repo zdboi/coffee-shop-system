@@ -2297,7 +2297,8 @@ end $$;
 --   * their sales and QR orders stay (they are the shop's money history) but are
 --     unlinked: customer_id cleared, the order's customer_nickname cleared;
 --   * the nicknames are replaced with '[deleted customer]' wherever they were
---     typed in free text: QR order notes and item notes, notes of their sales,
+--     typed in free text: QR order notes and item notes, notes of their sales
+--     and of those sales' items, the reason / notes of those sales' refunds,
 --     and existing audit-log details of this shop. This function is the ONLY
 --     place where an audit row is ever changed (apply_changes can't);
 --   * their phone links (customer_devices) and the customer rows are deleted
@@ -2312,6 +2313,7 @@ language plpgsql volatile security definer set search_path = public as $$
 declare
   v_biz uuid := public.current_business_id();
   v_ids uuid[]; v_names text[]; v_rx text; v_n integer; v_orders integer; v_sales integer; v_audit integer;
+  v_sale_ids uuid[];
   c_repl constant text := '[deleted customer]';
 begin
   if v_biz is null or public.app_rank() < 3 then raise exception 'ADMIN_ONLY'; end if;
@@ -2345,7 +2347,19 @@ begin
         from jsonb_array_elements(o.items) with ordinality t(it, ord)) end
     where o.business_id = v_biz and o.customer_id = any(v_ids);
   get diagnostics v_orders = row_count;
-  -- 4) sales: unlink (+ blank the name in their notes)
+  -- 4) sales: blank the name in their item notes (the counter copies QR item
+  --    notes there) and in their refunds' reason / notes; then unlink the sales
+  --    (+ blank the name in their own notes)
+  select coalesce(array_agg(id), '{}') into v_sale_ids from public.sales
+    where business_id = v_biz and customer_id = any(v_ids);
+  if v_rx is not null and cardinality(v_sale_ids) > 0 then
+    update public.sale_items si set notes = regexp_replace(si.notes, v_rx, '\1' || c_repl, 'gi')
+      where si.business_id = v_biz and si.sale_id = any(v_sale_ids) and si.notes ~* v_rx;
+    update public.refunds r set
+        reason = case when r.reason ~* v_rx then regexp_replace(r.reason, v_rx, '\1' || c_repl, 'gi') else r.reason end,
+        notes  = case when r.notes  ~* v_rx then regexp_replace(r.notes,  v_rx, '\1' || c_repl, 'gi') else r.notes end
+      where r.business_id = v_biz and r.sale_id = any(v_sale_ids) and (r.reason ~* v_rx or r.notes ~* v_rx);
+  end if;
   update public.sales s set customer_id = null,
       notes = case when v_rx is null then s.notes else regexp_replace(s.notes, v_rx, '\1' || c_repl, 'gi') end
     where s.business_id = v_biz and s.customer_id = any(v_ids);
