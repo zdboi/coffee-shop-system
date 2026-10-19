@@ -81,6 +81,8 @@ run_sql_assert sql/30_security_tests "$DIR/sql/30_security_tests.sql"
 "$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
 run_sql_assert sql/32_fix_round_tests "$DIR/sql/32_fix_round_tests.sql"
 run_cmd conc_checks "$DIR/conc_checks.sh" "$DB"       # two sessions at once, on the data 32 left
+"$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
+run_sql_lines  sql/33_security_round3_tests "$DIR/sql/33_security_round3_tests.sql"   # needs a fresh database
 
 echo "== unit checks (shared core)"
 run_node unit/core_check "$DIR/unit/core_check.js" "$REPO"

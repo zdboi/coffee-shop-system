@@ -141,8 +141,8 @@ select test.ok(public.redeem_device_pairing('PAIRA2', :'key2', 'Back bar')->'dev
 select test.login(:'d3'); set role authenticated;
 select test.ok(public.redeem_device_pairing('PAIRB1', :'key3', 'Other')->'device' is not null, 'setup: d3 paired (other shop)'); reset role;
 select test.login(:'d1'); set role authenticated;
-select (public.staff_pin_login('2222'))->>'token' as mgr_login \gset
 select (public.staff_pin_login('1111'))->>'token' as cashier_login \gset
+select (public.staff_pin_login('2222'))->>'token' as mgr_login \gset
 select test.ok(test.res(test.op(:'key1', 'shift_open', jsonb_build_object('id','88888888-0000-0000-0000-000000000001','shift_number','SHIFT-A-2026-0001',
   'cashier_id', :'cashier', 'cashier_name','Cathy','opened_at', now(), 'opening_cash', 1000))) = 'ok', 'setup: shift opened');
 reset role;
@@ -395,6 +395,7 @@ select test.login(:'d1'); set role authenticated;
 select test.ok(test.res(test.op(:'key1', 'refund', test.refund('dddddddd-0000-0000-0000-0000000000c1', '99999999-0000-0000-0000-000000000007', 'VOID', 150, '[]', :'manager', :'mgr_login_d2'))) = 'APPROVAL_INVALID',
    '6: the manager''s LOGIN token from ANOTHER counter -> APPROVAL_INVALID');
 -- shift close by a manager with their own LOGIN token (closing Cathy's shift)
+select (public.staff_pin_login('2222'))->>'token' as mgr_login \gset
 select test.ok(test.res(test.op(:'key1', 'shift_open', jsonb_build_object('id','88888888-0000-0000-0000-000000000002','shift_number','SHIFT-A-2026-0002',
   'cashier_id', :'cashier', 'cashier_name','Cathy','opened_at', now(), 'opening_cash', 500))) = 'ok', 'setup: shift 2 (Cathy)');
 select test.ok(test.res(test.op(:'key1', 'shift_open', jsonb_build_object('id','88888888-0000-0000-0000-000000000003','shift_number','SHIFT-A-2026-0003',
@@ -413,7 +414,7 @@ select test.login(:'d1'); set role authenticated;
 select (public.staff_pin_login('3333'))->>'token' as mara_login2 \gset
 reset role;
 select test.login(:'owner_uid'); set role authenticated;
-select test.ok((public.staff_set_pin(:'mara', '3434')->>'ok')::boolean, 'setup: owner gives Mara a new PIN');
+select test.ok((public.staff_set_pin(:'mara', '343434')->>'ok')::boolean, 'setup: owner gives Mara a new PIN');
 reset role;
 select test.login(:'d1'); set role authenticated;
 select test.ok(test.res(test.op(:'key1', 'refund', test.refund('dddddddd-0000-0000-0000-0000000000c1', '99999999-0000-0000-0000-000000000007', 'VOID', 150, '[]', :'mara', :'mara_login2'))) = 'APPROVAL_INVALID',
@@ -423,7 +424,7 @@ reset role;
 -- ================= 5. a PIN that matches two staff members =================
 select test.login(:'owner_uid'); set role authenticated;
 select public.apply_changes('[{"op":"upsert","table":"staff","row":{"id":"66666666-0000-0000-0000-000000000009","name":"Lia Legacy","role":"CASHIER","local_id":"user_lia"}},
-                              {"op":"upsert","table":"staff","row":{"id":"66666666-0000-0000-0000-000000000010","name":"Old Timer","role":"MANAGER","local_id":"user_old"}}]');
+                              {"op":"upsert","table":"staff","row":{"id":"66666666-0000-0000-0000-000000000010","name":"Old Timer","role":"CASHIER","local_id":"user_old"}}]');
 select public.staff_import_legacy_pin('66666666-0000-0000-0000-000000000009', encode(extensions.digest('coffeepos:1111', 'sha256'), 'hex'));  -- same as Cathy's PIN
 select public.staff_import_legacy_pin('66666666-0000-0000-0000-000000000010', encode(extensions.digest('coffeepos:4321', 'sha256'), 'hex'));  -- unique
 reset role;
@@ -433,7 +434,8 @@ select test.login(:'d1'); set role authenticated;
 select test.ok(public.staff_pin_login('1111') = '{"error":"PIN_AMBIGUOUS"}'::jsonb, '5: PIN shared by Cathy and an imported old PIN -> PIN_AMBIGUOUS, nobody named');
 select test.ok(public.staff_pin_login('1111', 'OVERRIDE', 'MANAGER')->>'error' = 'PIN_AMBIGUOUS', '5: same for an approval');
 select public.staff_pin_login('1111'); select public.staff_pin_login('1111'); select public.staff_pin_login('1111');
-select test.ok(public.staff_pin_login('1111')->>'error' = 'PIN_AMBIGUOUS', '5: repeating it does not lock the counter (not a wrong PIN)');
+select test.ok(public.staff_pin_login('1111')->>'error' = 'TOO_MANY_ATTEMPTS', '5: PIN_AMBIGUOUS counts as a wrong PIN (5th one locks the counter)');
+reset role; delete from auth_attempts; select test.login(:'d1'); set role authenticated;
 select test.ok((public.staff_pin_login('4321')->'staff'->>'name') = 'Old Timer', '5: a unique old PIN still signs in (and is upgraded)');
 reset role;
 select test.ok((select pin_hash is null and legacy_sha256 is not null from staff_pins where staff_id = '66666666-0000-0000-0000-000000000009'), '5: the ambiguous old PIN was NOT upgraded');
@@ -458,6 +460,8 @@ select test.ok((public.staff_pin_login('1111')->'staff'->>'name') = 'Cathy Cashi
 reset role;
 
 -- ================= round 2 / 4: a sign-in token approves only its OWN staff member's actions =================
+select test.login(:'d1'); set role authenticated; select (public.staff_pin_login('2222'))->>'token' as mgr_login \gset
+reset role;
 select test.login(:'d1'); set role authenticated;
 select test.ok(test.res(test.op(:'key1', 'sale', test.sale('99999999-0000-0000-0000-0000000000d1',
    jsonb_build_object('subtotal', 150, 'discount_type', 'fixed', 'discount_value', 10, 'discount_amount', 10, 'grand_total', 140, 'discount_approved_by', :'manager'),

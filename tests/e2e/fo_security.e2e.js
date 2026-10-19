@@ -120,7 +120,7 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
     await page.fill('#cp-q', '0917 123 4567');
     ok(await until(async () => /search by name/.test(await page.textContent('#cp-results')), 8000), 'full-number search over the limit -> "You can still search by name"', await page.textContent('#cp-results'));
     await page.click('.cp-new summary');
-    await page.fill('#cp-name', 'Ana'); await page.fill('#cp-phone', '0918 765 4321'); await page.click('#cp-create');
+    await page.fill('#cp-name', 'Ana'); await page.fill('#cp-phone', '0918 765 4321'); await page.check('#cp-consent'); await page.click('#cp-create');
     ok(await until(async () => /without a number/.test(await lastToast()), 5000), 'new customer with a number over the limit -> "Save them without a number"', await lastToast());
     await page.click('[data-cancel]');
     net.disallow();

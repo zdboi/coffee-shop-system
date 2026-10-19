@@ -258,7 +258,7 @@ async function manilaClock(){
   try{
     await B.go(bo, 'dashboard');
     await bo.waitForFunction(() => !/…/.test(document.querySelector('#dash-today .stat-card .value').textContent), null, {timeout: 15000});
-    ok(eq2(money(await B.statValue(bo, 'Sales today')), X.net), `BO dashboard "Sales today" ${peso(X.net)}`, await B.statValue(bo, 'Sales today'));
+    ok(eq2(money(await B.statValue(bo, 'Net sales today')), X.net), `BO dashboard "Net sales today" ${peso(X.net)}`, await B.statValue(bo, 'Net sales today'));
     await B.go(bo, 'calendar'); await bo.click('[data-view="day"]'); await bo.waitForSelector('.cal-kpis');
     const kp = async (l) => B.statValue(bo, l);
     const netCard = await bo.$$eval('.stat-card', cs => { const c = cs.find(x => x.querySelector('.label').textContent.trim() === 'Net sales'); return c ? c.textContent.replace(/\s+/g, ' ') : ''; });

@@ -56,9 +56,9 @@ select public.apply_changes(jsonb_build_array(
   jsonb_build_object('op','upsert','table','staff','row', jsonb_build_object('id','66666666-0000-0000-0000-000000000001','name','Cathy Cashier','role','CASHIER')),
   jsonb_build_object('op','upsert','table','staff','row', jsonb_build_object('id','66666666-0000-0000-0000-000000000002','name','Manny Manager','role','MANAGER'))));
 select test.ok((public.staff_set_pin('66666666-0000-0000-0000-000000000001','1111')->>'ok')::boolean, 'set cashier PIN');
-select test.ok((public.staff_set_pin('66666666-0000-0000-0000-000000000002','2222')->>'ok')::boolean, 'set manager PIN');
-select test.ok((public.staff_set_pin(:'owner_staff','9999')->>'ok')::boolean, 'set owner PIN');
-select test.ok(public.staff_set_pin('66666666-0000-0000-0000-000000000002','1111')->>'error' = 'PIN_IN_USE', 'duplicate PIN rejected');
+select test.ok((public.staff_set_pin('66666666-0000-0000-0000-000000000002','222222')->>'ok')::boolean, 'set manager PIN');
+select test.ok((public.staff_set_pin(:'owner_staff','999999')->>'ok')::boolean, 'set owner PIN');
+select test.ok(public.staff_set_pin('66666666-0000-0000-0000-000000000002','999999')->>'error' = 'PIN_IN_USE', 'duplicate PIN rejected');
 select test.ok((select count(*) from staff_pins) = 0, 'staff_pins is unreadable through the API (RLS, no policy)');
 select (public.create_device_pairing_code('Front Counter'))->>'code' as paircode \gset
 reset role;
@@ -88,9 +88,9 @@ select test.ok((select role from profiles where id = '00000000-0000-0000-0000-00
 -- PIN logins
 select test.ok(public.staff_pin_login('0000')->>'error' = 'WRONG_PIN', 'wrong PIN');
 select (public.staff_pin_login('1111')) ->> 'token' as cashier_token \gset
-select (public.staff_pin_login('9999')) ->> 'token' as admin_token \gset
+select (public.staff_pin_login('999999')) ->> 'token' as admin_token \gset
 select test.ok(public.staff_pin_login('1111', 'OVERRIDE', 'MANAGER')->>'error' = 'ROLE_TOO_LOW', 'cashier PIN cannot approve manager actions');
-select test.ok((public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER')->'staff'->>'role') = 'MANAGER', 'manager override works');
+select test.ok((public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER')->'staff'->>'role') = 'MANAGER', 'manager override works');
 reset role;
 select test.login('00000000-0000-0000-0000-0000000000d1', :'cashier_token');
 set role authenticated;
@@ -154,7 +154,7 @@ select test.ok((public.fo_sync('device-key-0001-abcdef', jsonb_build_array(jsonb
    'discount approved by a cashier is rejected');
 select test.ok((select count(*) from sales where id='99999999-0000-0000-0000-000000000002') = 0, 'rejected op left no partial rows');
 -- void by manager restores stock
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as void_token \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as void_token \gset
 select test.ok((public.fo_sync('device-key-0001-abcdef', jsonb_build_array(jsonb_build_object('op_id','a0000000-0000-0000-0000-000000000005','type','refund','data', jsonb_build_object(
    'refund', jsonb_build_object('id','dddddddd-0000-0000-0000-000000000001','sale_id','99999999-0000-0000-0000-000000000001','shift_id','88888888-0000-0000-0000-000000000001','type','VOID','amount',165,'reason','test','approved_by','66666666-0000-0000-0000-000000000002','approved_by_name','Manny','date',now()),
    'sale_status','VOIDED', 'approval_token', :'void_token',

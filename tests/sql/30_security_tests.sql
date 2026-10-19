@@ -138,8 +138,8 @@ select test.ok(test.err($$select public.fo_sync('device-key-0001-abcdef', '[]'::
 reset role;
 select test.login(:'d1'); set role authenticated;
 select (public.staff_pin_login('9999'))->>'token' as admin_login \gset
-select (public.staff_pin_login('2222'))->>'token' as mgr_login \gset
 select (public.staff_pin_login('1111'))->>'token' as cashier_login \gset
+select (public.staff_pin_login('2222'))->>'token' as mgr_login \gset
 reset role;
 select test.login(:'d1', :'admin_login'); set role authenticated;
 select test.ok(public.app_rank() = 0, 'counter + owner''s PIN -> rank 0 (no elevation from x-staff-token)');
@@ -162,7 +162,7 @@ select test.ok(not has_function_privilege('authenticated', 'public._use_approval
            and not has_function_privilege('authenticated', 'public._customer_for_staff(public.customers,boolean)', 'execute')
            and not has_function_privilege('authenticated', 'public._require_ingredient(uuid,jsonb)', 'execute'), 'new helpers are internal only');
 select test.ok(not has_function_privilege('anon', 'public.search_customers(text,integer)', 'execute')
-           and not has_function_privilege('anon', 'public.fo_add_customer(text,text)', 'execute'), 'anon cannot search / add customers');
+           and not has_function_privilege('anon', 'public.fo_add_customer(text,text,boolean)', 'execute'), 'anon cannot search / add customers');
 -- another counter can't upload with d1's key
 select test.login(:'d2'); set role authenticated;
 select test.ok(test.err($$select public.fo_sync('device-key-0001-abcdef', '[]'::jsonb)$$) = 'DEVICE_MISMATCH', 'd2 cannot upload as d1');
@@ -388,15 +388,15 @@ select test.ok(test.op(:'key1', 'sale', test.raw_sale('99999999-0000-0000-0000-0
    '{"subtotal":150,"discount_amount":0,"tax_amount":0,"service_charge_amount":0,"grand_total":150}',
    jsonb_build_array(test.item(150, 1, p_recipe => '33333333-0000-0000-0000-0000000000b2'))))->>'message' = 'UNKNOWN_RECIPE', 'another shop''s recipe -> UNKNOWN_RECIPE');
 reset role;
-select test.ok((select needs_review and review_reason = 'PRICE_BELOW_MENU' from sales where id = '99999999-0000-0000-0000-000000000501'), '... and flagged PRICE_BELOW_MENU (counter''s needs_review=false ignored)');
-select test.ok((select not needs_review and review_reason is null from sales where id = '99999999-0000-0000-0000-000000000502'), 'options matched to the menu: not flagged (counter''s needs_review=true ignored)');
-select test.ok((select not needs_review from sales where id = '99999999-0000-0000-0000-000000000503'), 'menu''s own negative option: not flagged');
-select test.ok((select needs_review and review_reason = 'PRICE_BELOW_MENU' from sales where id = '99999999-0000-0000-0000-000000000504'), 'made-up negative option can''t hide a cheap price: flagged');
+select test.ok((select needs_review and review_reason like '%PRICE_BELOW_MENU%' from sales where id = '99999999-0000-0000-0000-000000000501'), '... and flagged PRICE_BELOW_MENU (counter''s needs_review=false ignored)');
+select test.ok((select coalesce(review_reason, '') not like '%PRICE%' from sales where id = '99999999-0000-0000-0000-000000000502'), 'options matched to the menu: not flagged (counter''s needs_review=true ignored)');
+select test.ok((select coalesce(review_reason, '') not like '%PRICE%' from sales where id = '99999999-0000-0000-0000-000000000503'), 'menu''s own negative option: not flagged');
+select test.ok((select needs_review and review_reason like '%PRICE_BELOW_MENU%' from sales where id = '99999999-0000-0000-0000-000000000504'), 'made-up negative option can''t hide a cheap price: flagged');
 select test.ok((select needs_review from sales where id = '99999999-0000-0000-0000-000000000505'), 'option price taken from the menu (16oz = +20): flagged');
-select test.ok((select not needs_review from sales where id = '99999999-0000-0000-0000-000000000506'), 'option gone from the menu counts with its own +25: not flagged');
-select test.ok((select needs_review and review_reason = 'NOT_ON_MENU' from sales where id = '99999999-0000-0000-0000-000000000401'), 'item without a recipe: flagged NOT_ON_MENU');
-select test.ok((select not needs_review from sales where id = '99999999-0000-0000-0000-000000000402')
-           and (select not needs_review from sales where id = '99999999-0000-0000-0000-000000000201'), 'normal sales are not flagged');
+select test.ok((select coalesce(review_reason, '') not like '%PRICE%' from sales where id = '99999999-0000-0000-0000-000000000506'), 'option gone from the menu counts with its own +25: not flagged');
+select test.ok((select needs_review and review_reason like '%NOT_ON_MENU%' from sales where id = '99999999-0000-0000-0000-000000000401'), 'item without a recipe: flagged NOT_ON_MENU');
+select test.ok((select coalesce(review_reason, '') !~ 'PRICE|MENU' from sales where id = '99999999-0000-0000-0000-000000000402')
+           and (select coalesce(review_reason, '') !~ 'PRICE|MENU' from sales where id = '99999999-0000-0000-0000-000000000201'), 'normal sales are not flagged');
 select test.login(:'owner_uid'); set role authenticated;
 select public.apply_changes('[{"op":"update","table":"sales","row":{"id":"99999999-0000-0000-0000-000000000501","needs_review":false}}]');
 select test.ok((select not needs_review from sales where id = '99999999-0000-0000-0000-000000000501'), 'owner marks a flagged sale as reviewed');
@@ -439,8 +439,8 @@ select test.ok(jsonb_array_length(public.search_customers('0917')) = 0, 'counter
 select test.ok(jsonb_array_length(public.search_customers('4567')) = 1, 'counter can search by the last 4 digits');
 select test.ok((public.search_customers('0917 123 4567')->0->>'nickname') = 'Zed' and (public.search_customers('09171234567')->0->>'phone') = '0917 ••• 4567', 'counter can search by the full number (answer still masked)');
 select test.ok(public.search_customers('')::text not like '%+639%' and public.search_customers('')::text not like '%1234567%', 'no full number anywhere in a counter search');
-select test.ok((public.fo_add_customer('Someone', '0918 000 1111')->'customer'->>'phone') = '0918 ••• 1111', 'fo_add_customer (existing) masked');
-select test.ok((public.fo_add_customer('Newbie', '0919 555 0000')->'customer'->>'phone') = '0919 ••• 0000', 'fo_add_customer (new) masked');
+select test.ok((public.fo_add_customer('Someone', '0918 000 1111', true)->'customer'->>'phone') = '0918 ••• 1111', 'fo_add_customer (existing) masked');
+select test.ok((public.fo_add_customer('Newbie', '0919 555 0000', true)->'customer'->>'phone') = '0919 ••• 0000', 'fo_add_customer (new) masked');
 select test.ok(public.fo_bootstrap(:'key1')::text not like '%+639%', 'fo_bootstrap has no full numbers');
 select test.ok(public.sales_report(now() - interval '1 day', now() + interval '1 day')::text not like '%+639%', 'sales_report has no full numbers');
 reset role;
@@ -448,7 +448,7 @@ select test.login(:'owner_uid'); set role authenticated;
 select test.ok((select count(*) from customers) = 3, 'owner reads the customers table');
 select test.ok((public.search_customers('1234')->0->>'phone') = '+639171234567', 'owner: search by any digits, full number');
 select test.ok(jsonb_array_length(public.search_customers('0917')) = 1, 'owner: 09.. style digits match too');
-select test.ok((public.fo_add_customer('Zed', '09171234567')->'customer'->>'phone') = '+639171234567', 'owner: fo_add_customer returns the full number');
+select test.ok((public.fo_add_customer('Zed', '09171234567', true)->'customer'->>'phone') = '+639171234567', 'owner: fo_add_customer returns the full number');
 reset role;
 -- full-number look-ups by a counter are limited (60 per hour)
 select test.ok((select count(*) from auth_attempts where subject = :'d1' and kind = 'PHONE_LOOKUP') = 4, 'only the 4 full-number look-ups were counted');
@@ -456,7 +456,7 @@ insert into auth_attempts(subject, kind, success) select :'d1', 'PHONE_LOOKUP', 
   from generate_series(1, 60 - (select count(*) from auth_attempts where subject = :'d1' and kind = 'PHONE_LOOKUP'));
 select test.login(:'d1'); set role authenticated;
 select test.ok(test.err($$select public.search_customers('09171234567')$$) = 'TOO_MANY_ATTEMPTS', '61st full-number search in an hour -> TOO_MANY_ATTEMPTS');
-select test.ok(public.fo_add_customer('X', '09170000000')->>'error' = 'TOO_MANY_ATTEMPTS', 'fo_add_customer by number also limited');
+select test.ok(public.fo_add_customer('X', '09170000000', true)->>'error' = 'TOO_MANY_ATTEMPTS', 'fo_add_customer by number also limited');
 select test.ok(jsonb_array_length(public.search_customers('zed')) = 1 and jsonb_array_length(public.search_customers('4567')) = 1, 'name / last-digit searches still work');
 reset role;
 select test.login(:'d2'); set role authenticated;

@@ -45,7 +45,7 @@ async function statValue(p, label){ return p.$$eval('.stat-card', (cards, label)
   await page.fill('#li-email', 'owner@example.com'); await page.fill('#li-pass', 'secret123'); await page.click('#f-login button[type=submit]');
   await page.waitForSelector('#app', {state: 'visible', timeout: 20000});
   await page.waitForFunction(() => !/…/.test(document.querySelector('#dash-today .stat-card .value').textContent));
-  ok(money(await statValue(page, 'Sales today')) === foToday && foToday === 445, `dashboard "Sales today" ₱445 = counter's "Today · all counters" total (${foToday})`);
+  ok(money(await statValue(page, 'Net sales today')) === foToday && foToday === 445, `dashboard "Net sales today" ₱445 = counter's "Today · all counters" total (${foToday})`);
 
   // calendar: day view for today
   await go(page, 'calendar');
@@ -113,7 +113,7 @@ async function statValue(p, label){ return p.$$eval('.stat-card', (cards, label)
   ok(money(await statValue(page, 'Net sales')) === 65, 'calendar day after refund + void: ₱235 − ₱170 refund = ₱65 (voided sale left out)');
   await go(page, 'dashboard');
   await page.waitForFunction(() => !/…/.test(document.querySelector('#dash-today .stat-card .value').textContent));
-  ok(money(await statValue(page, 'Sales today')) === 65, 'dashboard "Sales today" agrees after the refund + void (₱65)');
+  ok(money(await statValue(page, 'Net sales today')) === 65, 'dashboard "Net sales today" agrees after the refund + void (₱65)');
 
   // needs review
   sql(`update sales set needs_review = true, review_reason = 'PRICE_BELOW_MENU' where id='${s1.id}'`);
