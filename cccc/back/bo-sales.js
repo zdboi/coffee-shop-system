@@ -1024,76 +1024,16 @@ async function openCustomerModal(id){
       del.onclick = () => busy(del, async () => {
         const ok = await confirmDialog(`Delete <b>${esc(c.nickname)}</b>'s data for good? Their name and number are removed from the customer list (with any records merged into it), their QR orders and order notes, and earlier audit-log entries. This cannot be undone.`, 'Delete for good');
         if(!ok) return;
-        try{
-          const plan = await customerDeletePlan(c);
-          if(await boSave(plan.ops, {reload: false, dropSales: true, success: 'Customer data deleted'})){ closeModal(); renderCustomers(); }
-        }catch(e){ toast(friendlyError(e), 'error'); }
+        // The server erases everything in one step (merge chain, links, order notes, audit text).
+        let r;
+        try{ r = await cloud.rpc('delete_customer_data', {p_customer_id: c.id}); }
+        catch(e){ toast(friendlyError(e), 'error'); return; }
+        if(r && r.error){ toast(friendlyError(r), 'error'); return; }
+        const n = Number(r && r.deleted) || 0;
+        BO.salesCache.clear();
+        toast(`Deleted ${plural(n, 'record')}`);
+        closeModal(); renderCustomers();
       }, 'Deleting…');
     }});
 }
 
-/* ================= deleting a customer's data (on request) =================
-   One all-or-nothing save that:
-   - follows merge chains all the way down (records merged into this one, and into those...);
-   - unlinks their sales and QR orders, and removes their nickname from the orders and order notes;
-   - replaces their nickname in earlier audit-log entries;
-   - deletes every record of the chain (deepest first, so no "merged into" link is left dangling). */
-const DELETED_CUSTOMER_TEXT = '[deleted customer]';
-function nicknameScrubber(names){
-  const list = [...new Set(names.map(n => String(n || '').trim()).filter(n => n.length >= 2))].sort((a, b) => b.length - a.length);
-  if(!list.length) return (t) => t;
-  const rx = new RegExp('(^|[^\\p{L}\\p{N}])(' + list.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?=$|[^\\p{L}\\p{N}])', 'giu');
-  return (t) => t == null ? t : String(t).replace(rx, (m, pre) => pre + DELETED_CUSTOMER_TEXT);
-}
-async function customerDeletePlan(c){
-  // 1) the whole merge chain
-  const chain = [c];
-  const seen = new Set([c.id]);
-  let frontier = [c.id];
-  for(let depth = 0; frontier.length && depth < 50; depth++){
-    const next = [];
-    for(let i = 0; i < frontier.length; i += 80){
-      const rows = await cloud.selectAll('customers', {in: {merged_into: frontier.slice(i, i + 80)}}) || [];
-      rows.forEach(r => { if(!seen.has(r.id)){ seen.add(r.id); chain.push(r); next.push(r.id); } });
-    }
-    frontier = next;
-  }
-  const ids = chain.map(x => x.id);
-  const scrub = nicknameScrubber(chain.map(x => x.nickname));
-  // 2) everything linked to any record of the chain
-  const orders = [], sales = [];
-  for(let i = 0; i < ids.length; i += 80){
-    const part = ids.slice(i, i + 80);
-    orders.push(...(await cloud.selectAll('qr_orders', {in: {customer_id: part}}) || []));
-    sales.push(...(await cloud.selectAll('sales', {in: {customer_id: part}}) || []));
-  }
-  // 3) audit entries naming them (by link or by nickname)
-  const audit = new Map();
-  for(let i = 0; i < ids.length; i += 80){
-    ((await cloud.selectAll('audit_log', {in: {reference_id: ids.slice(i, i + 80)}})) || []).forEach(r => audit.set(r.id, r));
-  }
-  for(const n of new Set(chain.map(x => String(x.nickname || '').trim()).filter(n => n.length >= 2))){
-    const pat = '*' + n.replace(/[*%,()]/g, '_') + '*';
-    ((await cloud.selectAll('audit_log', {ilike: {details: pat}})) || []).forEach(r => audit.set(r.id, r));
-  }
-  const ops = [];
-  orders.forEach(o => {
-    const row = {id: o.id, customer_id: null, customer_nickname: null};
-    if(o.customer_note) row.customer_note = scrub(o.customer_note);
-    if(Array.isArray(o.items) && o.items.some(it => it && it.notes && scrub(it.notes) !== it.notes)){
-      row.items = o.items.map(it => it && it.notes ? Object.assign({}, it, {notes: scrub(it.notes)}) : it);
-    }
-    ops.push(Ops.update('qr_orders', row));
-  });
-  sales.forEach(s => ops.push(Ops.update('sales', {id: s.id, customer_id: null})));
-  let auditChanged = 0;
-  audit.forEach(r => {
-    const details = scrub(r.details);
-    if(details !== r.details){ ops.push(Ops.update('audit_log', {id: r.id, details})); auditChanged++; }
-  });
-  // deepest records first (a record is deleted before the one it was merged into)
-  chain.slice().reverse().forEach(x => ops.push(Ops.del('customers', x.id)));
-  const merged = chain.length - 1;
-  ops.push(Ops.audit('Customer data deleted on request', `1 customer record${merged ? ' + ' + merged + ' merged record(s)' : ''}; ${plural(orders.length, 'QR order')} and ${plural(sales.length, 'sale')} unlinked; ${plural(auditChanged, 'audit entry', 'audit entries')} cleaned`));
-  return {ops, chain, orders, sales, auditChanged};
-}
