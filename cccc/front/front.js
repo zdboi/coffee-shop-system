@@ -212,6 +212,7 @@ function showSetup(prefillCode, message){
         ? `<div class="form-row"><label for="su-devname">Counter name (optional)</label><input id="su-devname" maxlength="30" value="" placeholder="Leave empty to use the name from Back Office"></div>`
         : `<div class="form-row"><label for="su-devname">Counter name</label><input id="su-devname" maxlength="30" value="${escapeHtml(localStorage.getItem('cccc.device.name')||'Front Counter')}"></div>`}
       <div class="form-row"><label for="su-code">Pairing code</label><input id="su-code" value="${escapeHtml(prefillCode)}" autocapitalize="characters" autocomplete="off" maxlength="6" class="code-input" placeholder="ABC123"></div>
+      <div id="su-captcha" class="setup-captcha"></div>
       <button class="btn btn-primary btn-big" id="su-pair">Pair this counter</button>
       <div id="su-error" class="pin-error"></div>
     </div>`;
@@ -227,7 +228,18 @@ function showSetup(prefillCode, message){
     const failed = (m)=>{ err(m); btn.disabled = false; btn.textContent = 'Pair this counter'; };
     try{
       // A counter is always its own anonymous login (never an owner email login).
-      if(!cloud.session || !cloud.isAnonymous()){ await cloud.signOut(); await cloud.signInAnonymously(); }
+      if(!cloud.session || !cloud.isAnonymous()){
+        await cloud.signOut();
+        // Optional CAPTCHA (only when the owner set a site key): the check appears in the small
+        // box above the button. Null when CAPTCHA is off, so nothing changes then.
+        let captchaToken = null;
+        if(window.Captcha && Captcha.enabled()){
+          btn.textContent = 'Checking…';
+          captchaToken = await Captcha.getToken(document.getElementById('su-captcha'), {timeoutMs: 60000});
+          btn.textContent = 'Pairing…';
+        }
+        await cloud.signInAnonymously(captchaToken ? {captchaToken} : undefined);
+      }
       const r = await cloud.rpc('redeem_device_pairing', {p_code: code, p_device_key: deviceKey(), p_device_name: name || null});
       if(r && r.error){ failed(friendlyError(r)); return; }
       if(name) localStorage.setItem('cccc.device.name', name);
