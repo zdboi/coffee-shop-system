@@ -79,7 +79,8 @@ function attach(page, errors, tag){
   page.on('dialog', d => { errors.push(tag + ' unexpected dialog: ' + d.message()); d.dismiss().catch(() => {}); });
   return {allow(re){ allowed.push(re); }, disallow(){ allowed = []; }};
 }
-async function typePin(page, pin){ for(const d of pin) await page.click(`#pin-pad button[data-k="${d}"]`); await page.click('#pin-enter'); }
+// A 6-digit PIN is sent by the pad itself after the 6th digit; shorter ones need Enter.
+async function typePin(page, pin){ for(const d of pin) await page.click(`#pin-pad button[data-k="${d}"]`); if(pin.length < 6) await page.click('#pin-enter'); }
 const money = (t) => Number(String(t == null ? '' : t).replace(/[^0-9.\-]/g, ''));
 const r2 = (n) => Math.round(Number(n) * 100) / 100;
 async function shot(page, name, opts){ try{ await page.screenshot(Object.assign({path: path.join(SHOTS, name + '.png')}, opts || {})); }catch(e){} }

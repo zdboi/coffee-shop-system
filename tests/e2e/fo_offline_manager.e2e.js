@@ -21,7 +21,7 @@ const MANNY = '66666666-0000-0000-0000-000000000002';
   const toastText = () => page.evaluate(() => [...document.querySelectorAll('.toast')].map(t => t.textContent).join(' | '));
   try{
     await H.pairCounter(page, 'TESTAB');
-    await typePin(page, '2222');                       // Manny, a manager, signs in online
+    await typePin(page, '222222');                       // Manny, a manager, signs in online
     await H.startShift(page, 500);
     await must(() => sql(`select count(*) from shifts where status='ACTIVE'`) === '1', 'shift up', 15000);
     // ---- go offline, sell with a discount approved by Manny himself (no PIN pad)

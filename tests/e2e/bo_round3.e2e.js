@@ -1,5 +1,6 @@
 // Back Office checks for the security fix round of 2026-10-19 (Back Office 1280 px + one counter):
-//   1  PIN banner: managers/admins with a PIN shorter than 6 digits are listed (#pin-update-banner);
+//   1  PIN banner: managers/admins with a PIN shorter than 6 digits (or not yet known) are listed (#pin-update-banner),
+//      with the wording "can still sell … but can't approve refunds, voids or discounts";
 //      "Set new PIN" refuses 4 digits on the screen, the server answers PIN_TOO_SHORT in plain words,
 //      a 6-digit PIN is saved and that person leaves the banner
 //   2  promoting a cashier to manager asks for a 6-digit PIN (#sf-pin-block); nothing changes without one
@@ -18,10 +19,13 @@ const H = require('./bo/bo_helpers');
 const { chromium } = require(H.PLAYWRIGHT);
 const {BASE, sql, ok, must, until, typePin, confirm, toastText, clearToasts, go, modalGone, statValue} = H;
 const NAME = 'bo_round3.e2e';
-const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-0000-0000-000000000001';
+const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-0000-0000-000000000001', MAX = '66666666-0000-0000-0000-000000000004';
 const OWNER_STAFF = () => sql(`select id from staff where profile_id='00000000-0000-0000-0000-0000000000a1'`);
 
 (async () => {
+  // a manager who still has an old 4-digit PIN (Manny has 222222 in the seed)
+  sql(`insert into staff(id, business_id, name, role) select '${MAX}', business_id, 'Max Manager', 'MANAGER' from staff where id='${CATHY}'`);
+  sql(`insert into staff_pins(staff_id, pin_hash) values ('${MAX}', extensions.crypt('4545', extensions.gen_salt('bf', 8)))`);
   const browser = await chromium.launch();
   const errors = [];
   // ---- counter
@@ -68,7 +72,7 @@ const OWNER_STAFF = () => sql(`select id from staff where profile_id='00000000-0
     await fo.click('tr[data-id]:has-text("₱65.00")');
     await fo.click('#refund-btn');
     await fo.waitForSelector('#pin-gate', {state: 'visible'});
-    await typePin(fo, '2222');
+    await typePin(fo, '222222');
     await fo.waitForSelector('.rv-qty');
     await fo.fill('.rv-qty', '1'); await fo.fill('#rv-reason', 'cold');
     await fo.click('#rv-confirm');
@@ -95,20 +99,21 @@ const OWNER_STAFF = () => sql(`select id from staff where profile_id='00000000-0
     ok(H.money(await statValue(bo, 'Net sales today')) === 110, 'dashboard "Net sales today" ₱110 (₱175 sales − ₱65 refund)', await statValue(bo, 'Net sales today'));
     ok((await statValue(bo, 'Sales today')) === null, 'the old "Sales today" label is gone');
 
-    // ---- 1. PIN banner on the dashboard: Manny (2222) and the owner (9999)
+    // ---- 1. PIN banner on the dashboard: Max (old 4-digit PIN 4545) and the owner (seed PIN never used, length unknown)
     const b1 = await banner('#pin-update-banner');
-    ok(/2 people need a new 6-digit PIN/.test(b1) && /Manny Manager/.test(b1) && !/Cathy/.test(b1), 'PIN banner: 2 people need a new 6-digit PIN (Manny + owner), not the cashier', b1);
-    ok(await bo.$(`#pin-update-banner [data-newpin="${MANNY}"]`) && await bo.$(`#pin-update-banner [data-newpin="${OWNER_STAFF()}"]`), 'banner has "Set new PIN" for each');
+    ok(/2 people need a new 6-digit PIN/.test(b1) && /Max Manager/.test(b1) && !/Cathy/.test(b1), 'PIN banner: 2 people need a new 6-digit PIN (Max + owner), not the cashier', b1);
+    ok(/can still sell at the counter but can't approve refunds, voids or discounts/.test(b1), 'banner says they can still sell but can\'t approve', b1);
+    ok(await bo.$(`#pin-update-banner [data-newpin="${MAX}"]`) && await bo.$(`#pin-update-banner [data-newpin="${OWNER_STAFF()}"]`), 'banner has "Set new PIN" for each');
     await H.shot(bo, 'bo-r3-pin-banner');
-    await bo.click(`#pin-update-banner [data-newpin="${MANNY}"]`);
+    await bo.click(`#pin-update-banner [data-newpin="${MAX}"]`);
     await bo.waitForSelector('#sp-pin');
     ok(/exactly 6 digits/.test(await bo.textContent('#active-modal-overlay')), 'set-PIN window says managers need exactly 6 digits');
     await bo.fill('#sp-pin', '2468'); await bo.fill('#sp-pin2', '2468'); await bo.click('#sp-save');
     ok(/Managers and admins need a PIN of exactly 6 digits/.test(await toastText(bo, 'error')), '4 digits refused on the screen');
     await clearToasts(bo);
-    ok(sql(`select extensions.crypt('2222', pin_hash) = pin_hash from staff_pins where staff_id='${MANNY}'`) === 't', 'old PIN unchanged');
+    ok(sql(`select extensions.crypt('4545', pin_hash) = pin_hash from staff_pins where staff_id='${MAX}'`) === 't', 'old PIN unchanged');
     // the server's own answer (as an older screen / another tab would get it)
-    const srv = await bo.evaluate(async (id) => { const r = await cloud.rpc('staff_set_pin', {p_staff_id: id, p_pin: '2468'}); return {r, text: friendlyError(r)}; }, MANNY);
+    const srv = await bo.evaluate(async (id) => { const r = await cloud.rpc('staff_set_pin', {p_staff_id: id, p_pin: '2468'}); return {r, text: friendlyError(r)}; }, MAX);
     ok(srv.r && srv.r.error === 'PIN_TOO_SHORT' && srv.text === 'Managers and the owner need a 6-digit PIN.', 'server: PIN_TOO_SHORT -> "Managers and the owner need a 6-digit PIN."', srv);
     // a server refusal reaching the window is shown in plain words (simulated: the screen already blocks short PINs)
     const tooShort = (r) => r.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify({error: 'PIN_TOO_SHORT'})});
@@ -119,11 +124,11 @@ const OWNER_STAFF = () => sql(`select id from staff where profile_id='00000000-0
     await clearToasts(bo);
     await bo.click('#sp-save');
     await modalGone(bo);
-    ok(sql(`select pin_length from staff_pins where staff_id='${MANNY}'`) === '6', 'Manny\'s new 6-digit PIN saved (pin_length 6)');
-    ok(await until(async () => { const t = await banner('#pin-update-banner'); return /One person needs/.test(t) && !/Manny/.test(t); }, 5000), 'banner now lists only the owner', await banner('#pin-update-banner'));
+    ok(sql(`select pin_length from staff_pins where staff_id='${MAX}'`) === '6', 'Max\'s new 6-digit PIN saved (pin_length 6)');
+    ok(await until(async () => { const t = await banner('#pin-update-banner'); return /One person needs/.test(t) && !/Max/.test(t); }, 5000), 'banner now lists only the owner', await banner('#pin-update-banner'));
     await go(bo, 'staff');
-    const staffRow = await bo.textContent(`tr:has([data-pin="${MANNY}"])`);
-    ok(/Set/.test(staffRow) && !/Needs a new 6-digit PIN/.test(staffRow), 'Staff list: Manny\'s PIN shows as set', staffRow);
+    const staffRow = await bo.textContent(`tr:has([data-pin="${MAX}"])`);
+    ok(/Set/.test(staffRow) && !/Needs a new 6-digit PIN/.test(staffRow), 'Staff list: Max\'s PIN shows as set', staffRow);
     ok(/Needs a new 6-digit PIN/.test(await bo.textContent(`tr:has([data-pin="${OWNER_STAFF()}"])`)), 'Staff list: owner still "Needs a new 6-digit PIN"');
 
     // ---- 2. promoting a cashier asks for a 6-digit PIN
@@ -162,9 +167,9 @@ const OWNER_STAFF = () => sql(`select id from staff where profile_id='00000000-0
     await bo.waitForSelector('#pin-lockout-alert');
     const la2 = await banner('#pin-lockout-alert');
     ok(/unlocked since/.test(la2) && !/still locked/.test(la2), 'after a reload: still shown as unlocked', la2);
-    await typePin(fo, '246813');                       // Manny's new PIN on the counter
+    await typePin(fo, '246813');                       // Max's new PIN on the counter
     await fo.waitForSelector('.pos-product-card', {timeout: 15000});
-    ok(true, 'the counter accepts PINs again (Manny signs in with his new 6-digit PIN)');
+    ok(true, 'the counter accepts PINs again (Max signs in with his new 6-digit PIN)');
     ok(!/PIN needs updating/.test((await fo.textContent('#alert-banner')) || ''), 'no "PIN needs updating" note for the new 6-digit PIN');
     await clearToasts(bo);
 

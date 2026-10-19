@@ -32,8 +32,8 @@ begin
     ('66666666-0000-0000-0000-000000000002', v_biz, 'Manny Manager', 'MANAGER');
   insert into public.staff_pins(staff_id, pin_hash) values
     ('66666666-0000-0000-0000-000000000001', extensions.crypt('1111', extensions.gen_salt('bf', 8))),
-    ('66666666-0000-0000-0000-000000000002', extensions.crypt('2222', extensions.gen_salt('bf', 8))),
-    (v_owner_staff, extensions.crypt('9999', extensions.gen_salt('bf', 8)));
+    ('66666666-0000-0000-0000-000000000002', extensions.crypt('222222', extensions.gen_salt('bf', 8))),
+    (v_owner_staff, extensions.crypt('999999', extensions.gen_salt('bf', 8)));
   insert into public.dining_tables(id, business_id, label, kind, qr_token, sort_order) values
     ('77777777-0000-0000-0000-000000000005', v_biz, 'Table 5', 'DINE_IN', 'tabletoken5', 5);
   insert into public.device_pairing_codes(code, business_id, device_name, expires_at) values ('TESTAB', v_biz, 'Front Counter', now() + interval '1 day');

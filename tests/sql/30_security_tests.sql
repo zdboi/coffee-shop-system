@@ -111,9 +111,9 @@ begin
     ('66666666-0000-0000-0000-000000000003', v_biz, 'Mara Manager', 'MANAGER');
   insert into public.staff_pins(staff_id, pin_hash) values
     ('66666666-0000-0000-0000-000000000001', extensions.crypt('1111', extensions.gen_salt('bf', 4))),
-    ('66666666-0000-0000-0000-000000000002', extensions.crypt('2222', extensions.gen_salt('bf', 4))),
-    ('66666666-0000-0000-0000-000000000003', extensions.crypt('3333', extensions.gen_salt('bf', 4))),
-    (v_owner_staff, extensions.crypt('9999', extensions.gen_salt('bf', 4)));
+    ('66666666-0000-0000-0000-000000000002', extensions.crypt('222222', extensions.gen_salt('bf', 4))),
+    ('66666666-0000-0000-0000-000000000003', extensions.crypt('333333', extensions.gen_salt('bf', 4))),
+    (v_owner_staff, extensions.crypt('999999', extensions.gen_salt('bf', 4)));
   insert into public.device_pairing_codes(code, business_id, device_name, expires_at) values
     ('PAIRA1', v_biz, 'Front', now() + interval '1 hour'), ('PAIRA2', v_biz, 'Back bar', now() + interval '1 hour'),
     ('PAIRB1', v_biz2, 'Other', now() + interval '1 hour');
@@ -137,9 +137,9 @@ select test.ok(public.app_rank() = 3, 'owner email login -> rank 3');
 select test.ok(test.err($$select public.fo_sync('device-key-0001-abcdef', '[]'::jsonb)$$) = 'NOT_ALLOWED', 'owner login cannot use fo_sync (counters only)');
 reset role;
 select test.login(:'d1'); set role authenticated;
-select (public.staff_pin_login('9999'))->>'token' as admin_login \gset
+select (public.staff_pin_login('999999'))->>'token' as admin_login \gset
 select (public.staff_pin_login('1111'))->>'token' as cashier_login \gset
-select (public.staff_pin_login('2222'))->>'token' as mgr_login \gset
+select (public.staff_pin_login('222222'))->>'token' as mgr_login \gset
 reset role;
 select test.login(:'d1', :'admin_login'); set role authenticated;
 select test.ok(public.app_rank() = 0, 'counter + owner''s PIN -> rank 0 (no elevation from x-staff-token)');
@@ -173,8 +173,8 @@ select test.login(:'d1'); set role authenticated;
 select test.ok(test.op(:'key1', 'shift_open', jsonb_build_object('id','88888888-0000-0000-0000-000000000001','shift_number','SHIFT-A-2026-0001',
   'cashier_id', :'cashier', 'cashier_name','Cathy','opened_at', now(), 'opening_cash', 1000))->>'status' = 'ok', 'shift opened');
 select test.ok(public.staff_pin_login('1111', 'OVERRIDE')->>'error' = 'ROLE_TOO_LOW', 'OVERRIDE always needs a manager (even without p_min_role)');
-select test.ok(public.staff_pin_login('2222', 'SUPERUSER')->>'error' = 'BAD_PURPOSE', 'unknown PIN purpose rejected');
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov1 \gset
+select test.ok(public.staff_pin_login('222222', 'SUPERUSER')->>'error' = 'BAD_PURPOSE', 'unknown PIN purpose rejected');
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov1 \gset
 -- discount without / with bad approvals
 select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000101', 140, '[]', p_discount => 10, p_appr => :'manager'))->>'message' = 'APPROVAL_REQUIRED', 'discount without token -> APPROVAL_REQUIRED');
 select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000101', 140, '[]', p_discount => 10))->>'message' = 'APPROVAL_REQUIRED', 'discount without approver -> APPROVAL_REQUIRED');
@@ -200,15 +200,15 @@ select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-
 reset role;
 -- token issued on ANOTHER counter (d2)
 select test.login(:'d2'); set role authenticated;
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_d2 \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_d2 \gset
 reset role;
 select test.login(:'d1'); set role authenticated;
 select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000106', 140, '[]', p_discount => 10, p_appr => :'manager', p_tok => :'ov_d2'))->>'message' = 'APPROVAL_INVALID', 'token from another counter -> APPROVAL_INVALID');
 -- late upload: token expired (10 min) but issued < 24 h ago -> accepted; issued > 24 h ago -> refused
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_late \gset
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_old \gset
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_revoked \gset
-select (public.staff_pin_login('3333', 'OVERRIDE', 'MANAGER'))->>'token' as ov_mara \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_late \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_old \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_revoked \gset
+select (public.staff_pin_login('333333', 'OVERRIDE', 'MANAGER'))->>'token' as ov_mara \gset
 reset role;
 update staff_sessions set created_at = now() - interval '20 hours', expires_at = now() + interval '4 hours'
   where token_hash = encode(extensions.digest(:'ov_late', 'sha256'), 'hex');
@@ -234,7 +234,7 @@ select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-
    p_item => 'aaaaaaaa-0000-0000-0000-000000000201', p_pay => 'bbbbbbbb-0000-0000-0000-000000000201'))->>'status' = 'ok', 'sale S2 (165, 18 g + 180 ml)');
 select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000201', '99999999-0000-0000-0000-000000000201', 'PARTIAL_REFUND', 100, :'manager', null))->>'message' = 'APPROVAL_REQUIRED', 'refund without token -> APPROVAL_REQUIRED');
 select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000201', '99999999-0000-0000-0000-000000000201', 'VOID', 165, :'manager', :'ov1'))->>'message' = 'APPROVAL_INVALID', 'void with a used token -> APPROVAL_INVALID');
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov2 \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov2 \gset
 select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000201', '99999999-0000-0000-0000-000000000201', 'PARTIAL_REFUND', 200, :'manager', :'ov2'))->>'message' = 'REFUND_TOO_LARGE', 'refund above the sale total -> REFUND_TOO_LARGE');
 select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000201', '99999999-0000-0000-0000-000000000201', 'PARTIAL_REFUND', -5, :'manager', :'ov2'))->>'message' = 'BAD_AMOUNT', 'negative refund -> BAD_AMOUNT');
 select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000201', '99999999-0000-0000-0000-000000000201', 'PARTIAL_REFUND', 100, :'manager', :'ov2',
@@ -262,7 +262,7 @@ select test.login(:'d1'); set role authenticated;
 select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000203', '99999999-0000-0000-0000-000000000201', 'PARTIAL_REFUND', 0, :'manager', :'mgr_login'))->>'message' = 'SALE_NOT_REFUNDABLE', 'no refunds on a fully refunded sale');
 select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000204', '99999999-0000-0000-0000-000000000104', 'VOID', 140, :'manager', :'mgr_login'))->>'message' = 'SALE_NOT_REFUNDABLE', 'no refunds on a HELD sale');
 -- void: needs approval, returns stock, then a second void is skipped
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov3 \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov3 \gset
 select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000205', '99999999-0000-0000-0000-000000000105', 'VOID', 150, :'manager', :'ov3', '[]', 'REFUNDED'))->>'status' = 'ok', 'void with OVERRIDE token -> ok');
 select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000206', '99999999-0000-0000-0000-000000000105', 'VOID', 150, :'manager', :'ov3'))->>'status' = 'skipped', 'second void of a voided sale -> skipped (token not needed)');
 reset role;
@@ -277,7 +277,7 @@ select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-
 select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000301', 150, jsonb_build_array(test.inv('55555555-0000-0000-0000-000000000001', :'beans', 1))))->>'message' = 'FORBIDDEN_ROW', 'stock line id of a purchase/initial stock -> FORBIDDEN_ROW');
 select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000301', 150, '[]', p_item => 'aaaaaaaa-0000-0000-0000-0000000000b1'))->>'message' = 'FORBIDDEN_ROW', 'item id of another SHOP''s sale -> FORBIDDEN_ROW');
 select test.ok(test.op(:'key1', 'sale', test.sale_data('99999999-0000-0000-0000-000000000301', 150, jsonb_build_array(test.inv(gen_random_uuid(), '22222222-0000-0000-0000-0000000000b2', 1))))->>'message' = 'UNKNOWN_INGREDIENT', 'another shop''s ingredient in a sale -> UNKNOWN_INGREDIENT');
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov4 \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov4 \gset
 select test.ok(test.op(:'key1', 'refund', test.refund_data('dddddddd-0000-0000-0000-000000000301', '99999999-0000-0000-0000-000000000102', 'PARTIAL_REFUND', 1, :'manager', :'ov4',
    jsonb_build_array(test.inv('55555555-0000-0000-0000-000000000002', :'milk', 1))))->>'message' = 'FORBIDDEN_ROW', 'refund stock line id of an existing row -> FORBIDDEN_ROW');
 reset role;
@@ -414,7 +414,7 @@ select test.ok(test.op(:'key1', 'shift_close', jsonb_build_object('id','88888888
   'closed_by', '66666666-0000-0000-0000-000000000004', 'approval_token', :'cashier_login'))->>'message' = 'ROLE_TOO_LOW', 'another CASHIER closing it -> ROLE_TOO_LOW');
 select test.ok(test.op(:'key1', 'shift_close', jsonb_build_object('id','88888888-0000-0000-0000-000000000002','closed_at', now(),'declared_cash',500,
   'closed_by', :'manager', 'approval_token', :'cashier_login'))->>'message' = 'APPROVAL_INVALID', 'manager named with the cashier''s token -> APPROVAL_INVALID');
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_close \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_close \gset
 select test.ok(test.op(:'key1', 'shift_close', jsonb_build_object('id','88888888-0000-0000-0000-000000000002','closed_at', now(),'declared_cash',500,
   'closed_by', :'manager', 'closed_by_name', 'Fake', 'approval_token', :'ov_close'))->>'status' = 'ok', 'manager closes it with an OVERRIDE token -> ok');
 select test.ok(test.op(:'key1', 'shift_close', jsonb_build_object('id','88888888-0000-0000-0000-000000000003','closed_at', now(),'declared_cash',500,

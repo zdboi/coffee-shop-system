@@ -1,5 +1,5 @@
 -- Checks for the security fix round of 2026-10-19 (F1 F2 F4/decision 8 F5 F6 F7 F8 F9 F10 F11 F13 + qr_cancel_order).
--- Adopted into the QA regression (tests/run_all.sh) on 2026-10-19 from the database engineer's round-3 checks (updated for R1-R4 + delete_customer_data).
+-- Adopted into the QA regression (tests/run_all.sh) on 2026-10-19 from the database engineer's round-3 checks (R1-R4, delete_customer_data, PIN_UPDATE_NEEDED).
 -- Needs a FRESH database:  tests/reset_db.sh "" db_sec && psql ... -d db_sec -f this file
 -- Prints "ok  ..." / "FAIL ..." for every check and keeps going.
 \set QUIET on
@@ -127,7 +127,17 @@ reset role;
 select test.chk((select role from staff where id = '66666666-0000-0000-0000-000000000004') = 'MANAGER', 'D8: role really changed');
 select test.login(:'d1'); set role authenticated;
 select test.chk((public.staff_pin_login('3333')->'staff'->>'name') = 'Mara Manager', 'D8: an existing short manager PIN still signs in (no lock-out on day one)');
-select test.chk((public.staff_pin_login('44444', 'OVERRIDE', 'MANAGER')->'staff'->>'name') = 'Carl Cashier', 'D8: ... and still approves');
+select test.chk(public.staff_pin_login('44444', 'OVERRIDE', 'MANAGER') = '{"error":"PIN_UPDATE_NEEDED"}'::jsonb, 'D8: ... but a short manager PIN can''t approve: PIN_UPDATE_NEEDED');
+select test.chk(public.staff_pin_login('3333', 'OVERRIDE', 'MANAGER')->>'error' = 'PIN_UPDATE_NEEDED', 'D8: same for Mara');
+select test.chk((select count(*) from auth_attempts where subject = :'d1' and kind = 'PIN' and not success) = 0, 'D8: PIN_UPDATE_NEEDED is not counted as a wrong PIN');
+select test.chk((public.staff_pin_login('3333')->>'pin_update_needed')::boolean, 'D8: Mara''s sign-in answer says pin_update_needed: true');
+select (public.staff_pin_login('3333'))->>'token' as mara_short_login \gset
+select test.chk(test.res(test.op(:'key1', 'shift_open', jsonb_build_object('id','88888888-0000-0000-0000-0000000000a9','cashier_id','66666666-0000-0000-0000-000000000003','opened_at', now(), 'opening_cash', 0))) = 'ok', 'D8: Mara can still open a shift (sell)');
+select test.chk(test.res(test.op(:'key1', 'sale', test.sale('99999999-0000-0000-0000-0000000000a9', '66666666-0000-0000-0000-000000000003', '{"subtotal":150,"discount_type":"fixed","discount_value":10,"discount_amount":10,"grand_total":140,"shift_id":"88888888-0000-0000-0000-0000000000a9"}'::jsonb
+   || jsonb_build_object('discount_approved_by', '66666666-0000-0000-0000-000000000003')) || jsonb_build_object('discount_approval_token', :'mara_short_login'))) = 'PIN_UPDATE_NEEDED',
+   'D8: Mara''s own sign-in token can''t approve her discount: PIN_UPDATE_NEEDED');
+select test.chk(test.res(test.op(:'key1', 'sale', test.sale('99999999-0000-0000-0000-0000000000a8', '66666666-0000-0000-0000-000000000003', '{"shift_id":"88888888-0000-0000-0000-0000000000a9"}'))) = 'ok', 'D8: ... but she can sell without a discount');
+select test.chk(public.staff_pin_login('222222')->>'pin_update_needed' = 'false' and public.staff_pin_login('1111')->>'pin_update_needed' = 'false', 'D8: 6-digit manager / any cashier: pin_update_needed false');
 select test.chk(public.bo_bootstrap()->'pin_update_needed' = '[]'::jsonb and public.bo_bootstrap()->'pin_lockouts' = '[]'::jsonb, 'D8: a counter gets no pin_update_needed / pin_lockouts');
 reset role;
 select test.chk((select pin_length from staff_pins where staff_id = '66666666-0000-0000-0000-000000000003') = 4, 'D8: the sign-in filled in Mara''s unknown PIN length (4)');

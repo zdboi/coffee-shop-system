@@ -66,7 +66,7 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
     ok(/This needs internet/.test(await page.textContent('#pin-sub')), 'approval pad says it needs internet');
     await typePin(page, '1111');
     ok(await until(async () => /manager/.test(await page.textContent('#pin-error')), 8000), 'cashier PIN refused for a discount', await page.textContent('#pin-error'));
-    await typePin(page, '2222');
+    await typePin(page, '222222');
     await page.waitForSelector('#disc-value');
     ok(rpc.some(c => c.name === 'staff_pin_login' && /"p_purpose":"OVERRIDE"/.test(c.body) && /"p_min_role":"MANAGER"/.test(c.body)), "staff_pin_login(pin,'OVERRIDE','MANAGER') used");
     await page.fill('#disc-value', '20'); await page.click('#disc-apply');
@@ -96,7 +96,7 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
     // ---- 6. full refund of the discounted sale: amount = what was paid (88), accepted by the server
     await page.click('#refund-btn');
     await page.waitForSelector('#pin-gate', {state: 'visible'});
-    await typePin(page, '2222');
+    await typePin(page, '222222');
     await page.waitForSelector('.rv-qty');
     await page.fill('.rv-qty', '1'); await page.fill('#rv-reason', 'changed mind');
     await page.click('#rv-confirm');
@@ -129,7 +129,7 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
     // ---- 8. manager signed in online approves with their own login token (no PIN pad)
     await page.click('#lock-btn');
     await page.waitForSelector('#pin-gate', {state: 'visible'});
-    await typePin(page, '2222');
+    await typePin(page, '222222');
     await page.waitForSelector('.pos-product-card', {timeout: 15000});
     ok((await verifiers()).every(v => v !== MANNY), 'manager sign-in does not save a PIN copy');
     await page.click('.pos-product-card:has-text("Ensaymada")');
@@ -167,7 +167,7 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
     await page.click('.nav-item[data-route="shift"]');
     await page.click('#close-shift-btn');
     await page.waitForSelector('#pin-gate', {state: 'visible'});
-    await typePin(page, '2222');
+    await typePin(page, '222222');
     await page.waitForSelector('#cs-declared');
     const expected = (await page.textContent('.modal .drawer-card .drow.total')).replace(/[^0-9.]/g, '');
     await page.fill('#cs-declared', expected);

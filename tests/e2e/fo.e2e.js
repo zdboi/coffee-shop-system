@@ -5,7 +5,7 @@ async function sql(q){ const r = await fetch(BASE + '/__sql', {method:'POST', bo
 let checks = 0;
 function ok(cond, msg){ checks++; if(!cond) throw new Error('FAILED: ' + msg); console.log('ok  ' + msg); }
 async function until(fn, msg, ms){ const end = Date.now() + (ms||20000); while(Date.now() < end){ try{ if(await fn()) return true; }catch(e){} await new Promise(r=>setTimeout(r, 300)); } throw new Error('TIMEOUT waiting for: ' + msg); }
-async function typePin(page, pin){ for(const d of pin) await page.click(`#pin-pad button[data-k="${d}"]`); await page.click('#pin-enter'); }
+async function typePin(page, pin){ for(const d of pin) await page.click(`#pin-pad button[data-k="${d}"]`); if(pin.length < 6) await page.click('#pin-enter'); }   // 6 digits send themselves
 
 (async () => {
   const browser = await chromium.launch();
@@ -96,7 +96,7 @@ async function typePin(page, pin){ for(const d of pin) await page.click(`#pin-pa
   await typePin(page, '1111');
   await page.waitForFunction(() => /manager/.test(document.getElementById('pin-error').textContent));
   ok(true, 'cashier PIN cannot approve a void');
-  await typePin(page, '2222');
+  await typePin(page, '222222');
   await page.waitForSelector('#rv-reason');
   await page.fill('#rv-reason', 'test void');
   await page.click('#rv-confirm');

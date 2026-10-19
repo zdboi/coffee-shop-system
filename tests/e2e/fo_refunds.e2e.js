@@ -38,7 +38,7 @@ const eq2 = (a, b) => Math.abs(Number(a) - Number(b)) < 0.005;
     await page.click('.nav-item[data-route="sales"]'); await page.click(`tr[data-id="${A.id}"]`);
     ok(await page.isVisible('#void-btn') && await page.isVisible('#refund-btn'), 'a finished sale offers Void and Refund');
     await page.click('#refund-btn');
-    await page.waitForSelector('#pin-gate', {state: 'visible'}); await typePin(page, '2222');
+    await page.waitForSelector('#pin-gate', {state: 'visible'}); await typePin(page, '222222');
     await page.waitForSelector('.rv-qty');
     ok(eq2(money(await page.textContent('#rv-amount')), 0), 'dialog starts at ₱0.00 (nothing chosen)');
     await page.fill('tr[data-item]:has-text("Iced Latte") .rv-qty', '1');
@@ -55,7 +55,7 @@ const eq2 = (a, b) => Math.abs(Number(a) - Number(b)) < 0.005;
     // ---- the rest: second refund is the remainder, FULL_REFUND; a void is no longer offered
     ok(await page.isVisible('#refund-btn') && !(await page.isVisible('#void-btn')), 'a partly refunded sale offers Refund (not Void)');
     await page.click('#refund-btn');
-    await page.waitForSelector('#pin-gate', {state: 'visible'}); await typePin(page, '2222');
+    await page.waitForSelector('#pin-gate', {state: 'visible'}); await typePin(page, '222222');
     await page.waitForSelector('.rv-qty');
     const latteRow = await page.textContent('tr[data-item]:has-text("Iced Latte")');
     ok(/IcedLatte11/.test(latteRow.replace(/\s+/g, '')) && await page.isDisabled('tr[data-item]:has-text("Iced Latte") .rv-qty'), 'latte row shows 1 sold / 1 already refunded and cannot be refunded again', latteRow);
@@ -82,7 +82,7 @@ const eq2 = (a, b) => Math.abs(Number(a) - Number(b)) < 0.005;
     ok(!(await page.isVisible('#pin-gate')), 'no PIN asked');
     ok(await page.isVisible('#refund-btn') && !(await page.isVisible('#void-btn')), 'sale detail re-drawn with the right buttons (Refund only)');
     await page.click('#refund-btn');
-    await page.waitForSelector('#pin-gate', {state: 'visible'}); await typePin(page, '2222');
+    await page.waitForSelector('#pin-gate', {state: 'visible'}); await typePin(page, '222222');
     await page.waitForSelector('.rv-qty');
     ok(/Ensaymada11/.test((await page.textContent('tr[data-item]:has-text("Ensaymada")')).replace(/\s+/g, '')), 'the owner\'s refund shows as "already refunded" for the Ensaymada');
     await page.fill('tr[data-item]:has-text("Iced Latte") .rv-qty', '1'); await page.dispatchEvent('tr[data-item]:has-text("Iced Latte") .rv-qty', 'input');
@@ -92,7 +92,7 @@ const eq2 = (a, b) => Math.abs(Number(a) - Number(b)) < 0.005;
     ok(sql(`select status from sales where id='${Bs.id}'`) === 'REFUNDED' && sql(`select count(*) from sync_operations where result_summary not in ('ok','skipped')`) === '0', 'accepted by the server: sale REFUNDED, no refused uploads');
 
     // ---- full void by a signed-in manager sets performed_by too
-    await page.click('#lock-btn'); await page.waitForSelector('#pin-gate', {state: 'visible'}); await typePin(page, '2222');
+    await page.click('#lock-btn'); await page.waitForSelector('#pin-gate', {state: 'visible'}); await typePin(page, '222222');
     await page.waitForSelector('.pos-product-card');
     await page.click('.pos-product-card:has-text("Americano")'); await page.click('#checkout-btn'); await page.click('[data-quick]'); await page.click('#complete-sale-btn');
     await must(() => sql(`select count(*) from sales where status='COMPLETED'`) === '1', 'sale V on server', 20000);

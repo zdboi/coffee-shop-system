@@ -124,9 +124,9 @@ begin
     ('66666666-0000-0000-0000-000000000004', v_biz, 'Carl Cashier', 'CASHIER');
   insert into public.staff_pins(staff_id, pin_hash) values
     ('66666666-0000-0000-0000-000000000001', extensions.crypt('1111', extensions.gen_salt('bf', 4))),
-    ('66666666-0000-0000-0000-000000000002', extensions.crypt('2222', extensions.gen_salt('bf', 4))),
-    ('66666666-0000-0000-0000-000000000003', extensions.crypt('3333', extensions.gen_salt('bf', 4))),
-    (v_owner_staff, extensions.crypt('9999', extensions.gen_salt('bf', 4)));
+    ('66666666-0000-0000-0000-000000000002', extensions.crypt('222222', extensions.gen_salt('bf', 4))),
+    ('66666666-0000-0000-0000-000000000003', extensions.crypt('333333', extensions.gen_salt('bf', 4))),
+    (v_owner_staff, extensions.crypt('999999', extensions.gen_salt('bf', 4)));
   insert into public.device_pairing_codes(code, business_id, device_name, expires_at) values
     ('PAIRA1', v_biz, 'Front', now() + interval '1 hour'), ('PAIRA2', v_biz, 'Back bar', now() + interval '1 hour'),
     ('PAIRA3', v_biz, 'Spare', now() + interval '1 hour'), ('PAIRA4', v_biz, 'Spare 2', now() + interval '1 hour'),
@@ -142,7 +142,7 @@ select test.login(:'d3'); set role authenticated;
 select test.ok(public.redeem_device_pairing('PAIRB1', :'key3', 'Other')->'device' is not null, 'setup: d3 paired (other shop)'); reset role;
 select test.login(:'d1'); set role authenticated;
 select (public.staff_pin_login('1111'))->>'token' as cashier_login \gset
-select (public.staff_pin_login('2222'))->>'token' as mgr_login \gset
+select (public.staff_pin_login('222222'))->>'token' as mgr_login \gset
 select test.ok(test.res(test.op(:'key1', 'shift_open', jsonb_build_object('id','88888888-0000-0000-0000-000000000001','shift_number','SHIFT-A-2026-0001',
   'cashier_id', :'cashier', 'cashier_name','Cathy','opened_at', now(), 'opening_cash', 1000))) = 'ok', 'setup: shift opened');
 reset role;
@@ -190,7 +190,7 @@ select test.ok((select discount_approved_by_name from sales where id = '99999999
 
 -- ================= 4. pro-rated partial refunds, counter (fo_sync) =================
 select test.login(:'d1'); set role authenticated;
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov1 \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov1 \gset
 select test.ok(test.res(test.op(:'key1', 'refund', test.refund('dddddddd-0000-0000-0000-000000000021', '99999999-0000-0000-0000-000000000002', 'PARTIAL_REFUND', 244.03,
    jsonb_build_array(test.ri('aaaaaaaa-0000-0000-0000-000000000021', 1)), :'manager', :'ov1'))) = 'REFUND_TOO_LARGE',
    '4 counter: latte 200 of a sale with tax+service -> share 200 x 323.30/265 = 244.00; 244.03 refused');
@@ -360,9 +360,9 @@ reset role;
 
 -- ================= 6. expired / ended tokens =================
 select test.login(:'d1'); set role authenticated;
-select (public.staff_pin_login('3333'))->>'token' as mara_login \gset
-select (public.staff_pin_login('2222'))->>'token' as mgr_login2 \gset
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER')) as ov_full \gset
+select (public.staff_pin_login('333333'))->>'token' as mara_login \gset
+select (public.staff_pin_login('222222'))->>'token' as mgr_login2 \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER')) as ov_full \gset
 reset role;
 select test.ok((:'ov_full'::jsonb->>'expires_at')::timestamptz between now() + interval '23 hours 59 minutes' and now() + interval '24 hours 1 minute', '6: OVERRIDE token lives 24 hours (late uploads)');
 select (:'ov_full'::jsonb->>'token') as ov_expired \gset
@@ -389,13 +389,13 @@ select test.ok(test.res(test.op(:'key1', 'refund', test.refund('dddddddd-0000-00
    '6: a cashier''s LOGIN token naming the manager -> APPROVAL_INVALID');
 reset role;
 select test.login(:'d2'); set role authenticated;
-select (public.staff_pin_login('2222'))->>'token' as mgr_login_d2 \gset
+select (public.staff_pin_login('222222'))->>'token' as mgr_login_d2 \gset
 reset role;
 select test.login(:'d1'); set role authenticated;
 select test.ok(test.res(test.op(:'key1', 'refund', test.refund('dddddddd-0000-0000-0000-0000000000c1', '99999999-0000-0000-0000-000000000007', 'VOID', 150, '[]', :'manager', :'mgr_login_d2'))) = 'APPROVAL_INVALID',
    '6: the manager''s LOGIN token from ANOTHER counter -> APPROVAL_INVALID');
 -- shift close by a manager with their own LOGIN token (closing Cathy's shift)
-select (public.staff_pin_login('2222'))->>'token' as mgr_login \gset
+select (public.staff_pin_login('222222'))->>'token' as mgr_login \gset
 select test.ok(test.res(test.op(:'key1', 'shift_open', jsonb_build_object('id','88888888-0000-0000-0000-000000000002','shift_number','SHIFT-A-2026-0002',
   'cashier_id', :'cashier', 'cashier_name','Cathy','opened_at', now(), 'opening_cash', 500))) = 'ok', 'setup: shift 2 (Cathy)');
 select test.ok(test.res(test.op(:'key1', 'shift_open', jsonb_build_object('id','88888888-0000-0000-0000-000000000003','shift_number','SHIFT-A-2026-0003',
@@ -411,7 +411,7 @@ select test.ok((select closed_by_name from shifts where id = '88888888-0000-0000
            and (select used_at is null from staff_sessions where token_hash = encode(extensions.digest(:'mgr_login', 'sha256'), 'hex')), '6: closer from the staff list; LOGIN token still unused');
 -- a PIN change ends the person's sign-ins (and their approvals)
 select test.login(:'d1'); set role authenticated;
-select (public.staff_pin_login('3333'))->>'token' as mara_login2 \gset
+select (public.staff_pin_login('333333'))->>'token' as mara_login2 \gset
 reset role;
 select test.login(:'owner_uid'); set role authenticated;
 select test.ok((public.staff_set_pin(:'mara', '343434')->>'ok')::boolean, 'setup: owner gives Mara a new PIN');
@@ -442,13 +442,13 @@ select test.ok((select pin_hash is null and legacy_sha256 is not null from staff
 select test.ok((select pin_hash like '$2%' and legacy_sha256 is null from staff_pins where staff_id = '66666666-0000-0000-0000-000000000010'), '5: the unique old PIN was upgraded to bcrypt');
 select test.ok((select count(*) from staff_sessions) = :sessions_before + 1, '5: no sign-in made for the ambiguous PIN');
 -- two current (bcrypt) PINs the same (only possible by hand, but must not pick one)
-insert into staff_pins(staff_id, pin_hash) values ('66666666-0000-0000-0000-000000000004', extensions.crypt('2222', extensions.gen_salt('bf', 4))) on conflict (staff_id) do update set pin_hash = excluded.pin_hash;
+insert into staff_pins(staff_id, pin_hash) values ('66666666-0000-0000-0000-000000000004', extensions.crypt('222222', extensions.gen_salt('bf', 4))) on conflict (staff_id) do update set pin_hash = excluded.pin_hash;
 select test.login(:'d1'); set role authenticated;
-select test.ok(public.staff_pin_login('2222')->>'error' = 'PIN_AMBIGUOUS', '5: two bcrypt PINs the same -> PIN_AMBIGUOUS');
+select test.ok(public.staff_pin_login('222222')->>'error' = 'PIN_AMBIGUOUS', '5: two bcrypt PINs the same -> PIN_AMBIGUOUS');
 reset role;
 update staff set active = false where id = '66666666-0000-0000-0000-000000000004';
 select test.login(:'d1'); set role authenticated;
-select test.ok((public.staff_pin_login('2222')->'staff'->>'name') = 'Manny Manager', '5: a switched-off staff member''s PIN does not count');
+select test.ok((public.staff_pin_login('222222')->'staff'->>'name') = 'Manny Manager', '5: a switched-off staff member''s PIN does not count');
 reset role;
 -- the owner's fix: give one of them a new PIN
 select test.login(:'owner_uid'); set role authenticated;
@@ -460,14 +460,14 @@ select test.ok((public.staff_pin_login('1111')->'staff'->>'name') = 'Cathy Cashi
 reset role;
 
 -- ================= round 2 / 4: a sign-in token approves only its OWN staff member's actions =================
-select test.login(:'d1'); set role authenticated; select (public.staff_pin_login('2222'))->>'token' as mgr_login \gset
+select test.login(:'d1'); set role authenticated; select (public.staff_pin_login('222222'))->>'token' as mgr_login \gset
 reset role;
 select test.login(:'d1'); set role authenticated;
 select test.ok(test.res(test.op(:'key1', 'sale', test.sale('99999999-0000-0000-0000-0000000000d1',
    jsonb_build_object('subtotal', 150, 'discount_type', 'fixed', 'discount_value', 10, 'discount_amount', 10, 'grand_total', 140, 'discount_approved_by', :'manager'),
    jsonb_build_array(test.it(gen_random_uuid(), :'latte', 150, 1)), '[]', jsonb_build_object('discount_approval_token', :'mgr_login')))) = 'APPROVAL_INVALID',
    'own: the manager''s sign-in token can''t approve a discount on CATHY''s sale');
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_own1 \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_own1 \gset
 select test.ok(test.res(test.op(:'key1', 'sale', test.sale('99999999-0000-0000-0000-0000000000d1',
    jsonb_build_object('subtotal', 150, 'discount_type', 'fixed', 'discount_value', 10, 'discount_amount', 10, 'grand_total', 140, 'discount_approved_by', :'manager'),
    jsonb_build_array(test.it('aaaaaaaa-0000-0000-0000-0000000000d1', :'latte', 150, 1)),
@@ -479,7 +479,7 @@ select test.ok(test.res(test.op(:'key1', 'refund', test.refund('dddddddd-0000-00
    p_performer => :'cashier'))) = 'APPROVAL_INVALID', 'own: sign-in token refund done by Cathy -> APPROVAL_INVALID');
 select test.ok(test.res(test.op(:'key1', 'refund', test.refund('dddddddd-0000-0000-0000-0000000000d1', '99999999-0000-0000-0000-0000000000d1', 'VOID', 140, '[]', :'manager', :'ov_own1',
    p_performer => :'cashier'))) = 'APPROVAL_INVALID', 'own: (the OVERRIDE token used for the discount is spent)');
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_own2 \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_own2 \gset
 select test.ok(test.res(test.op(:'key1', 'refund', test.refund('dddddddd-0000-0000-0000-0000000000d1', '99999999-0000-0000-0000-0000000000d1', 'VOID', 140, '[]', :'manager', :'ov_own2',
    p_performer => '66666666-0000-0000-0000-00000000dead'))) = 'UNKNOWN_STAFF', 'own: a performer who is not our staff -> UNKNOWN_STAFF');
 select test.ok(test.res(test.op(:'key1', 'refund', jsonb_set(test.refund('dddddddd-0000-0000-0000-0000000000d1', '99999999-0000-0000-0000-0000000000d1', 'VOID', 140, '[]', :'manager', :'ov_own2',
@@ -510,14 +510,14 @@ select test.ok((select grand_total from sales where id = '99999999-0000-0000-000
 
 -- ================= round 2 / 2: refunds imported from the old app =================
 select test.login(:'d1'); set role authenticated;
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_imp \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_imp \gset
 select test.ok(test.res(test.op(:'key1', 'sale', test.sale('99999999-0000-0000-0000-0000000000e1',
    jsonb_build_object('subtotal', 370, 'discount_type', 'percent', 'discount_value', 20, 'discount_amount', 74, 'tax_amount', 35.52,
                       'service_charge_amount', 29.60, 'grand_total', 361.12, 'discount_approved_by', :'manager'),
    jsonb_build_array(test.it('aaaaaaaa-0000-0000-0000-0000000000e1', :'latte', 150, 1), test.it('aaaaaaaa-0000-0000-0000-0000000000e2', :'amer', 110, 2)),
    jsonb_build_array(test.inv(gen_random_uuid(), :'beans', 54), test.inv(gen_random_uuid(), :'milk', 180)),
    jsonb_build_object('discount_approval_token', :'ov_imp')))) = 'ok', 'setup: discounted sale PE (G 361.12)');
-select (public.staff_pin_login('2222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_imp2 \gset
+select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER'))->>'token' as ov_imp2 \gset
 select test.ok(test.res(test.op(:'key1', 'refund', jsonb_set(test.refund('dddddddd-0000-0000-0000-0000000000e0', '99999999-0000-0000-0000-0000000000e1', 'PARTIAL_REFUND', 110,
    jsonb_build_array(test.ri('aaaaaaaa-0000-0000-0000-0000000000e2', 1)), :'manager', :'ov_imp2', p_performer => :'cashier'),
    '{refund,imported_at}', '"2026-01-01T00:00:00Z"'))) = 'REFUND_TOO_LARGE',

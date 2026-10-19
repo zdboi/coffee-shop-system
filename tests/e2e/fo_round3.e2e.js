@@ -1,6 +1,7 @@
 // Counter checks for the security fix round of 2026-10-19 (counter 1280 px):
 //   1  a manager with an old 4-digit PIN signs in online -> "Your PIN needs updating" note (decision 8);
-//      a manager with a 6-digit PIN does not get it
+//      they can sell, but approving a discount shows the PIN_UPDATE_NEEDED message and nothing is
+//      queued with that approval; a manager with a 6-digit PIN gets no note
 //   2  consent box: "Save customer" without the tick is blocked (no fo_add_customer call);
 //      with the tick the call carries p_consent:true and the customer is saved with consent_at
 //   3  the QR sign-up limit (40 an hour) does not block adding a customer at the counter
@@ -19,9 +20,9 @@ const NAME = 'fo_round3.e2e';
 const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-0000-0000-000000000001', MAX = '66666666-0000-0000-0000-000000000004';
 
 (async () => {
-  // a second manager (Max) who already has a 6-digit PIN
+  // a second manager (Max) who still has an old 4-digit PIN (Manny has 222222 in the seed)
   sql(`insert into staff(id, business_id, name, role) select '${MAX}', business_id, 'Max Manager', 'MANAGER' from staff where id='${CATHY}'`);
-  sql(`insert into staff_pins(staff_id, pin_hash, pin_length) values ('${MAX}', extensions.crypt('454545', extensions.gen_salt('bf', 8)), 6)`);
+  sql(`insert into staff_pins(staff_id, pin_hash) values ('${MAX}', extensions.crypt('4545', extensions.gen_salt('bf', 8)))`);
 
   const browser = await chromium.launch();
   const ctx = await browser.newContext({viewport: {width: 1280, height: 860}, timezoneId: 'Asia/Manila'});
@@ -50,20 +51,55 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
   };
 
   try{
-    // ---- 1. old 4-digit manager PIN -> note; 6-digit manager -> no note
+    // ---- 1. old 4-digit manager PIN -> note, can sell, can't approve; 6-digit manager -> no note
     await H.pairCounter(page, 'TESTAB');
-    await typePin(page, '2222');
+    await typePin(page, '4545');
     await H.startShift(page, 1000);
     ok(await until(async () => /Your PIN needs updating\..*6-digit PIN/.test(await page.textContent('#alert-banner')), 5000), '4-digit manager sees "Your PIN needs updating. Ask the owner to give you a new 6-digit PIN."', await page.textContent('#alert-banner'));
     ok(await page.isVisible('#alert-banner'), 'the PIN note is visible');
     await H.shot(page, 'fo-r3-pin-note');
     await page.click('#alert-ok');
     ok(await until(async () => !(await page.isVisible('#alert-banner')), 3000), '"Got it" closes the note');
+    // ... can sell
+    await page.click('.pos-product-card:has-text("Ensaymada")');
+    await page.click('#checkout-btn'); await page.click('[data-quick]'); await page.click('#complete-sale-btn');
+    ok(await until(() => sql(`select count(*) from sales where status='COMPLETED' and cashier_id='${MAX}' and grand_total=65`) === '1', 15000), '4-digit manager can sell: sale uploaded and accepted');
+    // ... but can't approve a discount
+    await clearToasts();
+    await page.click('.pos-product-card:has-text("Americano")');
+    await page.click('#add-discount-link');
+    const tooShort = /too short to approve/;
+    const shownAt = async () => {
+      if(tooShort.test(await toasts())) return 'toast';
+      if(await page.isVisible('#pin-gate') && tooShort.test(await page.textContent('#pin-error'))) return 'pin pad';
+      if(await page.isVisible('#disc-value')) return 'discount dialog';
+      if(await page.isVisible('#pin-gate')) return 'pin pad open';
+      return '';
+    };
+    await until(async () => !!(await shownAt()), 5000);
+    let where = await shownAt();
+    if(where === 'pin pad open'){ await typePin(page, '4545'); await until(async () => (await shownAt()) === 'pin pad', 8000); where = await shownAt(); }
+    ok(where === 'toast' || where === 'pin pad', 'approving a discount -> "This manager PIN is too short to approve. Ask the owner to set a new 6-digit PIN…" (PIN_UPDATE_NEEDED)', where + ' | ' + (await toasts()));
+    if(where === 'discount dialog'){
+      // the counter let the short-PIN manager approve with their own sign-in: see what the server does with it
+      await page.fill('#disc-value', '10'); await page.click('#disc-apply');
+      await page.click('#checkout-btn'); await page.click('[data-quick]'); await page.click('#complete-sale-btn');
+      await until(async () => (await page.evaluate(async () => (await LocalDB.failedAll()).length)) > 0, 15000);
+      const f = await page.evaluate(async () => (await LocalDB.failedAll()).map(x => x.type + ':' + x.error));
+      ok(false, 'discount approved by a short-PIN manager was not stopped at the counter (server refused the upload later)', f);
+      await page.evaluate(async () => { for(const x of await LocalDB.failedAll()) await LocalDB.failedRemove(x.seq); await Sync.refreshCounts(); });
+      net.allow(/./);   // the refused upload's toast/console lines are part of this failure
+    } else {
+      if(await page.isVisible('#pin-gate')) await page.click('#pin-cancel');
+      if(await page.$('#clear-cart')){ await page.click('#clear-cart'); await page.click('[data-ok]').catch(() => {}); }
+    }
+    ok(sql(`select count(*) from sales where discount_approved_by='${MAX}'`) === '0', 'no sale on the server with Max\'s approval');
+    await clearToasts();
     await page.click('#lock-btn'); await page.waitForSelector('#pin-gate', {state: 'visible'});
-    for(const d of '454545') await page.click(`#pin-pad button[data-k="${d}"]`);     // 6 digits sign in by themselves
+    await typePin(page, '222222');                     // Manny, 6 digits (sent by the pad itself)
     await page.waitForSelector('.pos-product-card', {timeout: 15000});
     await page.waitForTimeout(600);
-    ok(!/PIN needs updating/.test((await page.textContent('#alert-banner')) || ''), 'manager with a 6-digit PIN: no PIN note', await page.textContent('#alert-banner'));
+    ok(!/PIN needs updating/.test((await page.textContent('#alert-banner')) || ''), 'manager with a 6-digit PIN (Manny): no PIN note', await page.textContent('#alert-banner'));
 
     // ---- 2. consent box
     await page.click('#cust-add');
@@ -97,7 +133,7 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
 
     // ---- 4. manager-approved sale waiting + refusing server -> warning; "Upload first"
     await page.click('#lock-btn'); await page.waitForSelector('#pin-gate', {state: 'visible'});
-    await typePin(page, '2222');                                    // Manny again (Max's sign-in ended)
+    await typePin(page, '222222');                                  // Manny again
     await page.waitForSelector('.pos-product-card', {timeout: 15000});
     await startRefusing();
     await discountedSale(10);
@@ -124,7 +160,7 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
 
     // ---- 5. same situation, "Sign in anyway"
     await page.click('#lock-btn'); await page.waitForSelector('#pin-gate', {state: 'visible'});
-    await typePin(page, '2222');
+    await typePin(page, '222222');
     await page.waitForSelector('.pos-product-card', {timeout: 15000});
     const mannyLogin = sql(`select id from staff_sessions where staff_id='${MANNY}' and purpose='LOGIN' order by created_at desc limit 1`);
     await startRefusing();

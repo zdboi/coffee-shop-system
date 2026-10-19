@@ -155,7 +155,7 @@ async function manilaClock(){
     await fo.click('.pos-product-card:has-text("Ensaymada")');
     await fo.click('#add-discount-link');
     await fo.waitForSelector('#pin-gate', {state: 'visible'});
-    await typePin(fo, '2222');
+    await typePin(fo, '222222');
     await fo.waitForSelector('#disc-value');
     await fo.selectOption('#disc-type', 'percent'); await fo.fill('#disc-value', '20'); await fo.click('#disc-apply');
     ok(eq2(await cartTotal(), X.C.total), `C: cart 285 - 20% = 228, + 12% tax + 10% service = ${peso(X.C.total)}`, await cartTotal());
@@ -174,7 +174,7 @@ async function manilaClock(){
     await fo.click('.nav-item[data-route="sales"]');
     await fo.click(`tr[data-id="${V.id}"]`);
     await fo.click('#void-btn');
-    await fo.waitForSelector('#pin-gate', {state: 'visible'}); await typePin(fo, '2222');
+    await fo.waitForSelector('#pin-gate', {state: 'visible'}); await typePin(fo, '222222');
     await fo.waitForSelector('#rv-reason'); await fo.fill('#rv-reason', 'Rang up by mistake'); await fo.click('#rv-confirm');
     ok(await until(() => sql(`select status from sales where id='${V.id}'`) === 'VOIDED', 20000), 'V: voided at the counter with the manager PIN');
     ok(eq2(sql(`select amount from refunds where sale_id='${V.id}' and type='VOID'`), X.V.total), 'V: void recorded for ₱134.20');
@@ -183,7 +183,7 @@ async function manilaClock(){
     await fo.click('.nav-item[data-route="sales"]');
     await fo.click(`tr[data-id="${A.id}"]`);
     await fo.click('#refund-btn');
-    await fo.waitForSelector('#pin-gate', {state: 'visible'}); await typePin(fo, '2222');
+    await fo.waitForSelector('#pin-gate', {state: 'visible'}); await typePin(fo, '222222');
     await fo.waitForSelector('.rv-qty');
     await fo.fill('tr[data-item]:has-text("Iced Latte") .rv-qty', '1');
     await fo.fill('#rv-reason', 'Wrong milk'); await fo.click('#rv-confirm');
