@@ -1385,6 +1385,10 @@ begin
   if not found then return jsonb_build_object('error', 'UNKNOWN_DEVICE'); end if;
   delete from public.auth_attempts where subject = v_dev.auth_user_id and kind = 'PIN' and not success;
   get diagnostics v_n = row_count;
+  -- the owner's lock alert (pin_lock_events) now shows the lock as ended
+  update public.pin_lock_events set locked_until = now()
+    where business_id = v_dev.business_id and locked_until > now()
+      and (device_id = v_dev.id or device_user_id = v_dev.auth_user_id);
   return jsonb_build_object('ok', true, 'cleared', v_n);
 end $$;
 

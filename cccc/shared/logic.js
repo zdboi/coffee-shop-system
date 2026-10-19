@@ -136,6 +136,7 @@ const DEFAULT_SETTINGS = {
   qr_ordering_enabled: true, qr_welcome_message: 'Order from your phone, pay at the counter.',
   qr_payment_note: 'Please pay at the counter when your order is called.', qr_hide_out_of_stock: false,
   loyalty_enabled: false, stamps_per_reward: 10, timezone: 'Asia/Manila', order_page_url: '',
+  payout_review_limit: 1000,
 };
 // Settings that belong to THIS device only (backups, Google Drive link)
 const DEVICE_DEFAULTS = {
@@ -159,7 +160,7 @@ function saveDeviceSettings(){
 function setSettingsFromServer(row){
   const s = Object.assign({}, DEFAULT_SETTINGS);
   if(row) SERVER_SETTING_KEYS.forEach(k => { if(row[k] !== undefined && row[k] !== null) s[k] = row[k]; });
-  ['tax_pct','service_charge_pct','low_stock_default_threshold','food_cost_warning_pct','backup_retain_count','stamps_per_reward']
+  ['tax_pct','service_charge_pct','low_stock_default_threshold','food_cost_warning_pct','backup_retain_count','stamps_per_reward','payout_review_limit']
     .forEach(k => { s[k] = Number(s[k])||0; });
   state.settings = Object.assign(s, loadDeviceSettings());
   return state.settings;
