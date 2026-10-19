@@ -127,7 +127,9 @@ async function statValue(p, label){ return p.$$eval('.stat-card', (cards, label)
   await page.click('#sm-reviewed'); await modalGone(page);
   ok(sql(`select needs_review::text || '/' || review_reason from sales where id='${s1.id}'`) === 'false/PRICE_BELOW_MENU', 'marked reviewed (reason kept as history)');
   await page.uncheck('#tx-review');
-  // reprint
+  // reprint (wait until the list has reloaded after the untick, so the click lands on the new row)
+  await page.waitForFunction(() => { const w = document.getElementById('tx-wrap'); return w && !w.classList.contains('dim'); });
+  await page.waitForTimeout(500);
   await page.waitForSelector(`[data-reprint="${s1.id}"]`);
   const [rp] = await Promise.all([ctx.waitForEvent('page'), page.click(`[data-reprint="${s1.id}"]`)]);
   await rp.waitForLoadState();

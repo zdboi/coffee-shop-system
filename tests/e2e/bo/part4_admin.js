@@ -41,8 +41,12 @@ const BASE = H.BASE, SHOTS = require('path').join(H.SHOTS, 'bo-' + H.sizeTag() +
   await until(() => sql(`select count(*) from ingredients where id='${tmp}'`) === '0', 'ingredient deleted'); await modalGone(page);
   ok(true, 'unused ingredient deleted');
   const cups = sql(`select id from ingredients where name='Cups 16oz'`);
-  await page.waitForSelector(`[data-edit="${cups}"]`);
-  await page.click(`[data-edit="${cups}"]`); await page.click('#btn-delete-ing'); await confirm(page);
+  // the list redraws after the delete above: a click on the old row can be lost, so click until the window opens
+  for(let i = 0; i < 5 && !(await page.isVisible('#btn-delete-ing')); i++){
+    await page.waitForSelector(`[data-edit="${cups}"]`); await page.click(`[data-edit="${cups}"]`).catch(() => {});
+    await page.waitForSelector('#btn-delete-ing', {timeout: 3000}).catch(() => {});
+  }
+  await page.click('#btn-delete-ing'); await confirm(page);
   await until(() => sql(`select active from ingredients where id='${cups}'`) === 'f', 'inactive');
   ok(sql(`select count(*) from purchases where ingredient_id='${cups}'`) === '1', 'ingredient with purchases made INACTIVE instead (history kept)');
   await page.check('#ing-inactive'); await page.click(`[data-edit="${cups}"]`); await page.click('#btn-reactivate-ing');
