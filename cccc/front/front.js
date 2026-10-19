@@ -257,6 +257,7 @@ function initPinGate(){
   pad.addEventListener('click', (e)=>{
     const btn = e.target.closest('button'); if(!btn || pinBusy) return;
     const k = btn.dataset.k;
+    hidePinChoice();                    // changing the PIN cancels the "upload first?" question
     if(k==='clear') pinBuffer='';
     else if(k==='back') pinBuffer = pinBuffer.slice(0,-1);
     else if(pinBuffer.length<6) pinBuffer += k;
@@ -266,8 +267,8 @@ function initPinGate(){
   document.getElementById('pin-enter').onclick = ()=>{ if(!pinBusy) submitPin(); };
   document.addEventListener('keydown', (e)=>{
     if(document.getElementById('pin-gate').style.display==='none' || pinBusy) return;
-    if(/^\d$/.test(e.key) && pinBuffer.length<6){ pinBuffer += e.key; renderPinDisplay(); }
-    else if(e.key==='Backspace'){ pinBuffer = pinBuffer.slice(0,-1); renderPinDisplay(); }
+    if(/^\d$/.test(e.key) && pinBuffer.length<6){ hidePinChoice(); pinBuffer += e.key; renderPinDisplay(); }
+    else if(e.key==='Backspace'){ hidePinChoice(); pinBuffer = pinBuffer.slice(0,-1); renderPinDisplay(); }
     else if(e.key==='Enter') submitPin();
   });
 }
@@ -278,8 +279,8 @@ function showPinError(msg){ document.getElementById('pin-error').textContent = m
 
 function showPinGate(mode){
   pinMode = mode || 'login';
-  pinBuffer = ''; renderPinDisplay(); showPinError('');
-  const logo = state.settings.logo_url ? `<img src="${escapeHtml(state.settings.logo_url)}" alt="" style="width:46px;height:46px;object-fit:contain;">` : '☕';
+  pinBuffer = ''; renderPinDisplay(); showPinError(''); hidePinChoice();
+  const logo =state.settings.logo_url ? `<img src="${escapeHtml(state.settings.logo_url)}" alt="" style="width:46px;height:46px;object-fit:contain;">` : '☕';
   document.getElementById('pin-logo').innerHTML = logo;
   const foot = document.getElementById('pin-foot');
   if(pinMode === 'login'){
@@ -318,12 +319,14 @@ function pinErrorText(r, minRole){
   return friendlyError(r);         // the whole server answer, e.g. {error:'TOO_MANY_ATTEMPTS', locked_until}
 }
 
-async function submitPin(){
+async function submitPin(opts){
+  opts = opts || {};
   if(pinBusy) return;
   if(pinBuffer.length < 4){ showPinError('PIN must be at least 4 digits'); return; }
   const pin = pinBuffer;
   const mode = pinMode;
   const minRole = pinOverrideMinRole;
+  hidePinChoice();
   pinBusy = true; showPinError('Checking…');
   try{
     if(mode==='override'){
@@ -334,12 +337,63 @@ async function submitPin(){
       finishOverride(r.approver);
       return;
     }
+    // F2: an online sign-in ends earlier sign-ins on this counter, so upload first.
+    if(isOnline() && !opts.skipUploadCheck){
+      if(Sync.pending) showPinError('Checking… uploading waiting items first');
+      await uploadBeforeSignIn();
+      if(pinMode!=='login' || pinBuffer!==pin) return;
+      const n = await queuedLoginApprovals();
+      if(n){ showPinError(''); showPinChoice(n); return; }
+      showPinError('Checking…');
+    }
     const r = await verifyPin(pin);
     if(r.error){ pinBuffer=''; renderPinDisplay(); showPinError(pinErrorText(r)); return; }
-    await signIn(r.staff, r.token, r.expires_at, !!r.offline);
+    if(r.token && !r.offline) await markEarlierLoginsEnded(r.token);
+    await signIn(r.staff, r.token, r.expires_at, !!r.offline,
+      opts.signedInAnyway ? ` — signed in before ${opts.signedInAnyway} approved action(s) uploaded` : '');
+    if(r.needs_new_pin){
+      addAlert({id: 'pin6:' + r.staff.id, kind: 'note', title: 'Your PIN needs updating.', text: 'Ask the owner to give you a new 6-digit PIN.'});
+    }
   }finally{
     pinBusy = false;
   }
+}
+
+// "Some approved actions haven't uploaded yet" — shown on the PIN card before an online sign-in.
+function hidePinChoice(){
+  const box = document.getElementById('pin-choice');
+  if(box){ box.style.display = 'none'; box.innerHTML = ''; }
+}
+function showPinChoice(n, stillWaiting){
+  const box = document.getElementById('pin-choice');
+  if(!box) return;
+  const what = n === 1 ? '1 approved action' : n + ' approved actions';
+  box.innerHTML = `<div class="pin-note">${stillWaiting
+      ? (isOnline() ? `${what} still couldn't upload. Check the internet and try again.` : `No internet, so ${what} couldn't upload.`) + ' '
+      : ''}Some approved actions haven't uploaded yet. Signing in now will cancel those approvals.</div>
+    <div class="pin-choice">
+      <button class="btn btn-primary" id="pin-upload-first">Upload first</button>
+      <button class="btn btn-outline" id="pin-sign-anyway">Sign in anyway</button>
+    </div>`;
+  box.style.display = 'block';
+  document.getElementById('pin-upload-first').onclick = async (ev)=>{
+    if(pinBusy) return;
+    const pin = pinBuffer;
+    pinBusy = true;
+    ev.currentTarget.disabled = true; ev.currentTarget.textContent = 'Uploading…';
+    document.getElementById('pin-sign-anyway').disabled = true;
+    let left = n;
+    try{ await uploadBeforeSignIn(20000); left = await queuedLoginApprovals(); }
+    finally{ pinBusy = false; }
+    if(pinMode!=='login' || pinBuffer!==pin) return;
+    if(left){ showPinChoice(left, true); return; }
+    toast('Uploaded. Signing in…');
+    submitPin({skipUploadCheck: true});
+  };
+  document.getElementById('pin-sign-anyway').onclick = ()=>{
+    if(pinBusy) return;
+    submitPin({skipUploadCheck: true, signedInAnyway: n});
+  };
 }
 
 // Sign-in. Online: the server checks the PIN. Offline: CASHIERS only, against the
@@ -350,7 +404,11 @@ async function verifyPin(pin){
       const r = await cloud.rpc('staff_pin_login', {p_pin: pin, p_purpose: 'LOGIN', p_min_role: null}, {timeout: 8000});
       if(r && r.error) return {error: r.error, locked_until: r.locked_until};
       cachePinVerifier(pin, r.staff);
-      return {staff: r.staff, token: r.token, expires_at: r.expires_at};
+      // Decision 8: managers/admins need a 6-digit PIN. The server may say so in its answer;
+      // the counter also knows how many digits were typed.
+      const needsNewPin = ROLE_RANK[r.staff.role] >= ROLE_RANK.MANAGER &&
+        !!(r.pin_update_needed || r.pin_needs_update || r.pin_update_required || r.needs_new_pin || r.pin_too_short || pin.length < 6);
+      return {staff: r.staff, token: r.token, expires_at: r.expires_at, needs_new_pin: needsNewPin};
     }catch(e){
       if(!e.offline) return {error: 'ERROR', text: friendlyError(e)};
     }
@@ -478,13 +536,13 @@ async function offlineVerifyPin(pin){
   return found;
 }
 
-async function signIn(staff, token, expiresAt, offline){
+async function signIn(staff, token, expiresAt, offline, auditNote){
   posState.currentUser = {id: staff.id, name: staff.name, role: staff.role, offline: !!offline};
   posState.loginExpiresAt = token ? (expiresAt || null) : null;
   cloud.setStaffToken(token || null);
   try{ sessionStorage.setItem(STAFF_SESSION_STORAGE, JSON.stringify({staff, token: token||null, expires_at: expiresAt||null})); }catch(e){}
   if(token && ROLE_RANK[staff.role] >= ROLE_RANK.MANAGER) rememberLoginToken(token, expiresAt, staff.name);
-  queueAudit('User login', `Role: ${staff.role}${offline?' (offline)':''}`);
+  queueAudit('User login', `Role: ${staff.role}${offline?' (offline)':''}${auditNote||''}`);
   document.getElementById('pin-gate').style.display='none';
   show('app', true);
   renderShell();
@@ -511,13 +569,14 @@ function resumeStaffSession(){
 // server happens in the background (see endStaffLogin).
 function lockSession(){
   const token = cloud.getStaffToken();
+  const tokenEnds = posState.loginExpiresAt;
   cloud.setStaffToken(null);
   try{ sessionStorage.removeItem(STAFF_SESSION_STORAGE); }catch(e){}
   posState.currentUser = null; posState.loginExpiresAt = null;
   posState.cart = []; posState.discount = null; posState.customer = null; posState.qrOrder = null; posState.resumingHeldSaleId = null;
   show('app', false);
   showPinGate('login');
-  if(token) endStaffLogin(token).catch(e=>console.warn('could not end the staff login', e));
+  if(token) endStaffLogin(token, tokenEnds).catch(e=>console.warn('could not end the staff login', e));
 }
 
 /* ---- Ending a staff login on the server (staff_logout) ----
@@ -526,35 +585,100 @@ function lockSession(){
    what's waiting first, then end the login only if nothing still waiting needs it.
    Logins that can't be ended yet (offline, or still needed) are remembered on this
    counter and ended after a later upload. */
+// Each entry keeps only what ending it needs: the token (staff_logout takes it) and when it runs
+// out anyway (after that there is nothing to end, so the entry is dropped).
 const PENDING_LOGOUTS_KEY = 'fo.pendingLogouts';
 let pendingLogoutsLoad = null;
 let logoutRun = null;
 function pendingLogouts(){
-  if(!pendingLogoutsLoad) pendingLogoutsLoad = LocalDB.get(PENDING_LOGOUTS_KEY).then(l=>Array.isArray(l)?l:[]).catch(()=>[]);
+  if(!pendingLogoutsLoad) pendingLogoutsLoad = LocalDB.get(PENDING_LOGOUTS_KEY)
+    .then(l=>(Array.isArray(l)?l:[]).map(e=>typeof e === 'string' ? {token: e, exp: null} : e).filter(e=>e && e.token))
+    .catch(()=>[]);
   return pendingLogoutsLoad;     // one shared list, changed in memory and saved after each change
 }
 function savePendingLogouts(list){ return LocalDB.set(PENDING_LOGOUTS_KEY, list.slice()).catch(()=>{}); }
-async function endStaffLogin(token){
+function dropExpiredLogouts(list){
+  const now = Date.now();
+  for(let i = list.length - 1; i >= 0; i--){
+    const end = list[i].exp ? new Date(list[i].exp).getTime() : NaN;
+    if(isFinite(end) && end < now) list.splice(i, 1);
+  }
+}
+async function endStaffLogin(token, expiresAt){
   const list = await pendingLogouts();
-  if(!list.includes(token)){ list.push(token); await savePendingLogouts(list); }
+  if(!list.some(e=>e.token===token)){ list.push({token, exp: expiresAt || null}); await savePendingLogouts(list); }
   await Sync.run();                  // upload first
   await finishPendingLogouts();
+}
+// A new online sign-in ends every earlier sign-in on this counter on the server (F2),
+// so the counter has nothing left to end: forget those tokens.
+async function forgetPendingLogouts(){
+  while(logoutRun) await logoutRun;
+  const list = await pendingLogouts();
+  if(!list.length) return;
+  list.length = 0;
+  await savePendingLogouts(list);
 }
 async function finishPendingLogouts(){
   while(logoutRun) await logoutRun;
   logoutRun = (async ()=>{
     const list = await pendingLogouts();
+    const before = list.length;
+    dropExpiredLogouts(list);
+    if(list.length !== before) await savePendingLogouts(list);
     if(!list.length || !isOnline()) return;
     const waiting = JSON.stringify((await LocalDB.outboxAll()).map(o=>o.data));
-    for(const t of list.slice()){
-      if(waiting.includes(t)) continue;                       // a queued approval still needs this login
-      try{ await cloud.rpc('staff_logout', {p_token: t}, {timeout: 8000}); }
-      catch(e){ if(e.offline) break; }                         // offline: try again after the next upload
-      const i = list.indexOf(t); if(i>=0) list.splice(i, 1);
+    for(const e of list.slice()){
+      if(waiting.includes(e.token)) continue;                 // a queued approval still needs this login
+      try{ await cloud.rpc('staff_logout', {p_token: e.token}, {timeout: 8000}); }
+      catch(err){ if(err.offline) break; }                     // offline: try again after the next upload
+      const i = list.indexOf(e); if(i>=0) list.splice(i, 1);
       await savePendingLogouts(list);
     }
   })().catch(()=>{}).finally(()=>{ logoutRun = null; });
   return logoutRun;
+}
+
+/* ---- Before an online sign-in (F2) ----
+   The server ends every earlier sign-in on this counter when someone signs in online. A manager's
+   offline approval (refund / void / discount / shift close) travels with that manager's sign-in
+   token, so it must upload BEFORE the next online sign-in, or the server refuses it.
+   So: upload what's waiting first (briefly), then warn if such approvals are still waiting. */
+const PRE_SIGNIN_UPLOAD_MS = 6000;
+async function uploadBeforeSignIn(ms){
+  try{ await Promise.race([Sync.run(), new Promise(r=>setTimeout(r, ms || PRE_SIGNIN_UPLOAD_MS))]); }catch(e){}
+}
+// How many waiting uploads are approved with an earlier manager's sign-in token (not a one-time
+// approval PIN). Only fingerprints of manager sign-in tokens are listed (see rememberLoginToken).
+async function queuedLoginApprovals(){
+  try{
+    const map = (await LocalDB.get(LOGIN_TOKENS_KEY)) || {};
+    if(!Object.keys(map).length) return 0;
+    let n = 0;
+    for(const o of await LocalDB.outboxAll()){
+      const d = o.data || {};
+      const ts = [d.approval_token, d.discount_approval_token].filter(Boolean);
+      for(const t of ts){ if(map[await tokenKey(t)]){ n += 1; break; } }
+    }
+    return n;
+  }catch(e){ return 0; }
+}
+// After a successful online sign-in: earlier manager sign-ins are now ended on the server.
+async function markEarlierLoginsEnded(currentToken){
+  try{
+    const map = (await LocalDB.get(LOGIN_TOKENS_KEY)) || {};
+    const keep = currentToken ? await tokenKey(currentToken) : null;
+    const nowIso = new Date().toISOString();
+    let changed = false;
+    for(const k of Object.keys(map)){
+      if(k === keep || !map[k]) continue;
+      const e = map[k].exp ? new Date(map[k].exp).getTime() : Infinity;
+      if(e > Date.now()){ map[k].exp = nowIso; changed = true; }
+    }
+    if(changed) await LocalDB.set(LOGIN_TOKENS_KEY, map);
+  }catch(e){}
+  await forgetPendingLogouts();
+  updateApprovalBanner();
 }
 
 // The signed-in manager's own login token, if it can still approve (not ended, not about to end).
@@ -813,6 +937,7 @@ async function renderAlerts(){
   const list = await loadAlerts();
   if(!list.length){ box.style.display = 'none'; box.innerHTML = ''; return; }
   const a = list[0];
+  box.className = a.kind === 'note' ? 'offline-banner' : 'offline-banner error';     // 'note' = a gentle reminder
   box.innerHTML = `<b>${escapeHtml(a.title)}</b> ${escapeHtml(a.text)}
     <button class="btn btn-outline" id="alert-ok" style="margin-left:10px;">Got it${list.length>1?` (${list.length-1} more)`:''}</button>`;
   box.style.display = 'block';
@@ -1403,6 +1528,7 @@ function openCustomerPicker(){
         <div class="form-row"><label>Mobile (optional)</label><input id="cp-phone" inputmode="tel" placeholder="0917 123 4567"></div>
       </div>
       <p class="hint">Ask the customer first: “Can we save your name and number for your rewards?”</p>
+      <label class="cp-consent" for="cp-consent"><input type="checkbox" id="cp-consent"> <span>The customer agreed to be added to our loyalty list</span></label>
       <button class="btn btn-primary btn-sm" id="cp-create">Save customer</button>
     </details>`,
   foot:`<button class="btn btn-outline" data-cancel>Close</button>`,
@@ -1437,9 +1563,12 @@ function openCustomerPicker(){
       const btn = ev.currentTarget;
       const name = root.querySelector('#cp-name').value.trim();
       if(!name){ toast('Enter a nickname','error'); return; }
+      // Required: the server also refuses without it (CONSENT_REQUIRED).
+      const consent = root.querySelector('#cp-consent').checked;
+      if(!consent){ toast('Tick the box once the customer agrees to be added to the loyalty list','error'); return; }
       btn.disabled = true;
       try{
-        const r = await cloud.rpc('fo_add_customer', {p_nickname: name, p_phone: root.querySelector('#cp-phone').value.trim() || null});
+        const r = await cloud.rpc('fo_add_customer', {p_nickname: name, p_phone: root.querySelector('#cp-phone').value.trim() || null, p_consent: true});
         if(r.error){
           toast(friendlyError(r) + (isLimited(r.error) ? ' Save them without a number for now, or try again later.' : ''), 'error');
           return;
