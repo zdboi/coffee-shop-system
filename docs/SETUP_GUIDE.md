@@ -34,9 +34,10 @@ Do it on a quiet day, after closing. You need: a computer, your Supabase login, 
 2. Find **Allow anonymous sign-ins** and switch it **ON**. Click **Save**.
    (Customers' phones and your counters use this; they never see an email form.)
 
-**B. Protect against fake sign-ups (CAPTCHA)** — ⚠️ **skip this for now.** Turning it on before
-the apps support it would block every counter and customer from signing in. C will tell you
-when the apps are ready; then:
+**B. Protect against fake sign-ups (CAPTCHA)** — **optional, skip it at go-live.** The apps
+support it, but it's off. Turn it on later only if you ever see fake QR orders. **Order matters:**
+first send C the site key (step 3) and wait until C says the apps have it, THEN switch it on in
+Supabase — otherwise every sign-in (yours too) is refused. When you do it:
 1. Still in **Authentication** → **Attack Protection** (sometimes under **Settings**).
 2. Turn on **Enable CAPTCHA protection**, choose **Cloudflare Turnstile**, and follow the link to
    create a free Turnstile key. Paste the **secret key** into Supabase and save.
