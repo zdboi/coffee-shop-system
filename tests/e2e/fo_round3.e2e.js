@@ -3,7 +3,7 @@
 //      a manager with a 6-digit PIN does not get it
 //   2  consent box: "Save customer" without the tick is blocked (no fo_add_customer call);
 //      with the tick the call carries p_consent:true and the customer is saved with consent_at
-//   3  the shop-wide sign-up limit at the counter (TOO_MANY_SIGNUPS) is shown in plain words
+//   3  the QR sign-up limit (40 an hour) does not block adding a customer at the counter
 //   4  F2: an online sign-in while an action approved with the manager's own sign-in is still
 //      waiting AND the server refuses uploads -> "Signing in now will cancel those approvals";
 //      "Upload first" while still refused -> "still couldn't upload", nothing signed in;
@@ -82,14 +82,16 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
     ok(await until(async () => /Lia/.test((await page.textContent('.customer-chip').catch(() => '')) || ''), 4000), 'the new customer is on the sale');
     await page.click('#cust-remove');
 
-    // ---- 3. shop-wide sign-up limit (40 new customers in the last hour) -> TOO_MANY_SIGNUPS in plain words
+    // ---- 3. the shop-wide QR sign-up limit (40 QR sign-ups in an hour) does not stop the counter
+    //      (004 section 13a: customers added at a counter don't count and aren't limited)
     sql(`insert into customers(business_id, nickname, source) select business_id, 'Bulk ' || g, 'QR' from staff, generate_series(1, 40) g where staff.id='${CATHY}'`);
     await page.click('#cust-add');
     await page.click('.cp-new summary');
     await page.fill('#cp-name', 'Nina'); await page.check('#cp-consent'); await page.click('#cp-create');
-    ok(await until(async () => /Lots of new customers are joining right now/.test(await toasts()), 5000), 'counter: TOO_MANY_SIGNUPS -> "Lots of new customers are joining right now…"', await toasts());
-    ok(sql(`select count(*) from customers where nickname='Nina'`) === '0', 'over the limit: not saved');
-    await page.click('[data-cancel]');
+    ok(await until(async () => sql(`select count(*) from customers where nickname='Nina'`) === '1', 6000), 'counter can still add a customer while the QR sign-up limit is reached', await toasts());
+    ok(!/Lots of new customers/.test(await toasts()), 'no TOO_MANY_SIGNUPS message at the counter', await toasts());
+    if(await page.$('#cust-remove')) await page.click('#cust-remove');
+    if(await page.$('#active-modal-overlay [data-cancel]')) await page.click('#active-modal-overlay [data-cancel]');
     sql(`delete from customers where nickname like 'Bulk %'`);
     await clearToasts();
 
@@ -118,7 +120,7 @@ const MANNY = '66666666-0000-0000-0000-000000000002', CATHY = '66666666-0000-000
     await page.waitForSelector('.pos-product-card', {timeout: 25000});
     ok(sql(`select status||'|'||discount_approved_by from sales where grand_total=99`) === `COMPLETED|${MANNY}`, '"Upload first" once the server answers: the sale uploaded with Manny\'s approval accepted');
     ok(await until(async () => /Cathy/.test(await page.textContent('body')), 5000), '... then Cathy is signed in');
-    ok((await outbox()) === 0 && (await page.evaluate(async () => (await LocalDB.failedAll()).length)) === 0, 'nothing waiting, nothing failed');
+    ok(await until(async () => (await outbox()) === 0 && (await page.evaluate(async () => (await LocalDB.failedAll()).length)) === 0, 10000), 'nothing left waiting, nothing failed', [await outbox(), await page.evaluate(async () => (await LocalDB.failedAll()).map(f => f.type + ':' + f.error))]);
 
     // ---- 5. same situation, "Sign in anyway"
     await page.click('#lock-btn'); await page.waitForSelector('#pin-gate', {state: 'visible'});

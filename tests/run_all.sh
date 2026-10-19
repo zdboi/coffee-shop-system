@@ -16,7 +16,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 export QA_SHOTS="${QA_SHOTS:-${TMPDIR:-/tmp}/cccc-qa-shots}"
-LOGS="$QA_SHOTS/logs"; mkdir -p "$LOGS"
+LOGS="$QA_SHOTS/logs"; mkdir -p "$LOGS"; : > "$LOGS/review_flags.log"
 export FAKE_PORT=$PORT FAKE_DB=$DB
 export PGOPTIONS="-c client_min_messages=warning"
 PSQL="psql -h /tmp -p 54329 -U postgres -d $DB"
@@ -105,6 +105,8 @@ if [ "$BROWSER" = 1 ]; then
       IFS=: read -r name file vp <<<"$t"
       "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1      # every browser suite starts from a fresh seed
       BO_VIEWPORT="${vp:-1280x900}" run_node "e2e/$name#$run" "$DIR/e2e/$file"
+      # what the server flagged for review during this suite (read by QA: a normal, correct flow should not be flagged)
+      { echo "== e2e/$name#$run"; $PSQL -At -c "select 'sale '||coalesce(transaction_number,'?')||' '||coalesce(cashier_name,'')||' signed_in='||coalesce((select name from staff where id=s.signed_in_staff_id),'-')||' total='||grand_total||' review='||coalesce(review_reason,'') from sales s where review_reason is not null union all select 'refund '||type||' '||amount||' by='||coalesce(performed_by_name,'')||' review='||coalesce(review_reason,'') from refunds where review_reason is not null or needs_review union all select 'payout '||amount||' by='||coalesce(performed_by_name,'') from cash_movements where needs_review" 2>&1; } >> "$LOGS/review_flags.log"
     done
   done
 fi
