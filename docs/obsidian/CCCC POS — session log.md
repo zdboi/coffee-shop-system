@@ -2,7 +2,7 @@
 tags: [cccc, pos, session-log]
 project: Cavite City Coffee Club POS
 updated: 2026-10-20
-checkpoint: 6
+checkpoint: 7
 repo: zdboi/coffee-shop-system (branch wip/cccc-online-qr)
 ---
 
@@ -14,13 +14,18 @@ It has three apps on one Supabase database:
 - **Back Office:** the owner's email login only.
 - **QR order page:** customers order from their phones and pay at the counter.
 
-## Where things stand (Oct 20): ready for go-live 🎉
-- **Checkpoint 6.** Everything is saved on GitHub.
-- **Pull request #1** is waiting for me: https://github.com/zdboi/coffee-shop-system/pull/1. Merge it **only after** Parts 1–3 of the setup guide.
-- 3,238 automatic tests, all passing.
-- The final security review says ready for go-live.
-- The live shop and live Supabase haven't been touched yet.
-- **Next:** I follow `docs/SETUP_GUIDE.md` (about 45 min), with C on standby.
+## Where things stand (Oct 20): LIVE 🎉
+- **Checkpoint 7.** The new apps are live at https://zdboi.github.io/coffee-shop-system/
+- I ran database scripts 004, 005 and 006 in Supabase.
+  - 005 fixed counter pairing.
+  - 006 fixed counter uploads. Both were rules left over from the old Lovable database.
+- I signed in to the Back Office and set my shop details and 6-digit PIN.
+- I paired my PC as a test counter, and test sales uploaded.
+- **My to-dos:**
+  - add the menu and shop data;
+  - void the test sales;
+  - remove the test PC when the real tablet is paired;
+  - try one QR order with my phone.
 
 ## My decisions
 | Date | Decision |

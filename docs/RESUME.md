@@ -1,4 +1,4 @@
-# Resume here (save point: 2026-10-20, checkpoint 6)
+# Resume here (save point: 2026-10-20, checkpoint 7 — LIVE)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
