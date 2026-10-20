@@ -18,13 +18,16 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 
 | Suite | What | Size |
 |---|---|---|
-| 004 installs (x2) | `cccc/supabase/004_cccc_online_qr.sql` installs on the live-schema copy (`sql/01`) and again on top of itself | — |
+| 004+005+006 install (x2) | the live order `004_cccc_online_qr.sql` → `005_live_fixes.sql` → `006_live_fix_sync_operations.sql` installs on the live-schema copy (`sql/01`, incl. the live CHECK rules) and again on top of itself | — |
+| `sql/36_live_rules_tests.sql` | after the install: every CHECK rule matches the owner's live list (one rule per column; 005 replaced the stand-in device_type rule, 006 the sync_operations rule; `cash_movements.amount > 0` kept) (17) | — |
 | `sql/10_behaviour_tests.sql` | sign-up trigger, menu via `apply_changes`, pairing, PIN logins (no rank from a PIN), lockout, `fo_sync` sale / duplicate / discount refusal / void with approval token | — |
 | `sql/11_qr_tests.sql` | QR menu, register / relink / forget, server-side prices, counter accept → pay → ready → complete, customers, `sales_report`, merge, legacy PIN, device removal | — |
 | `sql/31_qa_extra_tests.sql` | QA extras (after 10 + 11): a refused pairing must leave nothing behind | — |
 | `sql/30_security_tests.sql` | 172 checks for the 2026-10-12 security decisions (own fresh database) | — |
 | `sql/32_fix_round_tests.sql` | 130 fix-round checks (own fresh database): QR order paid once (`QR_ORDER_ALREADY_PAID`), refund caps for every login incl. the owner, pro-rated refunds, `SALE_LOCKED`, `PIN_AMBIGUOUS`, sign-in token approves only its own staff member, `refunds.imported_at` | — |
 | `sql/33_security_round3_tests.sql` | 169 checks for the 2026-10-19 security round (own fresh database; adopted from the database engineer): F1 F2 F4 / 6-digit manager PINs, F5 QR flood limits, F6–F11, F13, `qr_cancel_order`, customer erasure (incl. sale item notes, refund reason / notes) | — |
+| `sql/34_live_fixes_tests.sql` | 005 (own fresh database): re-creates the live `devices_device_type_check`, pairing fails, 005 x2 fixes it (13) | — |
+| `sql/35_live_fix_sync_ops_tests.sql` | 006 (own fresh database): re-creates the live `sync_operations_operation_type_check`, uploads fail, 006 x2 fixes them (16) | — |
 | `conc_checks.sh` | two sessions at the same moment (on the data 32 leaves): two owner refunds of one sale, two counters paying one QR order -> only one passes | — |
 | `unit/core_check.js` | `friendlyError` / `ERROR_TEXT`, `parseAuthRedirect`, `sessionFromUrl`, `updatePassword`, `resetPassword` (node, mocked fetch) | — |
 | `unit/error_codes_check.js` | every error code the database can send to an app has a plain-language text in that app | — |
@@ -58,7 +61,9 @@ refusal the test provokes on purpose (allowed with `net.allow(...)` around that 
 
 ## Pieces
 - `sql/00_supabase_stub.sql` — stand-in for Supabase internals (auth schema, roles, storage).
-- `sql/01_existing_schema.sql` — reconstruction of the **live** schema; the 004 script must install on top of it.
+- `sql/01_existing_schema.sql` — reconstruction of the **live** schema incl. the CHECK rules live had before our scripts
+  (`devices.device_type in ('POS','KDS')` is a stand-in: the real live list is unknown). `reset_db.sh` installs 004, 005, 006 on it
+  (the live order); every suite runs on that.
 - `sql/20_seed_e2e.sql` — browser-test seed: owner `owner@example.com` / `secret123`, Cathy (cashier, PIN 1111),
   Manny (manager, 2222), owner PIN 9999, Iced Latte / Americano / Ensaymada, beans 1000 g, milk 5000 ml,
   Table 5 (`tabletoken5`), pairing code `TESTAB`.
@@ -90,5 +95,5 @@ port you give it. Run each line as its own command.
   (needs a fresh seed: it pairs two counters and registers QR customers).
 - Log for each stand-in: `tests/fake-<port>.log`. App pages are read from disk on every request, so editing them
   needs no restart; after editing `fake-supabase/server.js`, restart the stand-in.
-- Try a different migration file: `tests/reset_db.sh path/to/file.sql db_bo` (no seed data).
+- Try a different migration file: `tests/reset_db.sh path/to/file.sql db_bo` (ONLY that file on top of `sql/01`, no seed data).
 - Don't use `cccc` or port 8787 — those are QA's regression runs.

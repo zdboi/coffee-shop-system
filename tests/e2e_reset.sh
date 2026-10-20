@@ -1,5 +1,5 @@
 #!/bin/bash
-# Fresh test DB with the cccc/ migration + browser-test seed data.
+# Fresh test DB as live (01 live schema + 004, 005, 006 via reset_db.sh) + browser-test seed data.
 # Usage: tests/e2e_reset.sh [database]      default database: cccc (QA's regression runs)
 #   Use your own name for your own work, e.g.  tests/e2e_reset.sh db_bo
 set -e

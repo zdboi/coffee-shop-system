@@ -64,13 +64,17 @@ run_cmd(){ # name command [args...]
 echo "== test database (PostgreSQL 16 on :54329)"
 "$DIR/start_pg.sh" >/dev/null || { echo "test postgres did not start"; exit 1; }
 
-echo "== database: the 004 script on the live-schema copy, installed twice"
+echo "== database: live order 004 -> 005 -> 006 on the live-schema copy (with live CHECK rules), installed twice"
 t0=$SECONDS
 if "$DIR/reset_db.sh" "" "$DB" > "$LOGS/install-1.log" 2>&1; then
-  if $PSQL -v ON_ERROR_STOP=1 -q -f "$REPO/cccc/supabase/004_cccc_online_qr.sql" > "$LOGS/install-2.log" 2>&1; then
-    record "004 installs (x2)" PASS 2 0 $((SECONDS-t0)) "$LOGS/install-2.log"
-  else record "004 installs (x2)" FAIL 2 1 $((SECONDS-t0)) "$LOGS/install-2.log"; tail -3 "$LOGS/install-2.log"; fi
-else record "004 installs (x2)" FAIL 1 1 $((SECONDS-t0)) "$LOGS/install-1.log"; tail -3 "$LOGS/install-1.log"; fi
+  ok2=1; : > "$LOGS/install-2.log"
+  for m in 004_cccc_online_qr.sql 005_live_fixes.sql 006_live_fix_sync_operations.sql; do
+    $PSQL -v ON_ERROR_STOP=1 -q -f "$REPO/cccc/supabase/$m" >> "$LOGS/install-2.log" 2>&1 || { ok2=0; echo "second run of $m failed" >> "$LOGS/install-2.log"; break; }
+  done
+  if [ $ok2 = 1 ]; then record "004+005+006 install (x2)" PASS 2 0 $((SECONDS-t0)) "$LOGS/install-2.log"
+  else record "004+005+006 install (x2)" FAIL 2 1 $((SECONDS-t0)) "$LOGS/install-2.log"; tail -3 "$LOGS/install-2.log"; fi
+else record "004+005+006 install (x2)" FAIL 1 1 $((SECONDS-t0)) "$LOGS/install-1.log"; tail -3 "$LOGS/install-1.log"; fi
+run_sql_lines  sql/36_live_rules_tests "$DIR/sql/36_live_rules_tests.sql"   # CHECK rules now match live
 
 echo "== database behaviour suites (on the twice-installed database)"
 run_sql_assert sql/10_behaviour_tests "$DIR/sql/10_behaviour_tests.sql"
@@ -83,6 +87,10 @@ run_sql_assert sql/32_fix_round_tests "$DIR/sql/32_fix_round_tests.sql"
 run_cmd conc_checks "$DIR/conc_checks.sh" "$DB"       # two sessions at once, on the data 32 left
 "$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
 run_sql_lines  sql/33_security_round3_tests "$DIR/sql/33_security_round3_tests.sql"   # needs a fresh database
+"$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
+run_sql_lines  sql/34_live_fixes_tests "$DIR/sql/34_live_fixes_tests.sql"              # 005: re-creates the live device_type rule, then fixes it
+"$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
+run_sql_lines  sql/35_live_fix_sync_ops_tests "$DIR/sql/35_live_fix_sync_ops_tests.sql"  # 006: needs a fresh database
 
 echo "== unit checks (shared core)"
 run_node unit/core_check "$DIR/unit/core_check.js" "$REPO"
