@@ -24,8 +24,8 @@ plain-language, step-by-step instructions.
 - The competing Build R is archived in `_archive/build-r/` — **read-only reference**. Its Back Office
   screens, sales calendar and importer are the source for building `cccc/back/` (they use a different
   data style: camelCase fields + `DB.put`; convert to this file's conventions when porting).
-- The database script `cccc/supabase/004_cccc_online_qr.sql` has **not** been run on the live
-  project yet, so it may still be edited in place.
+- **The owner ran `cccc/supabase/004_cccc_online_qr.sql` on the live project on 2026-10-20** ("Success").
+  It is now **frozen**: every database change goes in a new numbered script (`005_…sql`, …), per golden rule 6.
 
 ## Golden rules (everyone)
 1. **Own only your files.** Each file has exactly one owner (table below). Need a change in
