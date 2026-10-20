@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cavite City Coffee Club</title>
+<meta name="robots" content="noindex">
+<style>
+  :root{--ink:#241209;--paper:#f7f1e6;--card:#fffdf9;--leaf:#33513f;--muted:#6b5a4c;}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:24px 16px}
+  main{width:100%;max-width:420px}
+  h1{font-size:24px;margin:0 0 4px}
+  p{color:var(--muted);margin:0 0 24px}
+  a.app{display:block;background:var(--card);border-radius:14px;padding:18px 20px;margin-bottom:12px;
+    text-decoration:none;color:var(--ink);box-shadow:0 1px 3px rgba(36,18,9,.12)}
+  a.app:hover,a.app:focus-visible{outline:2px solid var(--leaf)}
+  a.app b{display:block;font-size:17px}
+  a.app span{color:var(--muted);font-size:14px}
+  small{display:block;margin-top:20px;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<main>
+  <h1>☕ Cavite City Coffee Club</h1>
+  <p>Staff and owner apps. Customers order by scanning the QR code on their table.</p>
+  <a class="app" href="cccc/front/"><b>Counter</b><span>For staff — sign in with your PIN on a paired counter.</span></a>
+  <a class="app" href="cccc/back/"><b>Back Office</b><span>For the owner — sign in with your email.</span></a>
+  <small>Looking for the menu? Scan the QR code on your table.</small>
+</main>
+</body>
+</html>

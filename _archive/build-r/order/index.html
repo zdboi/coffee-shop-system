@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Order — Cavite City Coffee Club</title>
+<meta name="description" content="Order from your table. Pay at the counter.">
+<meta name="theme-color" content="#241209">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CCCC Order">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%98%95%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./order.css">
+</head>
+<body>
+<div id="page">
+  <header id="shop-head" class="shop-head" hidden>
+    <div class="shop-id"><img id="shop-logo" alt="" hidden><h1 id="shop-name"></h1></div>
+    <div id="table-chip" class="table-chip" hidden></div>
+  </header>
+  <div id="notice" class="notice" hidden></div>
+  <section id="member" aria-live="polite"></section>
+  <section id="my-orders" aria-live="polite"></section>
+  <nav id="cats" class="cats" aria-label="Menu sections" hidden></nav>
+  <main id="menu" class="menu"><p class="loading">Loading the menu…</p></main>
+  <p class="foot-note" id="foot-note" hidden></p>
+</div>
+<button id="bag-bar" class="bag-bar" hidden></button>
+<div id="sheet-backdrop" class="sheet-backdrop" hidden></div>
+<div id="sheet" class="sheet" role="dialog" aria-modal="true" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
+<script>window.supabase || document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');</script>
+<script src="../config.js"></script>
+<script src="../shared/supa.js"></script>
+<script src="./order.js"></script>
+</body>
+</html>

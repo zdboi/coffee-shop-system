@@ -1,0 +1,18 @@
+{
+  "name": "Back Office — Cavite City Coffee Club",
+  "short_name": "Back Office",
+  "description": "Back Office for the shop owner: stock, recipes, menu, sales, staff and settings.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f1e6",
+  "theme_color": "#241209",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23241209'/%3E%3Ctext x='50' y='68' font-size='55' text-anchor='middle'%3E%E2%98%95%3C/text%3E%3C/svg%3E",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

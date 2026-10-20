@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Order — Cavite City Coffee Club</title>
+<meta name="description" content="Order from your table. Pay at the counter.">
+<meta name="theme-color" content="#241209">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CCCC">
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%98%95%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="./order.css">
+<!-- The one web font loads without holding up the first screen: headings use the system font
+     until it arrives (display=swap gives font-display: swap), and the page works without it. -->
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&display=swap"></noscript>
+</head>
+<body>
+<header class="topbar" id="topbar">
+  <div class="brand"><span class="brand-logo" id="brand-logo">☕</span><span class="brand-name" id="brand-name">Cavite City Coffee Club</span></div>
+  <span class="table-tag" id="table-tag"></span>
+</header>
+<main id="main" class="main"><p class="loading">Opening the menu…</p></main>
+<div id="bottom" class="bottom" hidden></div>
+<div id="sheet-root"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="../shared/config.js"></script>
+<script src="../shared/cloud.js"></script>
+<!-- Optional "are you a person" check. Does nothing (loads nothing) while the site key in config.js is empty. -->
+<script src="../shared/captcha.js"></script>
+<script src="./order.js"></script>
+</body>
+</html>
