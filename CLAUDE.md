@@ -25,7 +25,10 @@ plain-language, step-by-step instructions.
   screens, sales calendar and importer are the source for building `cccc/back/` (they use a different
   data style: camelCase fields + `DB.put`; convert to this file's conventions when porting).
 - **The owner ran `cccc/supabase/004_cccc_online_qr.sql` on the live project on 2026-10-20** ("Success").
-  It is now **frozen**: every database change goes in a new numbered script (`005_…sql`, …), per golden rule 6.
+  It is now **frozen**: every database change goes in a new numbered script, per golden rule 6.
+- The owner also ran **`005_live_fixes.sql`** and **`006_live_fix_sync_operations.sql`** on live (2026-10-20); both
+  are frozen too. Next script: `007_…sql`. The live database has older CHECK rules than our reconstruction:
+  any new value written to a live column must be checked against the live rule list first.
 
 ## Golden rules (everyone)
 1. **Own only your files.** Each file has exactly one owner (table below). Need a change in

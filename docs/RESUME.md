@@ -2,35 +2,32 @@
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
-## Where we are: ready for go-live
-- Branch `wip/cccc-online-qr`, checkpoint 6, pushed to GitHub. **Pull request #1** (→ `main`) is
-  open for the owner. It says to merge only after setup guide Parts 1–3.
-- Tests: 49 suites, 3,238 checks, all passing (two runs).
-- Final security verdict: **ready for go-live**. Every finding is fixed, including the last
-  privacy fix: customer erasure now also covers item notes and refund reasons.
-- CAPTCHA (Cloudflare Turnstile) is supported in all apps but **off**. Owner decision: go live
-  without it; turn it on later only if fake orders appear. Order when the time comes: owner sends the
-  site key → C adds it → C confirms → owner switches it on in Supabase.
-- The old POS/Inventory/test pages are moved to `_archive/old-apps/`. They come off the live site
-  when PR #1 is merged.
-- Live Supabase and the live site are still unchanged.
+## Where we are: LIVE (2026-10-20, checkpoint 7)
+- Live site https://zdboi.github.io/coffee-shop-system/ shows the new apps (PR #1 merged).
+- The owner ran 004, 005 and 006 on the live Supabase, and all three are frozen. The next database script is `007`.
+- The owner signed in to the Back Office, set the shop details and their 6-digit PIN, paired a test PC as a counter,
+  and test sales uploaded fine.
+- Two live-only issues were found and fixed:
+  - pairing (`devices.device_type` rule, fixed by 005);
+  - every upload failing (`sync_operations.operation_type` rule, fixed by 006).
+- The owner will add the menu and shop data later.
 
 ## Next steps
-1. **Owner follows `docs/SETUP_GUIDE.md`** (about 45 min); C is on standby:
-   - backup;
-   - run 004;
-   - Supabase settings;
-   - merge PR #1;
-   - Back Office first setup;
-   - test.
-2. **After go-live:**
-   - a `005` script drops `profiles.pin_hash`;
-   - optional copy polish: the Back Office "Could not reach the CAPTCHA check" message says "CAPTCHA"
-     (core-sync, `captcha.js`).
-3. **Later list:**
-   - prototype walkthrough (`docs/prototype/NOTES.md`);
-   - Senior/PWD 20% discount button;
-   - loyalty stamps rewards.
+1. Owner:
+   - void the test sales;
+   - remove the test PC when the real tablet is paired;
+   - do one QR order test once the menu is in.
+2. QA:
+   - add the live-only CHECK rules to `tests/sql/01_existing_schema.sql`;
+   - wire tests 34 and 35 into `run_all.sh`.
+3. Later:
+   - `007` drops `profiles.pin_hash`;
+   - Senior/PWD discount button;
+   - loyalty stamps;
+   - prototype walkthrough;
+   - CAPTCHA only if fake orders appear;
+   - copy polish ("CAPTCHA" wording in `captcha.js`).
+4. App changes from now on go out through a new pull request `wip/cccc-online-qr` → `main`, which the owner merges.
 
 ## Saving to Obsidian
 The session note lives at `docs/obsidian/CCCC POS — session log.md` and is updated at every
