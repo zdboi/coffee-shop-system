@@ -64,13 +64,17 @@ run_cmd(){ # name command [args...]
 echo "== test database (PostgreSQL 16 on :54329)"
 "$DIR/start_pg.sh" >/dev/null || { echo "test postgres did not start"; exit 1; }
 
-echo "== database: the 004 script on the live-schema copy, installed twice"
+echo "== database: live order 004 -> 005 -> 006 -> 007 on the live-schema copy (with live CHECK rules), installed twice"
 t0=$SECONDS
 if "$DIR/reset_db.sh" "" "$DB" > "$LOGS/install-1.log" 2>&1; then
-  if $PSQL -v ON_ERROR_STOP=1 -q -f "$REPO/cccc/supabase/004_cccc_online_qr.sql" > "$LOGS/install-2.log" 2>&1; then
-    record "004 installs (x2)" PASS 2 0 $((SECONDS-t0)) "$LOGS/install-2.log"
-  else record "004 installs (x2)" FAIL 2 1 $((SECONDS-t0)) "$LOGS/install-2.log"; tail -3 "$LOGS/install-2.log"; fi
-else record "004 installs (x2)" FAIL 1 1 $((SECONDS-t0)) "$LOGS/install-1.log"; tail -3 "$LOGS/install-1.log"; fi
+  ok2=1; : > "$LOGS/install-2.log"
+  for m in 004_cccc_online_qr.sql 005_live_fixes.sql 006_live_fix_sync_operations.sql 007_batch1.sql; do
+    $PSQL -v ON_ERROR_STOP=1 -q -f "$REPO/cccc/supabase/$m" >> "$LOGS/install-2.log" 2>&1 || { ok2=0; echo "second run of $m failed" >> "$LOGS/install-2.log"; break; }
+  done
+  if [ $ok2 = 1 ]; then record "004..007 install (x2)" PASS 2 0 $((SECONDS-t0)) "$LOGS/install-2.log"
+  else record "004..007 install (x2)" FAIL 2 1 $((SECONDS-t0)) "$LOGS/install-2.log"; tail -3 "$LOGS/install-2.log"; fi
+else record "004..007 install (x2)" FAIL 1 1 $((SECONDS-t0)) "$LOGS/install-1.log"; tail -3 "$LOGS/install-1.log"; fi
+run_sql_lines  sql/36_live_rules_tests "$DIR/sql/36_live_rules_tests.sql"   # CHECK rules now match live
 
 echo "== database behaviour suites (on the twice-installed database)"
 run_sql_assert sql/10_behaviour_tests "$DIR/sql/10_behaviour_tests.sql"
@@ -83,6 +87,12 @@ run_sql_assert sql/32_fix_round_tests "$DIR/sql/32_fix_round_tests.sql"
 run_cmd conc_checks "$DIR/conc_checks.sh" "$DB"       # two sessions at once, on the data 32 left
 "$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
 run_sql_lines  sql/33_security_round3_tests "$DIR/sql/33_security_round3_tests.sql"   # needs a fresh database
+"$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
+run_sql_lines  sql/34_live_fixes_tests "$DIR/sql/34_live_fixes_tests.sql"              # 005: re-creates the live device_type rule, then fixes it
+"$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
+run_sql_lines  sql/35_live_fix_sync_ops_tests "$DIR/sql/35_live_fix_sync_ops_tests.sql"  # 006: needs a fresh database
+"$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
+run_sql_lines  sql/37_batch1_tests "$DIR/sql/37_batch1_tests.sql"                      # 007 + batch 1 Back Office writes: needs a fresh database
 
 echo "== unit checks (shared core)"
 run_node unit/core_check "$DIR/unit/core_check.js" "$REPO"
@@ -91,6 +101,7 @@ run_node unit/core_browser "$DIR/unit/core_browser.js" "$REPO"
 run_node unit/logic_refund_check "$DIR/unit/logic_refund_check.js" "$REPO"
 run_node unit/email_link_check "$DIR/unit/email_link_check.js" "$REPO"
 run_node unit/captcha_check "$DIR/unit/captcha_check.js" "$REPO"
+run_node unit/units_check "$DIR/unit/units_check.js" "$REPO"
 "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1          # parity check needs a shop (runs inside a rolled-back transaction)
 run_node unit/refund_parity_check "$DIR/unit/refund_parity_check.js" "$REPO" "$DB" 500
 
@@ -104,7 +115,8 @@ if [ "$BROWSER" = 1 ]; then
              "order.e2e:order.e2e.js:" "order_extra.e2e:order_extra.e2e.js:" "order_ticket_states.e2e:order_ticket_states.e2e.js:" \
              "bo.e2e@1280:bo.e2e.js:1280x900" "bo.e2e@768:bo.e2e.js:768x1024" "bo_calendar_tips.e2e:bo_calendar_tips.e2e.js:" "money.e2e:money.e2e.js:" \
              "fo_round3.e2e:fo_round3.e2e.js:" "bo_round3.e2e:bo_round3.e2e.js:" "order_limits.e2e:order_limits.e2e.js:" \
-             "captcha.e2e:captcha.e2e.js:"; do
+             "captcha.e2e:captcha.e2e.js:" \
+             "fo_batch1.e2e:fo_batch1.e2e.js:" "bo_batch1.e2e:bo_batch1.e2e.js:" "bo_excel.e2e:bo_excel.e2e.js:"; do
       IFS=: read -r name file vp <<<"$t"
       "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1      # every browser suite starts from a fresh seed
       BO_VIEWPORT="${vp:-1280x900}" run_node "e2e/$name#$run" "$DIR/e2e/$file"

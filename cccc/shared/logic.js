@@ -34,6 +34,53 @@ function toBaseQuantity(quantity, purchaseUnit, baseUnit, unitsPerPurchaseUnit){
   return quantity; // fallback: 1:1
 }
 
+/* ---- Unit conversion for typing/display (owner request #3, 2026-10-25) ----
+   Every STORED quantity stays in the ingredient's base unit. These helpers only
+   convert what the owner types (e.g. 150 mL for a base unit of L) and how a
+   base quantity is shown. They never touch money or stock formulas. */
+function _unitRound(n){ return Math.round(n * 1e6) / 1e6; }
+function _unitTable(unit){
+  if(unit in WEIGHT_UNITS) return WEIGHT_UNITS;
+  if(unit in VOLUME_UNITS) return VOLUME_UNITS;
+  return null;
+}
+// Units the owner may type for an ingredient with this base unit.
+function compatibleUnits(baseUnit){
+  if(baseUnit in WEIGHT_UNITS) return ['g','kg'];
+  if(baseUnit in VOLUME_UNITS) return ['ml','L'];
+  return baseUnit ? [baseUnit] : [];
+}
+// qty in fromUnit -> qty in toUnit; null when the units are not the same family.
+function convertQuantity(qty, fromUnit, toUnit){
+  const q = Number(qty);
+  if(!isFinite(q)) return null;
+  if(fromUnit === toUnit) return q;
+  const t = _unitTable(fromUnit);
+  if(!t || !(toUnit in t)) return null;   // different family, or count units
+  return _unitRound(q * (t[fromUnit] / t[toUnit]));
+}
+// Typed qty+unit -> base-unit qty (unit missing = already base). null if incompatible.
+function toBaseUnit(qty, unit, baseUnit){
+  return convertQuantity(qty, unit || baseUnit, baseUnit);
+}
+// Base-unit qty -> {qty, unit} in displayUnit (falls back to baseUnit when missing/incompatible).
+function fromBaseUnit(qtyBase, baseUnit, displayUnit){
+  const q = Number(qtyBase) || 0;
+  if(displayUnit && displayUnit !== baseUnit){
+    const v = convertQuantity(q, baseUnit, displayUnit);
+    if(v != null) return {qty: v, unit: displayUnit};
+  }
+  return {qty: _unitRound(q), unit: baseUnit};
+}
+function unitLabel(unit){ return unit === 'ml' ? 'mL' : (unit == null ? '' : String(unit)); }
+// e.g. formatQuantity(0.15, 'L', 'ml') -> "150 mL"; formatQuantity(100, 'g', 'kg') -> "0.1 kg"
+function formatQuantity(qtyBase, baseUnit, displayUnit, dp=2){
+  const r = fromBaseUnit(qtyBase, baseUnit, displayUnit);
+  const s = String(Number(Number(r.qty).toFixed(dp)));   // trims trailing zeros
+  const lbl = unitLabel(r.unit);
+  return lbl ? s + ' ' + lbl : s;
+}
+
 function fmtMoney(n){
   const s = (Number(n)||0).toFixed(2);
   return '₱' + Number(s).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -172,7 +219,7 @@ function serverSettingsRow(){
   return row;
 }
 
-const CATEGORY_SEED = ['Coffee','Dairy & Milk Alternatives','Syrups & Sauces','Sweeteners','Tea & Powders','Ice & Water','Packaging','Other'];
+const CATEGORY_SEED = ['Coffee','Dairy & Milk Alternatives','Syrups & Sauces','Sweeteners','Tea & Powders','Ice & Water','Packaging','Raw materials','Other'];
 const PRODUCED_CATEGORY_NAME = 'House-Made / Produced';
 
 function uid(){ return Cloud.uuid(); }
@@ -341,8 +388,19 @@ function downloadFile(filename, content, mime){
   a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url), 2000);
 }
+// CSV for Excel. A text cell starting with = + - @ tab or CR gets a leading ' so a
+// spreadsheet never runs it as a formula. Numbers (JS numbers, or plain numeric text
+// such as "-5.00" from toFixed) are left as they are so they stay numbers.
+const CSV_PLAIN_NUMBER = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+function csvSafeCell(c){
+  if(c == null) return '';
+  if(typeof c === 'number') return String(c);
+  const s = String(c);
+  if(/^[=+\-@\t\r]/.test(s) && !CSV_PLAIN_NUMBER.test(s)) return "'" + s;
+  return s;
+}
 function toCSV(headers, rows){
-  const esc = c => `"${String(c==null?'':c).replace(/"/g,'""')}"`;
+  const esc = c => `"${csvSafeCell(c).replace(/"/g,'""')}"`;
   return [headers.map(esc).join(','), ...rows.map(r=>r.map(esc).join(','))].join('\n');
 }
 

@@ -969,12 +969,17 @@ async function renderAlerts(){
   document.getElementById('alert-ok').onclick = async ()=>{ try{ await LocalDB.set(ALERTS_KEY, list.slice(1)); }catch(e){} renderAlerts(); };
 }
 
+// Plain words for the upload types shown to staff (unknown types show as they are).
+const OP_TYPE_LABELS = { shift_open:'Start shift', shift_close:'Close shift', cash_movement:'Pay in / pay out', sale:'Sale',
+  held_delete:'Remove held order', refund:'Refund / void', audit:'Activity note', sold_out:'Sold-out change' };
+function opTypeLabel(type){ return Object.prototype.hasOwnProperty.call(OP_TYPE_LABELS, type) ? OP_TYPE_LABELS[type] : String(type == null ? '' : type); }
+
 async function showFailedOps(){
   const list = await LocalDB.failedAll();
   openModal({title:'Uploads that need attention', wide:true, body: list.length ? `
     <p class="hint" style="margin-top:0;">The server refused these. They are still saved on this counter. Usually this means a setting changed (e.g. a staff member was removed). Retry, or download the details for the owner.</p>
     <div class="table-wrap"><table><thead><tr><th>When</th><th>Type</th><th>Reason</th><th></th></tr></thead><tbody>
-    ${list.map(f=>`<tr><td>${fmtDateTime(f.queued_at)}</td><td>${escapeHtml(f.type)}</td><td class="text-light">${escapeHtml(friendlyError({message:f.error}))}</td>
+    ${list.map(f=>`<tr><td>${fmtDateTime(f.queued_at)}</td><td>${escapeHtml(opTypeLabel(f.type))}</td><td class="text-light">${escapeHtml(friendlyError({message:f.error}))}</td>
       <td style="white-space:nowrap;"><button class="btn btn-sm btn-outline" data-retry="${f.seq}">Retry</button> <button class="btn btn-sm btn-ghost" data-drop="${f.seq}">Dismiss</button></td></tr>`).join('')}
     </tbody></table></div>` : '<p>Nothing failed. 👍</p>',
     foot: `${list.length?'<button class="btn btn-outline" id="fo-dl-failed">Download details</button>':''}<button class="btn btn-primary" data-close>Close</button>`,
@@ -1251,12 +1256,12 @@ function renderShell(){
   document.getElementById('sidebar').innerHTML = `
     <div class="brand">${logo} <span>${escapeHtml(businessName()||appDisplayName())}</span><small>Front Office · ${escapeHtml(state.device?state.device.device_name:'')}</small></div>
     <div id="nav">${POS_NAV_ITEMS.map(n=>`<div class="nav-item" data-route="${n.id}"><span class="ic">${n.ic}</span><span class="label">${n.label}</span>${n.badge?'<span class="nav-badge" data-qr-badge style="display:none;">0</span>':''}</div>`).join('')}
-      ${u && u.role==='ADMIN' ? `<a class="nav-item" href="../back/" style="text-decoration:none;"><span class="ic">🗂</span><span class="label">Back Office</span></a>` : ''}
+      ${u && u.role==='ADMIN' ? `<div class="nav-spacer" aria-hidden="true"></div><a class="nav-item nav-back-office" href="../back/" title="Back Office" aria-label="Back Office"><span class="ic">🗂</span><span class="label">Back Office</span></a>` : ''}
     </div>
     <div id="sidebar-foot">
-      <div style="margin-bottom:8px;"><span class="role-badge">👤 ${escapeHtml(u?u.name:'')} · ${u?u.role:''}${u&&u.offline?' · offline':''}</span></div>
+      <div style="margin-bottom:8px;"><span class="role-badge" title="${escapeHtml(u?`${u.name} · ${u.role}`:'')}">👤 ${escapeHtml(u?u.name:'')} · ${u?u.role:''}${u&&u.offline?' · offline':''}</span></div>
       <button class="sync-status online" id="sync-pill" title="Upload status — tap for details"><span class="dot"></span> Online</button>
-      <button class="btn btn-ghost btn-sm" id="lock-btn" style="margin-top:8px;width:100%;">🔒 Lock / Switch User</button>
+      <button class="btn btn-ghost btn-sm" id="lock-btn" aria-label="Lock / Switch User" style="margin-top:8px;width:100%;">🔒 Lock / Switch User</button>
     </div>`;
   document.getElementById('nav').addEventListener('click', (e)=>{
     const item = e.target.closest('.nav-item[data-route]');
@@ -2101,9 +2106,11 @@ function openCashManagementModal(){
     root.querySelector('[data-cancel]').onclick = closeModal;
     root.querySelectorAll('[data-mode]').forEach(b=> b.onclick = ()=>{ mode=b.dataset.mode; root.querySelectorAll('[data-mode]').forEach(x=>x.classList.toggle('selected', x===b)); });
     root.querySelector('#cm-save').onclick = async ()=>{
-      const amount = Number(root.querySelector('#cm-amount').value);
+      // Rounded to the centavo, so ₱0.004 counts as ₱0 (the server refuses ₱0 or less: AMOUNT_NOT_POSITIVE).
+      const typed = Number(root.querySelector('#cm-amount').value);
+      const amount = Number.isFinite(typed) ? Math.round(typed * 100) / 100 : NaN;
       const reason = root.querySelector('#cm-reason').value.trim();
-      if(!(amount > 0)){ toast('Enter an amount greater than 0', 'error'); return; }
+      if(!(amount > 0)){ toast('Enter an amount more than ₱0', 'error'); root.querySelector('#cm-amount').focus(); return; }
       if(!reason){ toast('Enter a reason — it shows on the shift report', 'error'); return; }
       const now = new Date().toISOString();
       await Sync.queue('cash_movement', {id: uid(), shift_id: shift.id, type: mode, amount, reason, performed_by: posState.currentUser.id,

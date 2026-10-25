@@ -18,6 +18,54 @@ function txnTypeBadge(type){
     PRODUCTION:'Produced', PRODUCTION_USE:'Used in production', SALE_USAGE:'Sold', SALE_REVERSAL:'Refund / void'};
   return `<span class="badge ${colors[type] || 'badge-gray'}">${esc(label[type] || String(type || '').replace(/_/g, ' '))}</span>`;
 }
+/* ---- typing a quantity in the unit the owner wants (owner request #3, 2026-10-25) ----
+   The number is typed in any unit of the ingredient's family (g/kg, mL/L); what is SAVED is always the
+   ingredient's base unit (toBaseUnit). Changing the dropdown converts the number already typed. */
+function unitOptionsHtml(baseUnit, selected){
+  const list = compatibleUnits(baseUnit);
+  const sel = list.includes(selected) ? selected : baseUnit;
+  return list.map(u => `<option value="${esc(u)}" ${u === sel ? 'selected' : ''}>${esc(unitLabel(u))}</option>`).join('');
+}
+function unitSelectHtml(id, baseUnit, selected, label){
+  return `<select id="${esc(id)}" class="unit-pick" aria-label="${esc(label || 'Unit')}" style="width:auto;min-width:70px;flex:0 0 auto;">${unitOptionsHtml(baseUnit, selected)}</select>`;
+}
+// quantity input + unit dropdown side by side
+function qtyWithUnitHtml(inputId, selectId, baseUnit, attrs, label){
+  return `<div style="display:flex;gap:6px;align-items:center;"><input type="number" step="any" id="${esc(inputId)}" ${attrs || ''} style="flex:1 1 auto;min-width:0;">${unitSelectHtml(selectId, baseUnit, baseUnit, label)}</div>`;
+}
+// Changing the unit (lead decision 2026-10-26, after QA):
+//  - a number the owner TYPED keeps its number and only changes unit (type 1.5, pick kg -> 1.5 kg = 1500 g);
+//  - a number filled from saved data and not edited since is converted (800 mL -> 0.8 L).
+// The hints next to each box show what will be saved. onChange runs afterwards.
+// Code that fills a box from saved data calls markFilled(input) so it converts again.
+function markFilled(input){ if(input) delete input.dataset.typed; }
+function wireUnitConvert(input, select, onChange){
+  select.dataset.prev = select.value;
+  if(input) input.addEventListener('input', () => { input.dataset.typed = '1'; });
+  select.addEventListener('change', () => {
+    const from = select.dataset.prev, to = select.value;
+    if(input && input.value !== '' && input.dataset.typed !== '1' && from && from !== to){
+      const v = convertQuantity(input.value, from, to);
+      if(v != null) input.value = String(v);
+    }
+    select.dataset.prev = to;
+    if(onChange) onChange();
+  });
+}
+// Another ingredient chosen: offer its units again (keeps the chosen unit when it still fits)
+function resetUnitSelect(select, baseUnit){
+  const keep = compatibleUnits(baseUnit).includes(select.value) ? select.value : baseUnit;
+  select.innerHTML = unitOptionsHtml(baseUnit, keep);
+  select.dataset.prev = select.value;
+}
+// typed quantity -> base unit (null when it can't be converted)
+function typedToBase(value, unit, baseUnit){ return toBaseUnit(num(value), unit || baseUnit, baseUnit); }
+// "1.5 L (1500 mL)" when the typed unit is not the base unit, else "1500 mL"
+function typedQtyText(qtyBase, baseUnit, typedUnit){
+  const base = formatQuantity(qtyBase, baseUnit, baseUnit);
+  return typedUnit && typedUnit !== baseUnit ? `${formatQuantity(qtyBase, baseUnit, typedUnit)} (${base})` : base;
+}
+
 function activeIngredientsSorted(){ return state.ingredients.filter(i => i.active !== false).sort(byName); }
 function ingredientOptionsGrouped(selectedId, excludeId){
   const raw = rawIngredientsList().filter(i => i.id !== excludeId).sort(byName);
@@ -39,8 +87,10 @@ function recipesUsingAsOption(ingredientId){
 const ingFilter = {search: '', category: '', status: '', type: '', inactive: false};
 
 function renderIngredients(){
-  setTopbarActions(`<button class="btn btn-primary" id="btn-new-ingredient">+ Add ingredient</button>`)
-    .querySelector('#btn-new-ingredient').onclick = () => openIngredientForm();
+  const bar = setTopbarActions(`<button class="btn btn-outline" id="btn-manage-categories">Manage categories</button> <button class="btn btn-primary" id="btn-new-ingredient">+ Add ingredient</button>`);
+  bar.querySelector('#btn-new-ingredient').onclick = () => openIngredientForm();
+  bar.querySelector('#btn-manage-categories').onclick = () => openCategoryManager();
+  if(ingFilter.category && !state.categories.some(c => c.id === ingFilter.category)) ingFilter.category = '';   // that category was removed
   const content = document.getElementById('content');
   content.innerHTML = `
     <div class="toolbar">
@@ -117,7 +167,9 @@ function openIngredientForm(id){
     ${editing && editing.active === false ? `<div class="notice warn">This ingredient is inactive: it is hidden from lists and new recipes. Its history is kept.</div>` : ''}
     <div class="form-row"><label for="f-name">Ingredient name</label><input id="f-name" maxlength="80" value="${esc(editing ? editing.name : '')}" placeholder="e.g. Milk" ${produced ? 'disabled' : ''}></div>
     <div class="form-grid">
-      <div class="form-row"><label for="f-cat">Category</label><select id="f-cat">${selectOptions(state.categories.slice().sort(byName), editing ? editing.category_id : (state.categories.slice().sort(byName)[0] || {}).id)}</select></div>
+      <div class="form-row"><label for="f-cat">Category</label><select id="f-cat">${selectOptions(state.categories.slice().sort(byName), editing ? editing.category_id : (state.categories.slice().sort(byName)[0] || {}).id)}</select>
+        <div class="hint"><a class="linklike" id="f-cat-new">+ New category</a></div>
+        <div id="f-cat-new-row" style="display:none;margin-top:6px;gap:6px;align-items:center;"><input id="f-cat-new-name" maxlength="80" placeholder="New category name" aria-label="New category name" style="flex:1 1 auto;min-width:0;"><button class="btn btn-sm btn-primary" type="button" id="f-cat-new-save">Add</button></div></div>
       <div class="form-row"><label for="f-sup">Default supplier</label><select id="f-sup"><option value="">—</option>${selectOptions(state.suppliers.slice().sort(byName), editing ? editing.supplier_id : '')}</select></div>
     </div>
     <div class="form-grid">
@@ -128,7 +180,7 @@ function openIngredientForm(id){
       <div class="form-row"><label for="f-shelflife">Shelf life (days, optional)</label><input id="f-shelflife" type="number" step="1" min="0" value="${esc(editing.shelf_life_days || '')}"></div>
       <div class="form-row"><label for="f-storage">Storage notes</label><input id="f-storage" maxlength="120" value="${esc(editing.storage_notes || '')}" placeholder="e.g. Refrigerated"></div>
     </div>` : ''}
-    ${!editing ? `<div class="form-row"><label for="f-initial">Starting stock (optional)</label><input id="f-initial" type="number" step="any" min="0" value="0"><div class="hint">Recorded as starting stock in the inventory history</div></div>` : ''}
+    ${!editing ? `<div class="form-row"><label for="f-initial">Starting stock (optional)</label>${qtyWithUnitHtml('f-initial', 'f-initial-unit', UNITS[0], 'min="0" value="0"', 'Starting stock unit')}<div class="hint" id="f-initial-hint">Recorded as starting stock in the inventory history</div></div>` : ''}
     <div class="form-row"><label for="f-notes">Notes</label><textarea id="f-notes" rows="2">${esc(editing ? (editing.notes || '') : '')}</textarea></div>`;
   const foot = `
     ${editing ? (editing.active === false
@@ -140,6 +192,32 @@ function openIngredientForm(id){
     root.querySelector('[data-cancel]').onclick = closeModal;
     const goto = root.querySelector('#goto-source-recipe');
     if(goto && sourceRecipe) goto.onclick = () => { closeModal(); navigate('recipeDetail', sourceRecipe.id); };
+    // add a category without leaving this form; the dropdown refreshes and picks it
+    root.querySelector('#f-cat-new').onclick = () => { const r = root.querySelector('#f-cat-new-row'); r.style.display = 'flex'; root.querySelector('#f-cat-new-name').focus(); };
+    const catSave = root.querySelector('#f-cat-new-save');
+    catSave.onclick = () => busy(catSave, async () => {
+      const made = await addCategory(root.querySelector('#f-cat-new-name').value);
+      if(!made) return;
+      const sel = root.querySelector('#f-cat');
+      sel.innerHTML = selectOptions(state.categories.slice().sort(byName), made.id);
+      sel.value = made.id;
+      root.querySelector('#f-cat-new-name').value = '';
+      root.querySelector('#f-cat-new-row').style.display = 'none';
+      if(state.route === 'ingredients') renderIngredients();      // the category filter behind the form too
+    });
+    const initIn = root.querySelector('#f-initial'), initUnit = root.querySelector('#f-initial-unit');
+    if(initIn && initUnit){
+      const unitSel = root.querySelector('#f-unit');
+      const hint = () => {
+        const bu = unitSel.value, q = typedToBase(initIn.value, initUnit.value, bu);
+        root.querySelector('#f-initial-hint').textContent = 'Recorded as starting stock in the inventory history'
+          + (initUnit.value !== bu && q > 0 ? ` (saved as ${formatQuantity(q, bu, bu)})` : '');
+      };
+      resetUnitSelect(initUnit, unitSel.value);
+      wireUnitConvert(initIn, initUnit, hint);
+      unitSel.addEventListener('change', () => { resetUnitSelect(initUnit, unitSel.value); hint(); });
+      initIn.addEventListener('input', hint);
+    }
     const react = root.querySelector('#btn-reactivate-ing');
     if(react) react.onclick = () => busy(react, async () => {
       const ok = await boSave([Ops.update('ingredients', {id: editing.id, active: true, updated_at: nowISO()}), Ops.audit('Ingredient made active', editing.name, editing.id)], {success: 'Ingredient is active again'});
@@ -191,8 +269,11 @@ function openIngredientForm(id){
       } else {
         newId = uid();
         ops.push(Ops.upsert('ingredients', Object.assign({id: newId, is_produced_item: false, active: true, created_at: now}, fields)));
-        const initQty = num(root.querySelector('#f-initial').value);
-        if(initQty > 0) ops.push(Ops.upsert('inventory_transactions', {id: uid(), ingredient_id: newId, transaction_type: 'INITIAL_STOCK', quantity: initQty, reference_id: null, transaction_date: shopTodayKey(), notes: 'Starting stock', created_at: now}));
+        const initUnitSel = root.querySelector('#f-initial-unit');
+        const initQty = typedToBase(root.querySelector('#f-initial').value, initUnitSel && initUnitSel.value, fields.base_unit);
+        if(initQty == null && num(root.querySelector('#f-initial').value) > 0){ toast('That starting stock unit does not fit the base unit — choose the unit again', 'error'); return; }
+        if(initQty > 0) ops.push(Ops.upsert('inventory_transactions', {id: uid(), ingredient_id: newId, transaction_type: 'INITIAL_STOCK', quantity: initQty, reference_id: null, transaction_date: shopTodayKey(),
+          notes: 'Starting stock' + (initUnitSel && initUnitSel.value !== fields.base_unit ? ` (${formatQuantity(initQty, fields.base_unit, initUnitSel.value)})` : ''), created_at: now}));
         ops.push(Ops.audit('Ingredient added', name, newId));
       }
       if(await boSave(ops, {success: editing ? 'Ingredient updated' : 'Ingredient added'})){
@@ -201,6 +282,148 @@ function openIngredientForm(id){
       }
     });
   }});
+}
+
+/* ================= Categories (owner request #4, 2026-10-25) =================
+   Add, rename and remove ingredient categories. Removing one that ingredients use moves them first
+   (to another category or "Uncategorized"), in the SAME apply_changes call as the delete
+   (ingredient updates before the delete, or the database refuses it).
+   "House-Made / Produced" is found by its exact name (logic.js producedCategoryId, and the start-up
+   set-up in bo-core.js adds it again when missing), so it can't be renamed or removed here. */
+const UNCATEGORIZED_NAME = 'Uncategorized';
+const SUGGESTED_CATEGORY = 'Raw materials';
+function categoryKey(name){ return String(name || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
+function categoryNamed(name, exceptId){ const k = categoryKey(name); return state.categories.find(c => c.id !== exceptId && categoryKey(c.name) === k) || null; }
+function isLockedCategory(c){ return !!c && c.name === PRODUCED_CATEGORY_NAME; }
+function ingredientsInCategory(id){ return state.ingredients.filter(i => i.category_id === id); }
+function cleanCategoryName(raw){
+  const name = String(raw || '').trim().replace(/\s+/g, ' ');
+  if(!name){ toast('Enter a category name', 'error'); return null; }
+  if(name.length > 80){ toast('Keep the name under 80 characters', 'error'); return null; }
+  return name;
+}
+// returns the new category (after the reload) or null
+async function addCategory(raw){
+  const name = cleanCategoryName(raw); if(!name) return null;
+  const dup = categoryNamed(name);
+  if(dup){ toast(`There is already a category called "${dup.name}"`, 'error'); return null; }
+  const row = {id: uid(), name};
+  if(!await boSave([Ops.upsert('categories', row), Ops.audit('Category added', name, row.id)], {success: 'Category added'})) return null;
+  return state.categories.find(c => c.id === row.id) || row;
+}
+function categoryManagerBody(){
+  const list = state.categories.slice().sort(byName);
+  const hideHint = (() => { try{ return localStorage.getItem('cccc.bo.hideRawMaterialsHint') === '1'; }catch(e){ return false; } })();
+  const suggest = !categoryNamed(SUGGESTED_CATEGORY) && !hideHint;
+  return `
+    <div class="form-row" style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+      <input id="cat-new-name" maxlength="80" placeholder="New category, e.g. Raw materials" aria-label="New category name" style="flex:1 1 auto;min-width:0;">
+      <button class="btn btn-primary" id="cat-add">Add</button>
+    </div>
+    ${suggest ? `<div class="notice" id="cat-suggest" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">Suggested: <b>${esc(SUGGESTED_CATEGORY)}</b>
+      <button class="btn btn-sm btn-outline" id="cat-suggest-add">Add "${esc(SUGGESTED_CATEGORY)}"</button><a class="linklike" id="cat-suggest-hide" style="font-size:12.5px;">Not needed</a></div>` : ''}
+    ${list.length ? `<div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Category</th><th class="num">Ingredients</th><th></th></tr></thead><tbody>
+      ${list.map(c => {
+        const n = ingredientsInCategory(c.id).length, locked = isLockedCategory(c);
+        return `<tr data-cat-row="${esc(c.id)}"><td><b>${esc(c.name)}</b>${locked ? ' <span class="badge badge-gray" title="Production puts new house-made items here">Used by production</span>' : ''}</td>
+          <td class="num">${n}</td>
+          <td class="row-actions">${locked ? '<span class="hint">Kept for production</span>' : `<button class="btn btn-sm btn-ghost" data-cat-rename="${esc(c.id)}">Rename</button><button class="btn btn-sm btn-ghost" data-cat-remove="${esc(c.id)}">Remove</button>`}</td></tr>`;
+      }).join('')}</tbody></table></div>` : emptyBlock('No categories yet.')}
+    <p class="hint" style="margin-bottom:0;">"${esc(PRODUCED_CATEGORY_NAME)}" holds the items you make yourself (production), so it stays as it is. The Raw / Produced type filter on the Ingredients screen is separate and still works.</p>`;
+}
+// Text typed in "New category" survives every redraw of the window (after a save, or coming back
+// from Rename / Remove); it is cleared only when that name itself was added.
+let catDraft = '';
+// While a change is saving, the whole window is locked (boxes and buttons), the pressed button says "Saving…".
+async function lockCategoryWindow(root, btn, fn, label){
+  const box = root.closest('.modal') || root;
+  const nodes = [...box.querySelectorAll('input, button, select, textarea')].filter(n => !n.disabled);
+  const old = btn ? btn.innerHTML : '';
+  nodes.forEach(n => { n.disabled = true; });
+  if(btn) btn.textContent = label || 'Saving…';
+  try{ return await fn(); }
+  finally{ nodes.forEach(n => { if(n.isConnected) n.disabled = false; }); if(btn && btn.isConnected) btn.innerHTML = old; }
+}
+function openCategoryManager(){
+  const after = () => { if(state.route === 'ingredients') renderIngredients(); };
+  openModal({title: 'Manage categories', wide: true, body: categoryManagerBody(), foot: `<button class="btn btn-outline" data-cancel>Close</button>`,
+    onClose: after,
+    onMount: (root) => {
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      const add = root.querySelector('#cat-add'), input = root.querySelector('#cat-new-name');
+      input.value = catDraft;
+      input.addEventListener('input', () => { catDraft = input.value; });
+      add.onclick = () => { if(add.disabled) return; lockCategoryWindow(root, add, async () => {
+        const typed = input.value;
+        if(await addCategory(typed)){ if(catDraft === typed) catDraft = ''; openCategoryManager(); }
+      }); };
+      input.onkeydown = (e) => { if(e.key === 'Enter') add.click(); };
+      const sAdd = root.querySelector('#cat-suggest-add');
+      if(sAdd) sAdd.onclick = () => lockCategoryWindow(root, sAdd, async () => { if(await addCategory(SUGGESTED_CATEGORY)) openCategoryManager(); });
+      const sHide = root.querySelector('#cat-suggest-hide');
+      if(sHide) sHide.onclick = () => { try{ localStorage.setItem('cccc.bo.hideRawMaterialsHint', '1'); }catch(e){} root.querySelector('#cat-suggest').remove(); };
+      root.querySelectorAll('[data-cat-rename]').forEach(b => b.onclick = () => openCategoryRename(b.dataset.catRename));
+      root.querySelectorAll('[data-cat-remove]').forEach(b => b.onclick = () => lockCategoryWindow(root, b, () => removeCategoryFlow(b.dataset.catRemove), '…'));
+    }});
+}
+function openCategoryRename(id){
+  const c = state.categories.find(x => x.id === id);
+  if(!c || isLockedCategory(c)) return;
+  openModal({title: 'Rename category', body: `<div class="form-row"><label for="cat-rename">New name</label><input id="cat-rename" maxlength="80" value="${esc(c.name)}"></div>
+      <p class="hint">${plural(ingredientsInCategory(c.id).length, 'ingredient')} keep${ingredientsInCategory(c.id).length === 1 ? 's' : ''} this category under its new name.</p>`,
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="cat-rename-save">Rename</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-cancel]').onclick = () => openCategoryManager();
+      const save = root.querySelector('#cat-rename-save');
+      save.onclick = () => lockCategoryWindow(root, save, async () => {
+        const name = cleanCategoryName(root.querySelector('#cat-rename').value); if(!name) return;
+        if(name === c.name){ openCategoryManager(); return; }
+        const dup = categoryNamed(name, c.id);
+        if(dup){ toast(`There is already a category called "${dup.name}"`, 'error'); return; }
+        if(name === PRODUCED_CATEGORY_NAME){ toast('That name is kept for production — choose another one', 'error'); return; }
+        if(await boSave([Ops.update('categories', {id: c.id, name}), Ops.audit('Category renamed', `${c.name} → ${name}`, c.id)], {success: 'Category renamed'})) openCategoryManager();
+      });
+    }});
+}
+async function removeCategoryFlow(id){
+  const c = state.categories.find(x => x.id === id);
+  if(!c || isLockedCategory(c)) return;
+  const users = ingredientsInCategory(c.id);
+  if(!users.length){
+    const ok = await confirmDialog(`Remove the category <b>${esc(c.name)}</b>? No ingredient uses it.`, 'Remove');
+    if(ok) await boSave([Ops.del('categories', c.id), Ops.audit('Category removed', c.name, c.id)], {success: 'Category removed'});
+    openCategoryManager();
+    return;
+  }
+  const others = state.categories.filter(x => x.id !== c.id).sort(byName);
+  const uncat = others.find(x => categoryKey(x.name) === categoryKey(UNCATEGORIZED_NAME));
+  const canMakeUncat = categoryKey(c.name) !== categoryKey(UNCATEGORIZED_NAME);
+  const opts = others.map(x => `<option value="${esc(x.id)}" ${uncat && x.id === uncat.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')
+    + (!uncat && canMakeUncat ? `<option value="__new_uncat" selected>${esc(UNCATEGORIZED_NAME)} (new)</option>` : '');
+  if(!opts){ toast('Add another category first, so these ingredients have somewhere to go', 'error'); openCategoryManager(); return; }
+  openModal({title: 'Remove category', body: `
+      <p><b>${esc(c.name)}</b> is used by ${plural(users.length, 'ingredient')}${users.length <= 6 ? ` (${users.map(i => esc(i.name)).join(', ')})` : ''}. Where should ${users.length === 1 ? 'it' : 'they'} go?</p>
+      <div class="form-row"><label for="cat-move-to">Move to</label><select id="cat-move-to">${opts}</select></div>
+      <p class="hint">The ingredients are moved and the category removed together. Nothing else changes.</p>`,
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-danger" id="cat-move-go">Move and remove</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-cancel]').onclick = () => openCategoryManager();
+      const go = root.querySelector('#cat-move-go');
+      go.onclick = () => lockCategoryWindow(root, go, async () => {
+        let target = root.querySelector('#cat-move-to').value;
+        const ops = [];
+        let targetName;
+        if(target === '__new_uncat'){
+          target = uid(); targetName = UNCATEGORIZED_NAME;
+          ops.push(Ops.upsert('categories', {id: target, name: UNCATEGORIZED_NAME}));
+        } else targetName = (state.categories.find(x => x.id === target) || {}).name || '';
+        const now = nowISO();
+        users.forEach(i => ops.push(Ops.update('ingredients', {id: i.id, category_id: target, updated_at: now})));   // moves first …
+        ops.push(Ops.del('categories', c.id));                                                                      // … then the delete
+        ops.push(Ops.audit('Category removed', `${c.name} — ${plural(users.length, 'ingredient')} moved to ${targetName}`, c.id));
+        if(await boSave(ops, {success: `Category removed — ${plural(users.length, 'ingredient')} moved to ${targetName}`})) openCategoryManager();
+      }, 'Moving…');
+    }});
 }
 
 /* ---- ingredient detail ---- */
@@ -527,8 +750,8 @@ function openProductionForm(prefillRecipeId){
       <div class="form-row"><label for="pr-batch">Batch number</label><input id="pr-batch" maxlength="40"></div>
     </div>
     <div class="form-grid">
-      <div class="form-row"><label for="pr-expected">Expected yield</label><input type="number" step="any" min="0" id="pr-expected"><div class="hint" id="pr-yield-unit-hint"></div></div>
-      <div class="form-row"><label for="pr-actual">Actual yield</label><input type="number" step="any" min="0" id="pr-actual" placeholder="What you actually got"></div>
+      <div class="form-row"><label for="pr-expected">Expected yield</label>${qtyWithUnitHtml('pr-expected', 'pr-expected-unit', '', 'min="0"', 'Expected yield unit')}<div class="hint" id="pr-yield-unit-hint"></div></div>
+      <div class="form-row"><label for="pr-actual">Actual yield</label>${qtyWithUnitHtml('pr-actual', 'pr-actual-unit', '', 'min="0" placeholder="What you actually got"', 'Actual yield unit')}<div class="hint" id="pr-actual-hint"></div></div>
     </div>
     <div class="form-row" id="pr-waste-row" style="display:none;"><label for="pr-waste-reason">Why less than expected?</label><select id="pr-waste-reason"><option>Evaporation</option><option>Spillage</option><option>Overcooking</option><option>Preparation loss</option><option>Other</option></select></div>
     <div class="form-row"><label for="pr-notes">Notes</label><textarea id="pr-notes" rows="2"></textarea></div>
@@ -545,22 +768,33 @@ function openProductionForm(prefillRecipeId){
     root.querySelector('[data-cancel]').onclick = closeModal;
     const recipeSel = root.querySelector('#pr-recipe'), expectedInput = root.querySelector('#pr-expected');
     const actualInput = root.querySelector('#pr-actual'), batchInput = root.querySelector('#pr-batch');
+    const expUnit = root.querySelector('#pr-expected-unit'), actUnit = root.querySelector('#pr-actual-unit');
     const currentRecipe = () => state.recipes.find(r => r.id === recipeSel.value);
+    // Yields are typed in any unit of the recipe's yield unit family and saved in the recipe's yield unit
+    // (= the produced item's base unit), like every other stored quantity.
+    const yUnit = () => { const r = currentRecipe(); return (r && r.yield_unit) || ''; };
+    const inYieldUnit = (input, sel) => { const v = typedToBase(input.value, sel.value, yUnit()); return v == null ? 0 : v; };
     function loadDefaults(){
       const recipe = currentRecipe(); if(!recipe) return;
-      expectedInput.value = recipe.expected_yield || '';
+      resetUnitSelect(expUnit, yUnit()); expUnit.value = yUnit(); expUnit.dataset.prev = expUnit.value;
+      resetUnitSelect(actUnit, yUnit()); actUnit.value = yUnit(); actUnit.dataset.prev = actUnit.value;
+      expUnit.style.display = actUnit.style.display = compatibleUnits(yUnit()).length > 1 ? '' : 'none';
+      expectedInput.value = recipe.expected_yield || ''; markFilled(expectedInput);
       root.querySelector('#pr-yield-unit-hint').textContent = `Unit: ${recipe.yield_unit || '—'} (recipe normal yield: ${fmtNum(recipe.expected_yield, 0)} ${recipe.yield_unit || ''})`;
       batchInput.value = nextBatchNumber(recipe);
       updatePreview();
     }
     function updatePreview(){
       const recipe = currentRecipe(); if(!recipe) return;
-      const expected = num(expectedInput.value), actual = num(actualInput.value), baseYield = num(recipe.expected_yield);
+      const expected = inYieldUnit(expectedInput, expUnit), actual = inYieldUnit(actualInput, actUnit), baseYield = num(recipe.expected_yield);
       const multiplier = baseYield > 0 ? expected / baseYield : 0;
+      const yu = yUnit();
+      root.querySelector('#pr-actual-hint').textContent = [expUnit.value !== yu && expected > 0 ? `Expected: ${formatQuantity(expected, yu, yu)}` : '',
+        actUnit.value !== yu && actual > 0 ? `Actual: ${formatQuantity(actual, yu, yu)}` : ''].filter(Boolean).join(' · ');
       const rc = recipeCost(recipe.id);
       const estCost = rc.total * multiplier;
       root.querySelector('#pr-est-cost').textContent = expected > 0 ? fmtMoney(estCost) : '—';
-      root.querySelector('#pr-est-unit-cost').textContent = actual > 0 ? fmtMoney(estCost / actual) + '/' + (recipe.yield_unit || '') : '—';
+      root.querySelector('#pr-est-unit-cost').textContent = actual > 0 ? fmtMoney(estCost / actual) + '/' + unitLabel(recipe.yield_unit || '') : '—';
       root.querySelector('#pr-waste-row').style.display = (expected > 0 && actual > 0 && actual < expected) ? 'block' : 'none';
       const short = rc.lines.filter(l => num(l.quantity) * multiplier > ingredientStock(l.ingredient_id) + 1e-9);
       root.querySelector('#pr-uses').innerHTML = multiplier > 0 ? 'Uses: ' + rc.lines.map(l => `${esc(ingName(l.ingredient_id))} ${fmtNum(num(l.quantity) * multiplier, 2)} ${esc((ingredientById(l.ingredient_id) || {}).base_unit || '')}`).join(' · ')
@@ -568,6 +802,7 @@ function openProductionForm(prefillRecipeId){
     }
     recipeSel.onchange = loadDefaults;
     expectedInput.oninput = updatePreview; actualInput.oninput = updatePreview;
+    wireUnitConvert(expectedInput, expUnit, updatePreview); wireUnitConvert(actualInput, actUnit, updatePreview);
     loadDefaults();
     const save = root.querySelector('#btn-save-prod');
     save.onclick = () => busy(save, async () => {
@@ -575,7 +810,7 @@ function openProductionForm(prefillRecipeId){
       if(!recipe){ toast('Select a product / recipe', 'error'); return; }
       const producedIng = ingredientById(recipe.produced_ingredient_id);
       if(!producedIng){ toast('This recipe is not linked to an inventory item — edit the recipe first.', 'error'); return; }
-      const baseYield = num(recipe.expected_yield), expected = num(expectedInput.value), actual = num(actualInput.value);
+      const baseYield = num(recipe.expected_yield), expected = inYieldUnit(expectedInput, expUnit), actual = inYieldUnit(actualInput, actUnit);
       if(baseYield <= 0){ toast('This recipe has no expected yield — edit the recipe first.', 'error'); return; }
       if(expected <= 0){ toast('Enter an expected yield for this batch', 'error'); return; }
       if(actual <= 0){ toast('Enter the actual yield produced', 'error'); return; }
@@ -599,10 +834,14 @@ function openProductionForm(prefillRecipeId){
         ops.push(Ops.upsert('inventory_transactions', {id: uid(), ingredient_id: line.ingredient_id, transaction_type: 'PRODUCTION_USE', quantity: usedQty,
           reference_id: batch.id, transaction_date: prodDate, notes: `Used in production batch ${batch.batch_number} (${recipe.name})`, created_at: now}));
       });
-      ops.push(Ops.upsert('inventory_transactions', {id: uid(), ingredient_id: producedIng.id, transaction_type: 'PRODUCTION', quantity: actual,
+      // stock is in the produced item's base unit (normally the same as the recipe's yield unit)
+      const producedQty = producedIng.base_unit && recipe.yield_unit && producedIng.base_unit !== recipe.yield_unit
+        ? (convertQuantity(actual, recipe.yield_unit, producedIng.base_unit) ?? actual) : actual;
+      ops.push(Ops.upsert('inventory_transactions', {id: uid(), ingredient_id: producedIng.id, transaction_type: 'PRODUCTION', quantity: producedQty,
         reference_id: batch.id, transaction_date: prodDate, notes: `Batch ${batch.batch_number}`, created_at: now}));
-      ops.push(Ops.audit('Batch produced', `${batch.batch_number}: ${fmtNum(actual, 2)} ${recipe.yield_unit || ''} of ${producedIng.name}`, batch.id));
-      if(await boSave(ops, {success: `Produced ${fmtNum(actual, 2)} ${recipe.yield_unit || ''} of ${producedIng.name} — stock updated`})){
+      const actualText = typedQtyText(actual, recipe.yield_unit || '', actUnit.value);
+      ops.push(Ops.audit('Batch produced', `${batch.batch_number}: ${actualText} of ${producedIng.name}`, batch.id));
+      if(await boSave(ops, {success: `Produced ${actualText} of ${producedIng.name} — stock updated`})){
         closeModal();
         if(state.route === 'production') rerender(); else navigate('production');
       }
@@ -633,7 +872,7 @@ function renderInventory(){
     <div id="inv-table-wrap"></div>
     <div class="section-title">Recent waste</div>
     ${recentWaste.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Ingredient</th><th class="num">Quantity</th><th>Reason</th><th class="num">Waste cost</th><th>Notes</th></tr></thead><tbody>
-      ${recentWaste.map(w => `<tr><td>${fmtDay(w.date)}</td><td>${esc(ingName(w.ingredient_id))}</td><td class="num">${fmtNum(w.quantity, 2)} ${esc(w.unit || '')}</td><td>${esc(w.reason || '')}</td><td class="num">${fmtMoney(num(w.quantity) * (ingredientCosting(w.ingredient_id).current || 0))}</td><td class="text-light">${esc(w.notes || '')}</td></tr>`).join('')}
+      ${recentWaste.map(w => `<tr><td>${fmtDay(w.date)}</td><td>${esc(ingName(w.ingredient_id))}</td><td class="num">${esc(wasteQtyText(w))}</td><td>${esc(w.reason || '')}</td><td class="num">${fmtMoney(num(w.quantity) * (ingredientCosting(w.ingredient_id).current || 0))}</td><td class="text-light">${esc(w.notes || '')}</td></tr>`).join('')}
     </tbody></table></div>` : emptyBlock('No waste recorded.')}`;
   document.getElementById('inv-type-filter').onchange = e => { invFilter.type = e.target.value; renderInventoryTable(); };
   document.getElementById('inv-status-filter').onchange = e => { invFilter.status = e.target.value; renderInventoryTable(); };
@@ -665,34 +904,49 @@ function renderInventoryTable(){
   wrap.querySelectorAll('[data-produce]').forEach(b => b.onclick = (e) => { e.stopPropagation(); openProductionForm((sourceRecipeForIngredient(ingredientById(b.dataset.produce)) || {}).id); });
   wrap.querySelectorAll('[data-adjust]').forEach(b => b.onclick = (e) => { e.stopPropagation(); openAdjustmentForm(b.dataset.adjust); });
 }
+// waste.quantity is in the ingredient's base unit; waste.unit is the unit the owner typed (shown back in it)
+function wasteQtyText(w){
+  const ing = ingredientById(w.ingredient_id);
+  return ing && ing.base_unit ? formatQuantity(w.quantity, ing.base_unit, w.unit || ing.base_unit) : `${fmtNum(w.quantity, 2)} ${unitLabel(w.unit || '')}`.trim();
+}
 function openWasteForm(prefillId){
   const list = activeIngredientsSorted();
   if(!list.length){ toast('Add an ingredient first', 'warn'); return; }
   const body = `
     <div class="form-row"><label for="w-ing">Ingredient</label><select id="w-ing">${list.map(i => `<option value="${esc(i.id)}" ${prefillId === i.id ? 'selected' : ''}>${esc(i.name)} (${esc(i.base_unit)})</option>`).join('')}</select></div>
     <div class="form-grid">
-      <div class="form-row"><label for="w-qty">Quantity wasted</label><input type="number" step="any" min="0" id="w-qty" placeholder="0"><div class="hint" id="w-stock"></div></div>
+      <div class="form-row"><label for="w-qty">Quantity wasted</label>${qtyWithUnitHtml('w-qty', 'w-unit', (ingredientById(prefillId) || list[0]).base_unit, 'min="0" placeholder="0"', 'Waste unit')}<div class="hint" id="w-stock"></div></div>
       <div class="form-row"><label for="w-date">Date</label><input type="date" id="w-date" value="${shopTodayKey()}"></div>
     </div>
     <div class="form-row"><label for="w-reason">Reason</label><select id="w-reason"><option>Expired</option><option>Spillage</option><option>Over-portioned</option><option>Spoiled</option><option>Prep error</option><option>Other</option></select></div>
     <div class="form-row"><label for="w-notes">Notes</label><textarea id="w-notes" rows="2"></textarea></div>`;
   openModal({title: 'Record waste', body, foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-amber" id="btn-save-waste">Record waste</button>`, onMount: (root) => {
     root.querySelector('[data-cancel]').onclick = closeModal;
-    const showStock = () => { const i = ingredientById(root.querySelector('#w-ing').value); root.querySelector('#w-stock').textContent = i ? `In stock now: ${fmtNum(ingredientStock(i.id), 2)} ${i.base_unit}` : ''; };
-    root.querySelector('#w-ing').onchange = showStock; showStock();
+    const wQty = root.querySelector('#w-qty'), wUnit = root.querySelector('#w-unit');
+    const showStock = () => {
+      const i = ingredientById(root.querySelector('#w-ing').value);
+      if(!i){ root.querySelector('#w-stock').textContent = ''; return; }
+      const q = typedToBase(wQty.value, wUnit.value, i.base_unit);
+      root.querySelector('#w-stock').textContent = `In stock now: ${formatQuantity(ingredientStock(i.id), i.base_unit, wUnit.value)}`
+        + (wUnit.value !== i.base_unit && q > 0 ? ` · takes off ${formatQuantity(q, i.base_unit, i.base_unit)}` : '');
+    };
+    root.querySelector('#w-ing').onchange = () => { const i = ingredientById(root.querySelector('#w-ing').value); if(i) resetUnitSelect(wUnit, i.base_unit); showStock(); };
+    wireUnitConvert(wQty, wUnit, showStock); wQty.addEventListener('input', showStock);
+    resetUnitSelect(wUnit, (ingredientById(root.querySelector('#w-ing').value) || {}).base_unit); showStock();
     const save = root.querySelector('#btn-save-waste');
     save.onclick = () => busy(save, async () => {
       const ing = ingredientById(root.querySelector('#w-ing').value);
-      const qty = num(root.querySelector('#w-qty').value);
       if(!ing){ toast('Choose an ingredient', 'error'); return; }
-      if(qty <= 0){ toast('Enter a valid quantity', 'error'); return; }
+      const typedUnit = compatibleUnits(ing.base_unit).includes(wUnit.value) ? wUnit.value : ing.base_unit;
+      const qty = typedToBase(wQty.value, typedUnit, ing.base_unit);       // saved in the base unit
+      if(!(qty > 0)){ toast('Enter a valid quantity', 'error'); return; }
       const date = root.querySelector('#w-date').value || shopTodayKey();
       const reason = root.querySelector('#w-reason').value, notes = root.querySelector('#w-notes').value, now = nowISO();
-      const rec = {id: uid(), ingredient_id: ing.id, quantity: qty, unit: ing.base_unit, reason, date, notes, created_at: now};
+      const rec = {id: uid(), ingredient_id: ing.id, quantity: qty, unit: typedUnit, reason, date, notes, created_at: now};
       if(await boSave([
         Ops.upsert('waste', rec),
         Ops.upsert('inventory_transactions', {id: uid(), ingredient_id: ing.id, transaction_type: 'WASTE', quantity: qty, reference_id: rec.id, transaction_date: date, notes: reason + (notes ? ' — ' + notes : ''), created_at: now}),
-        Ops.audit('Waste recorded', `${ing.name} — ${fmtNum(qty, 2)} ${ing.base_unit} (${reason})`, rec.id),
+        Ops.audit('Waste recorded', `${ing.name} — ${typedQtyText(qty, ing.base_unit, typedUnit)} (${reason})`, rec.id),
       ], {success: 'Waste recorded'})){ closeModal(); rerender(); }
     });
   }});
@@ -703,42 +957,55 @@ function openAdjustmentForm(prefillId){
   const body = `
     <div class="form-row"><label for="a-ing">Ingredient</label><select id="a-ing">${list.map(i => `<option value="${esc(i.id)}" ${prefillId === i.id ? 'selected' : ''}>${esc(i.name)} (${esc(i.base_unit)})</option>`).join('')}</select><div class="hint" id="a-stock"></div></div>
     <div class="seg" style="margin-bottom:12px;"><button class="seg-btn active" type="button" data-mode="delta">Add or take off an amount</button><button class="seg-btn" type="button" data-mode="count">I counted it</button></div>
-    <div class="form-row" id="a-delta-row"><label for="a-qty">Adjustment amount (use a minus to reduce, e.g. -50)</label><input type="number" step="any" id="a-qty" placeholder="e.g. -50 or 20"></div>
-    <div class="form-row" id="a-count-row" style="display:none;"><label for="a-count">Amount counted on the shelf</label><input type="number" step="any" min="0" id="a-count"><div class="hint" id="a-count-hint"></div></div>
+    <div class="form-row" id="a-delta-row"><label for="a-qty">Adjustment amount (use a minus to reduce, e.g. -50)</label>${qtyWithUnitHtml('a-qty', 'a-qty-unit', (ingredientById(prefillId) || list[0]).base_unit, 'placeholder="e.g. -50 or 20"', 'Adjustment unit')}<div class="hint" id="a-qty-hint"></div></div>
+    <div class="form-row" id="a-count-row" style="display:none;"><label for="a-count">Amount counted on the shelf</label>${qtyWithUnitHtml('a-count', 'a-count-unit', (ingredientById(prefillId) || list[0]).base_unit, 'min="0"', 'Counted unit')}<div class="hint" id="a-count-hint"></div></div>
     <div class="form-row"><label for="a-date">Date</label><input type="date" id="a-date" value="${shopTodayKey()}"></div>
     <div class="form-row"><label for="a-notes">Reason / notes</label><textarea id="a-notes" rows="2" placeholder="e.g. Physical stock count correction"></textarea></div>`;
   openModal({title: 'Adjust stock', body, foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="btn-save-adj">Save adjustment</button>`, onMount: (root) => {
     root.querySelector('[data-cancel]').onclick = closeModal;
     let mode = 'delta';
     const cur = () => ingredientById(root.querySelector('#a-ing').value);
+    const qIn = root.querySelector('#a-qty'), qUnit = root.querySelector('#a-qty-unit');
+    const cIn = root.querySelector('#a-count'), cUnit = root.querySelector('#a-count-unit');
+    const signed = (q, bu, unit) => (q >= 0 ? '+' : '−') + formatQuantity(Math.abs(q), bu, unit);
+    const countDelta = (i) => { const c = typedToBase(cIn.value, cUnit.value, i.base_unit); return c == null ? null : Math.round((c - ingredientStock(i.id)) * 1e6) / 1e6; };
     const refresh = () => {
       const i = cur();
-      root.querySelector('#a-stock').textContent = i ? `In stock now: ${fmtNum(ingredientStock(i.id), 2)} ${i.base_unit}` : '';
-      const counted = root.querySelector('#a-count').value;
-      root.querySelector('#a-count-hint').textContent = i && counted !== '' ? `Change: ${num(counted) - ingredientStock(i.id) >= 0 ? '+' : ''}${fmtNum(num(counted) - ingredientStock(i.id), 2)} ${i.base_unit}` : '';
+      root.querySelector('#a-stock').textContent = i ? `In stock now: ${formatQuantity(ingredientStock(i.id), i.base_unit, mode === 'count' ? cUnit.value : qUnit.value)}` : '';
+      const d = i && cIn.value !== '' ? countDelta(i) : null;
+      root.querySelector('#a-count-hint').textContent = d != null ? `Change: ${signed(d, i.base_unit, i.base_unit)}${cUnit.value !== i.base_unit ? ' (' + signed(d, i.base_unit, cUnit.value) + ')' : ''}` : '';
+      const q = i && qIn.value !== '' ? typedToBase(qIn.value, qUnit.value, i.base_unit) : null;
+      root.querySelector('#a-qty-hint').textContent = q && qUnit.value !== i.base_unit ? `Change: ${signed(q, i.base_unit, i.base_unit)}` : '';
     };
-    root.querySelector('#a-ing').onchange = refresh; root.querySelector('#a-count').oninput = refresh; refresh();
+    root.querySelector('#a-ing').onchange = () => { const i = cur(); if(i){ resetUnitSelect(qUnit, i.base_unit); resetUnitSelect(cUnit, i.base_unit); } refresh(); };
+    cIn.oninput = refresh; qIn.oninput = refresh;
+    wireUnitConvert(qIn, qUnit, refresh); wireUnitConvert(cIn, cUnit, refresh);
+    { const i = cur(); if(i){ resetUnitSelect(qUnit, i.base_unit); resetUnitSelect(cUnit, i.base_unit); } }
+    refresh();
     root.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => {
       mode = b.dataset.mode;
       root.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('active', x === b));
       root.querySelector('#a-delta-row').style.display = mode === 'delta' ? 'block' : 'none';
       root.querySelector('#a-count-row').style.display = mode === 'count' ? 'block' : 'none';
+      refresh();
     });
     const save = root.querySelector('#btn-save-adj');
     save.onclick = () => busy(save, async () => {
       const ing = cur();
       if(!ing){ toast('Choose an ingredient', 'error'); return; }
-      let qty;
+      let qty;                                   // always saved in the base unit
+      const typedUnit = mode === 'count' ? cUnit.value : qUnit.value;
       if(mode === 'count'){
-        if(root.querySelector('#a-count').value === ''){ toast('Enter the amount you counted', 'error'); return; }
-        qty = Math.round((num(root.querySelector('#a-count').value) - ingredientStock(ing.id)) * 1e6) / 1e6;
-      } else qty = num(root.querySelector('#a-qty').value);
+        if(cIn.value === ''){ toast('Enter the amount you counted', 'error'); return; }
+        qty = countDelta(ing);
+      } else qty = typedToBase(qIn.value, qUnit.value, ing.base_unit);
+      if(qty == null){ toast('Choose the unit again — it does not fit this ingredient', 'error'); return; }
       if(!qty){ toast(mode === 'count' ? 'The count matches the stock — nothing to change' : 'Enter an amount that is not zero', mode === 'count' ? 'warn' : 'error'); return; }
       const notes = root.querySelector('#a-notes').value.trim() || (mode === 'count' ? 'Stock count' : '');
       const id = uid();
       if(await boSave([
         Ops.upsert('inventory_transactions', {id, ingredient_id: ing.id, transaction_type: 'ADJUSTMENT', quantity: qty, reference_id: null, transaction_date: root.querySelector('#a-date').value || shopTodayKey(), notes, created_at: nowISO()}),
-        Ops.audit('Stock adjusted', `${ing.name} ${qty > 0 ? '+' : ''}${fmtNum(qty, 2)} ${ing.base_unit}${notes ? ' — ' + notes : ''}`, id),
+        Ops.audit('Stock adjusted', `${ing.name} ${qty > 0 ? '+' : '-'}${typedQtyText(Math.abs(qty), ing.base_unit, typedUnit)}${mode === 'count' ? ` (counted ${formatQuantity(typedToBase(cIn.value, cUnit.value, ing.base_unit), ing.base_unit, cUnit.value)})` : ''}${notes ? ' — ' + notes : ''}`, id),
       ], {success: 'Stock adjusted'})){ closeModal(); rerender(); }
     });
   }});

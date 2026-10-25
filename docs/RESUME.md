@@ -1,46 +1,39 @@
-# Resume here (save point: 2026-10-20, checkpoint 6)
+# Resume here (save point: 2026-10-26, checkpoint 8, release 1.1 ready)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
-## Where we are: ready for go-live
-- Branch `wip/cccc-online-qr`, checkpoint 6, pushed to GitHub. **Pull request #1** (→ `main`) is
-  open for the owner. It says to merge only after setup guide Parts 1–3.
-- Tests: 49 suites, 3,238 checks, all passing (two runs).
-- Final security verdict: **ready for go-live**. Every finding is fixed, including the last
-  privacy fix: customer erasure now also covers item notes and refund reasons.
-- CAPTCHA (Cloudflare Turnstile) is supported in all apps but **off**. Owner decision: go live
-  without it; turn it on later only if fake orders appear. Order when the time comes: owner sends the
-  site key → C adds it → C confirms → owner switches it on in Supabase.
-- The old POS/Inventory/test pages are moved to `_archive/old-apps/`. They come off the live site
-  when PR #1 is merged.
-- Live Supabase and the live site are still unchanged.
+## Where we are
+- **Live:** release 1.0, commit a53238e (merged PR #1 on 2026-10-20). This is the **last working version** (see `docs/checkpoints.md`).
+- **Release 1.1 (batch 1) is built, tested and reviewed** on `wip/cccc-online-qr`. It's waiting for the owner to follow `docs/RELEASE_1.1.md`:
+  1. download a backup;
+  2. run the read-only cash check and tell C the answer;
+  3. run `007_batch1.sql`;
+  4. merge the new pull request;
+  5. reload the counters.
+- **Batch 1 contents** (`docs/owner-feedback.md` #1–#6, T1, T2):
+  - Back Office button at the bottom of the counter menu;
+  - unit conversion everywhere (stored amounts stay in base units, the typed unit is only for display);
+  - category manager plus Raw materials;
+  - Excel import/export for recipes (`cccc/back/bo-excel.js`, vendored JSZip; imported menu items hidden by default);
+  - tick-and-remove recipes;
+  - ₱0 cash lines skipped in the old-backup import;
+  - `fo_sync` refuses ₱0 pay-ins and pay-outs (`AMOUNT_NOT_POSITIVE`, script 007).
+- **QA:** `tests/run_all.sh --runs 2` gives 60 suites and 3,716 checks, all green after the fixes. Security verdict: ready (all low findings fixed).
+- **The owner's private files** are in `/home/claude/private/`: costing spreadsheets and the developer changelog. They are never committed. The changelog also lives in the Claude project docs (`claude/developer-changelog.md`) and in the owner's Obsidian.
 
-## Next steps
-1. **Owner follows `docs/SETUP_GUIDE.md`** (about 45 min); C is on standby:
-   - backup;
-   - run 004;
-   - Supabase settings;
-   - merge PR #1;
-   - Back Office first setup;
-   - test.
-2. **After go-live:**
-   - a `005` script drops `profiles.pin_hash`;
-   - optional copy polish: the Back Office "Could not reach the CAPTCHA check" message says "CAPTCHA"
-     (core-sync, `captcha.js`).
-3. **Later list:**
-   - prototype walkthrough (`docs/prototype/NOTES.md`);
-   - Senior/PWD 20% discount button;
-   - loyalty stamps rewards.
+## After the owner releases 1.1
+- Mark 007 as run and frozen in CLAUDE.md; the next script is 008.
+- Add checkpoint 9 "Release 1.1 live" and make it the new last working version.
+- Update the changelog (1.1 = live) and send the owner the Obsidian notes.
 
-## Saving to Obsidian
-The session note lives at `docs/obsidian/CCCC POS — session log.md` and is updated at every
-checkpoint. The owner's local Claude Code copies it into the vault: "Pull the latest from GitHub and
-copy docs/obsidian/CCCC POS — session log.md into my vault."
+## Next batch (not started)
+- T3: `not null` and no-NaN rules on `cash_movements.amount` (008), after the owner's check.
+- T4: optional review flag for large pay-ins (ask the owner).
+- Later list: drop `profiles.pin_hash`, Senior/PWD discount button, loyalty stamps, prototype walkthrough, CAPTCHA only if fake orders appear.
 
 ## How the team works
-Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md` (`tests/run_all.sh --runs 2`, about 30 min).
-Save points: `docs/checkpoints.md`.
-- Each agent uses its own database and port: FO `db_fo`/8790, BO `db_bo`/8791, QR `db_qr`/8792,
-  DB `db_sec`, QA `cccc`/8787.
+Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs/checkpoints.md`.
+- Each agent has its own database and port: FO `db_fo`/8790, BO `db_bo`/8791 (batch 1 also used `db_bo2`/8793 and `db_bo_a`/8799), QR `db_qr`/8792, DB `db_sec`, QA `cccc`/8787.
 - Start PostgreSQL with `tests/start_pg.sh` after a restart.
 - Test PINs: cashier 1111, manager 222222, owner 999999.
+- The Obsidian notes live in `docs/obsidian/` (session log, public repo). The **developer changelog is private** and is never put in the repo.

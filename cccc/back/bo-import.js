@@ -170,7 +170,7 @@ async function convertOldPayload(payload, existing, notes){
 
   const out = {}; IMPORT_ORDER.forEach(t => { out[t] = []; });
   const legacyPins = [];
-  let unlinked = 0, held = 0, already = 0;
+  let unlinked = 0, held = 0, already = 0, broken = 0;
   const add = (table, oldId, row) => {
     row.id = ref(table, oldId); row.local_id = String(oldId);
     if(skipInsert.has(row.id)) already++; else out[table].push(row);
@@ -271,6 +271,9 @@ async function convertOldPayload(payload, existing, notes){
   });
   each('cashMovements', r => {
     const sh = ref('shifts', r.shift_id);
+    // The database only takes pay-ins / pay-outs above ₱0 (live rule cash_movements.amount > 0): a ₱0 or minus line
+    // from the old app is a broken line - skipped and counted, the rest of the file still comes in.
+    if(!(num(r.amount) > 0)){ broken++; return; }
     if(ok(sh)) add('cash_movements', r.id, {shift_id: sh, type: r.type === 'PAY_OUT' ? 'PAY_OUT' : 'PAY_IN', amount: num(r.amount), reason: r.reason || '',
       performed_by: ref('staff', r.performed_by) || staffNamed(r.performed_by_name), performed_by_name: r.performed_by_name || '', at: isoOrNull(r.at) || nowISO(), created_at: isoOrNull(r.created_at || r.at) || nowISO()});
   });
@@ -309,7 +312,7 @@ async function convertOldPayload(payload, existing, notes){
   const openShifts = out.shifts.filter(s => s.status === 'ACTIVE').length;
   if(openShifts) notes.push(`${plural(openShifts, 'shift was', 'shifts were')} still open in the old app and came in as open (they don't affect today's counters).`);
   ['orders', 'orderItems', 'diningTables', 'customers'].forEach(k => { if((src[k] || []).length) notes.push(`"${k}" from that file are not brought in.`); });
-  return {tables: out, legacyPins, unlinked, already, leftOut, dropped, saleNumbers: new Map([...saleInfo].map(([id, v]) => [id, v.number])),
+  return {tables: out, legacyPins, unlinked, broken, already, leftOut, dropped, saleNumbers: new Map([...saleInfo].map(([id, v]) => [id, v.number])),
     settings: src.settings ? mapOldSettings(src.settings) : null};
 }
 
@@ -414,7 +417,7 @@ function convertCcccPayload(payload, existingIds, notes){
   const has = (t, id) => !!id && ((existingIds[t] && existingIds[t].has(id)) || inFile[t].has(id));
   const deviceIds = new Set(state.devices.map(d => d.id)), storeIds = new Set(state.stores.map(s => s.id));
   const phones = new Set((existingIds._customerPhones || []));
-  let skippedPhones = 0, unlinked = 0, already = 0;
+  let skippedPhones = 0, unlinked = 0, already = 0, broken = 0;
   IMPORT_ORDER.forEach(t => {
     (src[t] || []).forEach(r0 => {
       if(!r0 || !isUuid(r0.id)) return;
@@ -427,6 +430,7 @@ function convertCcccPayload(payload, existingIds, notes){
         if(!has(parent, r[col])){ if(required) ok = false; else r[col] = null; }
       });
       if(!ok){ unlinked++; return; }
+      if(t === 'cash_movements' && !(num(r.amount) > 0)){ broken++; return; }     // the database refuses ₱0 or less
       if('device_id' in r && r.device_id && !deviceIds.has(r.device_id)) r.device_id = null;
       if('store_id' in r && r.store_id && !storeIds.has(r.store_id)) r.store_id = null;
       if(t === 'ingredients'){ r._source_recipe_id = has('recipes', r.source_recipe_id) ? r.source_recipe_id : null; r.source_recipe_id = null; }
@@ -438,7 +442,7 @@ function convertCcccPayload(payload, existingIds, notes){
   });
   if(skippedPhones) notes.push(`${plural(skippedPhones, 'customer')} came in without a mobile number because another customer already has it (merge them in Customers if they are the same person).`);
   if(!sameShop && payload.business) notes.push('This backup is from another shop account: its table QR codes got new codes.');
-  return {tables: out, legacyPins: [], unlinked, already, leftOut: [], dropped: new Set(),
+  return {tables: out, legacyPins: [], unlinked, broken, already, leftOut: [], dropped: new Set(),
     saleNumbers: new Map((src.sales || []).filter(x => x && x.id).map(x => [x.id, x.transaction_number || ''])),
     settings: src.settings ? mapOldSettings(src.settings) : null};
 }
@@ -464,7 +468,7 @@ async function existingForCccc(payload){
   }
   return ex;
 }
-// payload -> {imported, already, unlinked, pins, notes}
+// payload -> {imported, already, unlinked, broken, pins, notes}
 async function runImport(payload, opts){
   opts = opts || {};
   const kind = payloadKind(payload);
@@ -569,9 +573,9 @@ async function runImport(payload, opts){
   const already = conv.already;
   const imported = IMPORT_ORDER.reduce((n, t) => n + addedBy[t], 0);
   if(refusedLines.length) notes.push(`${plural(refusedLines.length, 'stock line was', 'stock lines were')} left out (sale ${[...new Set(refusedLines)].join(', ')}) because the database would not accept more stock put back than the sale took out.`);
-  await applyChanges([Ops.audit('Data imported', `${imported} new records, ${already} already here${conv.unlinked ? ', ' + conv.unlinked + ' not linked' : ''}${leftOut.length ? ', ' + plural(leftOut.length, 'refund') + ' left out' : ''} (${kind === 'old' ? 'old apps' : 'Back Office backup'})`)]).catch(() => {});
+  await applyChanges([Ops.audit('Data imported', `${imported} new records, ${already} already here${conv.unlinked ? ', ' + conv.unlinked + ' not linked' : ''}${conv.broken ? ', ' + conv.broken + ' broken (₱0 pay-in / pay-out)' : ''}${leftOut.length ? ', ' + plural(leftOut.length, 'refund') + ' left out' : ''} (${kind === 'old' ? 'old apps' : 'Back Office backup'})`)]).catch(() => {});
   progress(1, 1, 'Done');
-  return {imported, already, unlinked: conv.unlinked, notes, leftOut, kind, perTable: IMPORT_ORDER.filter(t => addedBy[t]).map(t => [TABLE_LABEL[t], addedBy[t]])};
+  return {imported, already, unlinked: conv.unlinked, broken: conv.broken || 0, notes, leftOut, kind, perTable: IMPORT_ORDER.filter(t => addedBy[t]).map(t => [TABLE_LABEL[t], addedBy[t]])};
 }
 
 /* ================= Backup & import screen ================= */
@@ -700,7 +704,7 @@ function showImportPreview(payload, target){
       await boLoad().catch(() => {});
       BO.salesCache.clear();
       applyCustomTheme(); renderShell();
-      prog.innerHTML = `<div class="notice ok"><b>Done.</b> ${res.imported.toLocaleString('en-PH')} new records added${res.already ? `, ${res.already.toLocaleString('en-PH')} were already here (skipped)` : ''}${res.unlinked ? `, ${res.unlinked} skipped because what they belong to is missing` : ''}.
+      prog.innerHTML = `<div class="notice ok"><b>Done.</b> ${res.imported.toLocaleString('en-PH')} new records added${res.already ? `, ${res.already.toLocaleString('en-PH')} were already here (skipped)` : ''}${res.unlinked ? `, ${res.unlinked} skipped because what they belong to is missing` : ''}${res.broken ? `, ${res.broken} skipped because ${res.broken === 1 ? 'it is a broken line' : 'they are broken lines'} (a pay-in or pay-out of ₱0 or less)` : ''}.
         ${res.perTable.length ? `<div class="hint">${res.perTable.map(([l, n]) => `${n.toLocaleString('en-PH')} ${esc(l)}`).join(' · ')}</div>` : ''}
         ${res.notes.map(n => `<div class="hint">• ${esc(n)}</div>`).join('')}</div>${leftOutRefundsHtml(res.leftOut, res.kind)}`;
       go.textContent = 'Imported';

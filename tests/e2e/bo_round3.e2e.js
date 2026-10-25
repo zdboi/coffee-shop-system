@@ -108,8 +108,10 @@ const OWNER_STAFF = () => sql(`select id from staff where profile_id='00000000-0
     await bo.click(`#pin-update-banner [data-newpin="${MAX}"]`);
     await bo.waitForSelector('#sp-pin');
     ok(/exactly 6 digits/.test(await bo.textContent('#active-modal-overlay')), 'set-PIN window says managers need exactly 6 digits');
+    await H.focusSettled(bo, 'sp-pin');      // the window moves focus to the first box shortly after opening
     await bo.fill('#sp-pin', '2468'); await bo.fill('#sp-pin2', '2468'); await bo.click('#sp-save');
-    ok(/Managers and admins need a PIN of exactly 6 digits/.test(await toastText(bo, 'error')), '4 digits refused on the screen');
+    const t4 = await toastText(bo, 'error').catch(() => '');
+    ok(/Managers and admins need a PIN of exactly 6 digits/.test(t4), '4 digits refused on the screen', t4);
     await clearToasts(bo);
     ok(sql(`select extensions.crypt('4545', pin_hash) = pin_hash from staff_pins where staff_id='${MAX}'`) === 't', 'old PIN unchanged');
     // the server's own answer (as an older screen / another tab would get it)
