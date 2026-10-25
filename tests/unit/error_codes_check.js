@@ -3,7 +3,7 @@
 //   Counter (cccc/front)     -> ERROR_TEXT in cccc/shared/ui.js (friendlyError)
 //   Back Office (cccc/back)  -> ERROR_TEXT + the extra texts added in cccc/back/bo-core.js
 //   QR page (cccc/order)     -> MSG / errText in cccc/order/order.js
-// Codes are read from cccc/supabase/004_cccc_online_qr.sql ("raise exception 'CODE'" and
+// Codes are read from cccc/supabase/004_cccc_online_qr.sql and later scripts (005, 006, 007...) ("raise exception 'CODE'" and
 // "'error', 'CODE'"), per server function, following calls to other public.<function>(...) inside it.
 // The functions each app calls are read from its cloud.rpc('<name>' ...) calls.
 // Run:  node tests/unit/error_codes_check.js [repo path]
@@ -19,12 +19,18 @@ const INTERNAL = new Set(['BAD_CONFLICT_MODE', 'UNKNOWN_OP', 'BAD_ACTION', 'BAD_
   'BAD_DEVICE_KEY',      // the counter always makes a 36-character key
   'ALREADY_A_USER']);    // the counter always pairs with its own anonymous login
 
-const sqlText = read('cccc/supabase/004_cccc_online_qr.sql');
+// 004, then every later numbered script (005, 006, 007...): a function re-created in a later script
+// replaces the earlier definition (as on the database).
+const SQL_FILES = fs.readdirSync(path.join(ROOT, 'cccc/supabase')).filter(f => /^\d{3}_.*\.sql$/.test(f) && f >= '004').sort();
 const blocks = {};
 // create or replace function public.<name>(...) ... as $$ <body> $$;
 const re = /create or replace function public\.([a-z_0-9]+)\s*\([\s\S]*?\$\$([\s\S]*?)\$\$;/g;
-let m;
-while((m = re.exec(sqlText))) blocks[m[1]] = (blocks[m[1]] || '') + m[2];
+for(const f of SQL_FILES){
+  const sqlText = read('cccc/supabase/' + f), here = {};
+  let m;
+  while((m = re.exec(sqlText))) here[m[1]] = (here[m[1]] || '') + m[2];
+  Object.assign(blocks, here);
+}
 const own = {};
 for(const [fn, body] of Object.entries(blocks)){
   const codes = new Set();
@@ -66,5 +72,9 @@ for(const app of APPS){
   if(missing.length){ failed++; console.log(`FAIL ${app.name}: server codes shown without a plain-language text: ${[...new Set(missing)].join(', ')}`); }
   else console.log(`ok   ${app.name}: every server code from ${app.rpcs.length} functions has a plain-language text`);
 }
+// the later scripts are really read: 007's pay-in / pay-out code reaches the counter's fo_sync
+checks++;
+if(reach('fo_sync').has('AMOUNT_NOT_POSITIVE') && ERROR_TEXT.AMOUNT_NOT_POSITIVE) console.log('ok   007: AMOUNT_NOT_POSITIVE reachable from fo_sync and has a counter text: ' + ERROR_TEXT.AMOUNT_NOT_POSITIVE);
+else { failed++; console.log('FAIL 007: AMOUNT_NOT_POSITIVE not reachable from fo_sync, or no counter text'); }
 console.log(`SUMMARY unit/error_codes_check: ${checks} checks, ${failed} failed`);
 process.exit(failed ? 1 : 0);

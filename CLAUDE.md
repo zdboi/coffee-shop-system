@@ -25,7 +25,11 @@ plain-language, step-by-step instructions.
   screens, sales calendar and importer are the source for building `cccc/back/` (they use a different
   data style: camelCase fields + `DB.put`; convert to this file's conventions when porting).
 - **The owner ran `cccc/supabase/004_cccc_online_qr.sql` on the live project on 2026-10-20** ("Success").
-  It is now **frozen**: every database change goes in a new numbered script (`005_…sql`, …), per golden rule 6.
+  It is now **frozen**: every database change goes in a new numbered script, per golden rule 6.
+- The owner also ran **`005_live_fixes.sql`** and **`006_live_fix_sync_operations.sql`** on live (2026-10-20); both
+  are frozen too. **`007_batch1.sql`** (batch 1, release 1.1) is written and security-reviewed but NOT yet run
+  on live — it may still be edited until the owner runs it; then it freezes and the next script is `008_…sql`. The live database has older CHECK rules than our reconstruction:
+  any new value written to a live column must be checked against the live rule list first.
 
 ## Golden rules (everyone)
 1. **Own only your files.** Each file has exactly one owner (table below). Need a change in
@@ -83,6 +87,26 @@ plain-language, step-by-step instructions.
    is public; the secret key lives only in Supabase.
 
 ## Lead housekeeping
+- **Before building any owner request, check whether the app already does it, fully or partly** (owner decision
+  2026-10-25: they may forget earlier changes). If it repeats or overlaps an existing feature, tell the owner
+  and wait for their decision. Never build a repeated feature without asking.
+  Once the owner's private developer changelog exists (feedback #2), check each request against it first
+  (owner decision 2026-10-25), and keep it updated with every release.
+- **Keep the last working version** (owner decision 2026-10-25, for every app): before any update goes live, the
+  version currently live and working is saved as a checkpoint in `docs/checkpoints.md` (commit link + ZIP, marked
+  "last working version"). Only after that is the new release merged. If a release goes wrong, the owner says
+  "Go back to the last working version" and the lead restores it as a new commit (nothing in the history is deleted).
+- **Use savepoints for debugging and side-by-side comparison, only when necessary** (owner decision 2026-10-25):
+  e.g. a bug the normal tests can't explain, or a risky change where old vs new behaviour must be compared.
+  Not a routine step for every release (keeping the last working version, above, still always happens). The lead opens any
+  savepoint as a separate read-only copy with `git worktree add /home/claude/savepoints/<short-sha> <sha>`
+  (agents still never switch branches or edit that copy). Then:
+  - **Debugging:** when something breaks, run the same test or steps on the last working version and on the new
+    one; whatever differs is where to look. For "when did this start?", the lead checks older savepoints in turn.
+  - **A/B comparison:** serve both versions at once on the local test setup (e.g. old on port 8793, new on 8794,
+    each with its own test database) and compare test results, screenshots, speed and behaviour before release.
+    Never split real customers or the live database between two versions; the live site always runs one version.
+  - Remove the copy when done (`git worktree remove`).
 - At every checkpoint the lead updates `docs/RESUME.md`, the project doc, and sends the owner an
   updated Obsidian session note ("CCCC POS — session log.md"; the owner drops it into their vault).
 

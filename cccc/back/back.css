@@ -153,3 +153,29 @@ details.table-twin[open] summary{margin-bottom:8px;}
 .tag-pill.signed-in-diff{margin-top:0;}
 .pin-update-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px;}
 .pin-update-list li{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
+
+/* ---- recipes: pick several to remove (2026-10-25) ---- */
+.rec-pick-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px;}
+.rec-tick{display:inline-flex;align-items:center;justify-content:center;min-width:28px;min-height:28px;margin:-4px 0 -4px -4px;cursor:pointer;flex-shrink:0;}
+.rec-tick input{width:17px;height:17px;cursor:pointer;}
+.rec-card.picked{box-shadow:0 0 0 2px var(--amber), var(--shadow);}
+.rec-rm-list{margin:6px 0 0 18px;font-size:13.5px;line-height:1.7;max-height:220px;overflow:auto;}
+.ri-table select.ri-unit, .ri-table select.mo-unit{min-width:64px;}
+
+/* ---- Excel import preview (2026-10-25) ---- */
+.modal.xl-modal{max-width:1100px;width:96vw;}
+.xl-summary{font-size:14.5px;padding:10px 12px;background:var(--beige);border-radius:10px;}
+.xl-file{margin-top:8px;}
+.xl-sheet{border:1px solid var(--beige-dark);border-radius:10px;margin-top:8px;background:var(--white);}
+.xl-sheet > summary{cursor:pointer;padding:9px 12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13.5px;}
+.xl-sheet.xl-off > summary{opacity:.6;}
+.xl-sheet-body{padding:4px 12px 12px;}
+.xl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:4px 12px;}
+.xl-grid .form-row{margin-bottom:6px;}
+.xl-warn{margin:6px 0 8px 18px;font-size:12.5px;color:#8a6c1f;line-height:1.6;}
+.xl-table-wrap table{font-size:12.5px;}
+.xl-table-wrap td, .xl-table-wrap th{padding:6px 8px;vertical-align:middle;}
+.xl-ing-table select{max-width:220px;}
+.xl-price{width:96px;}
+.xl-mini{font-size:12px;color:var(--text-light);display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap;}
+.xl-flag{color:#9a3412;font-weight:600;}

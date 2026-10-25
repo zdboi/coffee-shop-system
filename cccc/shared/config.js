@@ -13,5 +13,5 @@ window.CCCC_CONFIG = {
   // then paste the Turnstile *site* key here. NEVER paste the secret key in this file:
   // the secret key goes only into Supabase.
   CAPTCHA_SITE_KEY: '',
-  APP_VERSION: '5.0.0',
+  APP_VERSION: '5.1.0',
 };

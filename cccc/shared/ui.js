@@ -92,6 +92,7 @@ const ERROR_TEXT = {
   SALE_NOT_REFUNDABLE: 'This sale cannot be refunded: it is not finished yet, or it was already fully refunded.',
   SALE_NOT_FOUND: 'The sale for this refund is not on the server (it may not have uploaded). Please tell the owner.',
   BAD_AMOUNT: 'That amount is not valid. Enter an amount of ₱0 or more.',
+  AMOUNT_NOT_POSITIVE: 'The amount must be more than ₱0.',
   BAD_REFUND_TYPE: 'This refund has an unknown type, so it was not saved. Please tell the owner.',
   BAD_REFUND: 'This refund is missing information, so it was not saved. Please tell the owner.',
   // Sales and stock

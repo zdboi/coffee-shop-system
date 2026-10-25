@@ -53,16 +53,19 @@ const BASE = H.BASE, SHOTS = require('path').join(H.SHOTS, 'bo-' + H.sizeTag() +
   await until(() => sql(`select active from ingredients where id='${cups}'`) === 't', 'active again'); await modalGone(page);
   ok(true, 'ingredient made active again');
 
-  // recipe with sales can't be deleted -> hidden instead
+  // recipe with sales can't be deleted -> hidden instead. Batch 1: the history is checked FIRST, so Delete
+  // goes straight to one "Hide it" dialog (no delete is tried, so no refused call any more).
   await page.waitForTimeout(500);
   await go(page, 'recipeDetail', '33333333-0000-0000-0000-000000000004');
-  net.allow(/\/rpc\/apply_changes$/);      // the delete is tried and the server refuses it (sales history -> HTTP 400) by design
-  await page.click('#edit-rec-btn'); await page.click('#btn-delete-rec'); await confirm(page);
-  await page.waitForSelector('#active-modal-overlay [data-ok]:has-text("Hide it")'); await confirm(page);
+  const auditsBefore = Number(sql(`select count(*) from audit_log where action='Recipe hidden'`));
+  await page.click('#edit-rec-btn'); await page.click('#btn-delete-rec');
+  await page.waitForSelector('#active-modal-overlay [data-ok]', {timeout: 10000});
+  const firstDialog = await page.textContent('#active-modal-overlay [data-ok]');
+  ok(/Hide it/.test(firstDialog), 'recipe with sales history: the first dialog after Delete is "Hide it" (no "Delete?" step first)', firstDialog);
+  await confirm(page);
   await until(() => sql(`select active::text||pos_visible::text||qr_visible::text from recipes where id='33333333-0000-0000-0000-000000000004'`) === 'falsefalsefalse', 'hidden');
   await modalGone(page); await page.waitForTimeout(400);
-  net.disallow();
-  ok(true, 'recipe with sales history: delete refused, hidden from both menus instead');
+  ok(sql(`select count(*) from recipes where id='33333333-0000-0000-0000-000000000004'`) === '1' && Number(sql(`select count(*) from audit_log where action='Recipe hidden'`)) === auditsBefore + 1, 'recipe with sales history: kept, hidden from both menus, audit "Recipe hidden"');
 
   // staff deactivate / reactivate
   await go(page, 'staff');

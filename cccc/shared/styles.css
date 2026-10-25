@@ -207,6 +207,18 @@ input:checked + .slider-tog:before{transform:translateX(18px);}
   #sidebar{width:64px;}
   #sidebar .brand span, #sidebar .nav-item span.label{display:none;}
   #sidebar .brand small{display:none;}
+  /* Counter footer in icon-only mode: compact round buttons (44px, still tappable).
+     The words stay in the page (font-size 0), so screen readers and the
+     sync pill's title still name each control. */
+  #sidebar-foot:has(#lock-btn){padding:10px 0;display:flex;flex-direction:column;align-items:center;gap:8px;}
+  #sidebar-foot:has(#lock-btn) > div{margin:0 !important;}
+  #sidebar-foot .role-badge, #sidebar-foot #sync-pill, #sidebar-foot #lock-btn{
+    font-size:0;width:44px !important;height:44px;min-height:44px;padding:0;margin:0 !important;gap:0;
+    display:inline-flex;align-items:center;justify-content:center;border-radius:50%;overflow:hidden;white-space:nowrap;}
+  #sidebar-foot .role-badge::before{content:'👤';font-size:18px;line-height:1;}
+  #sidebar-foot #lock-btn{background:rgba(255,255,255,0.08);}
+  #sidebar-foot #lock-btn::before{content:'🔒';font-size:18px;line-height:1;}
+  #sidebar-foot #sync-pill .dot{width:12px;height:12px;}
   .grid-4{grid-template-columns:repeat(2,1fr);}
   .form-grid{grid-template-columns:1fr;}
 }

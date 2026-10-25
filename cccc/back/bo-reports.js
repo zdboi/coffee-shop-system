@@ -69,8 +69,8 @@ function stockReport(id){
     case 'lowStock':
       return {headers: ['Ingredient', 'Stock', 'Reorder level', 'Status'], rows: active.filter(i => stockStatus(ingredientStock(i.id), i.reorder_level) !== 'IN').sort(byName)
         .map(i => [i.name, fmtNum(ingredientStock(i.id), 2) + ' ' + i.base_unit, fmtNum(i.reorder_level, 1), statusBadgeText(stockStatus(ingredientStock(i.id), i.reorder_level))])};
-    case 'waste': {
-      const rows = state.waste.slice().sort((a, b) => String(b.date).localeCompare(String(a.date))).map(w => [dayValue(w.date), ingName(w.ingredient_id), fmtNum(w.quantity, 2) + ' ' + (w.unit || ''), w.reason || '', M(num(w.quantity) * (ingredientCosting(w.ingredient_id).current || 0))]);
+    case 'waste': {      // w.quantity is in the base unit (cost maths unchanged); shown in the unit the owner typed
+      const rows = state.waste.slice().sort((a, b) => String(b.date).localeCompare(String(a.date))).map(w => [dayValue(w.date), ingName(w.ingredient_id), wasteQtyText(w), w.reason || '', M(num(w.quantity) * (ingredientCosting(w.ingredient_id).current || 0))]);
       return {headers: ['Date', 'Ingredient', 'Quantity', 'Reason', 'Waste cost'], rows, total: ['Total', '', '', '', M(rows.reduce((s, r) => s + r[4].money, 0))]};
     }
     case 'production':

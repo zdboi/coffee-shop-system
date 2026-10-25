@@ -12,9 +12,15 @@
 
 /* ================= Recipes & menu ================= */
 const recFilter = {search: '', category: '', type: '', hidden: false};
+const recPicked = new Set();          // recipes ticked on the list (for "Remove selected")
 function renderRecipes(){
-  setTopbarActions(`<button class="btn btn-primary" id="btn-new-recipe">+ New recipe</button>`)
-    .querySelector('#btn-new-recipe').onclick = () => openRecipeForm();
+  const bar = setTopbarActions(`<button class="btn btn-outline" id="btn-excel-import" type="button">Import from Excel</button>
+    <button class="btn btn-outline" id="btn-excel-export" type="button">Export to Excel</button>
+    <button class="btn btn-primary" id="btn-new-recipe">+ New recipe</button>`);
+  bar.querySelector('#btn-new-recipe').onclick = () => openRecipeForm();
+  const imp = bar.querySelector('#btn-excel-import'), exp = bar.querySelector('#btn-excel-export');
+  imp.onclick = () => busy(imp, () => startExcelImport(), 'Opening…');
+  exp.onclick = () => busy(exp, () => exportRecipesToExcel(), 'Preparing…');
   const content = document.getElementById('content');
   const cats = [...new Set(state.recipes.map(r => r.category).filter(Boolean))].sort();
   const activeRecipes = state.recipes.filter(r => r.active !== false);
@@ -34,21 +40,44 @@ function renderRecipes(){
       </div>
       <div class="text-light" style="font-size:13px;">${plural(activeRecipes.length, 'active recipe')}</div>
     </div>
+    <div class="rec-pick-bar" id="rec-pick-bar">
+      <label class="chk"><input type="checkbox" id="rec-pick-all"> Select all shown</label>
+      <button class="btn btn-sm btn-danger" id="rec-remove-picked" type="button" disabled>Remove selected (0)</button>
+    </div>
     <div id="rec-grid-wrap"></div>`;
+  document.getElementById('rec-pick-all').onchange = (e) => {
+    recShownIds().forEach(id => { if(e.target.checked) recPicked.add(id); else recPicked.delete(id); });
+    renderRecipesGrid();
+  };
+  const rm = document.getElementById('rec-remove-picked');
+  rm.onclick = () => busy(rm, () => removePickedRecipes(), 'Checking…');
   content.querySelectorAll('[data-type-tab]').forEach(b => b.onclick = () => { recFilter.type = b.dataset.typeTab; renderRecipes(); });
   document.getElementById('rec-search').oninput = e => { recFilter.search = e.target.value; renderRecipesGrid(); };
   document.getElementById('rec-cat-filter').onchange = e => { recFilter.category = e.target.value; renderRecipesGrid(); };
   document.getElementById('rec-hidden').onchange = e => { recFilter.hidden = e.target.checked; renderRecipesGrid(); };
   renderRecipesGrid();
 }
-function renderRecipesGrid(){
-  const wrap = document.getElementById('rec-grid-wrap');
-  if(!wrap) return;
+function recShownList(){
   let list = state.recipes.filter(r => recFilter.hidden || r.active !== false);
   if(recFilter.type) list = list.filter(r => recipeTypeOf(r) === recFilter.type);
   if(recFilter.search) list = list.filter(r => r.name.toLowerCase().includes(recFilter.search.toLowerCase()));
   if(recFilter.category) list = list.filter(r => r.category === recFilter.category);
-  list.sort(byName);
+  return list.sort(byName);
+}
+function recShownIds(){ return recShownList().map(r => r.id); }
+// Ticks only count for recipes that are shown; the bar shows how many are ticked.
+function refreshPickBar(){
+  const shown = new Set(recShownIds());
+  [...recPicked].forEach(id => { if(!shown.has(id)) recPicked.delete(id); });
+  const rm = document.getElementById('rec-remove-picked'), all = document.getElementById('rec-pick-all');
+  if(rm && !rm.dataset.busy){ rm.textContent = `Remove selected (${recPicked.size})`; rm.disabled = recPicked.size === 0; }
+  if(all){ all.checked = shown.size > 0 && recPicked.size === shown.size; all.indeterminate = recPicked.size > 0 && recPicked.size < shown.size; all.disabled = shown.size === 0; }
+}
+function renderRecipesGrid(){
+  const wrap = document.getElementById('rec-grid-wrap');
+  if(!wrap) return;
+  const list = recShownList();
+  refreshPickBar();
   if(!list.length){
     wrap.innerHTML = `<div class="empty-state"><div class="big">📖</div>No recipes found.<br><br><button class="btn btn-primary" id="empty-add-rec">+ New recipe</button></div>`;
     wrap.querySelector('#empty-add-rec').onclick = () => openRecipeForm();
@@ -71,9 +100,10 @@ function renderRecipesGrid(){
       sellsDirectly && r.pos_visible === false ? '<span class="badge badge-gray">Not at counter</span>' : '',
       sellsDirectly && r.qr_visible === false ? '<span class="badge badge-gray">Not on QR</span>' : '',
     ].join('');
-    return `<div class="card clickable" data-id="${esc(r.id)}" style="cursor:pointer;" tabindex="0">
+    return `<div class="card clickable rec-card ${recPicked.has(r.id) ? 'picked' : ''}" data-id="${esc(r.id)}" style="cursor:pointer;" tabindex="0">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
         <div style="display:flex;gap:10px;align-items:center;min-width:0;">
+          <label class="rec-tick" title="Select for removing"><input type="checkbox" data-pick="${esc(r.id)}" ${recPicked.has(r.id) ? 'checked' : ''} aria-label="Select ${esc(r.name)}"></label>
           ${r.image_url ? `<img class="thumb" src="${esc(r.image_url)}" alt="">` : ''}
           <div style="min-width:0;"><b style="font-size:16px;">${esc(r.name)}</b><div class="text-light" style="font-size:12px;">${esc(recipeTypeLabel(recipeTypeOf(r)))}${r.category ? ' · ' + esc(r.category) : ''}${(r.modifier_groups || []).length ? ' · ' + plural(r.modifier_groups.length, 'option group') : ''}</div></div>
         </div>
@@ -83,22 +113,164 @@ function renderRecipesGrid(){
     </div>`;
   }).join('')}</div>`;
   wrap.querySelectorAll('[data-id]').forEach(card => {
-    card.onclick = () => navigate('recipeDetail', card.dataset.id);
-    card.onkeydown = (e) => { if(e.key === 'Enter') navigate('recipeDetail', card.dataset.id); };
+    card.onclick = (e) => { if(e.target.closest('.rec-tick')) return; navigate('recipeDetail', card.dataset.id); };
+    card.onkeydown = (e) => { if(e.key === 'Enter' && !e.target.closest('.rec-tick')) navigate('recipeDetail', card.dataset.id); };
+  });
+  wrap.querySelectorAll('[data-pick]').forEach(box => {
+    box.onclick = (e) => e.stopPropagation();
+    box.onchange = () => {
+      if(box.checked) recPicked.add(box.dataset.pick); else recPicked.delete(box.dataset.pick);
+      box.closest('.rec-card').classList.toggle('picked', box.checked);
+      refreshPickBar();
+    };
   });
 }
+
+/* ---- remove several recipes at once (owner request #6, 2026-10-25) ----
+   Recipes without history are deleted (with their ingredient lines); recipes with sales or
+   production history, or that make an inventory item, are made inactive instead (hidden).
+   Everything in ONE all-or-nothing call, with one audit entry. */
+function pickedRemoveDialog(del, hide){
+  return new Promise(resolve => {
+    let answered = false;
+    const names = list => list.map(x => `<li>${esc(x.r.name)}${x.why ? ` <span class="text-light">— ${esc(x.why.join(' and '))}</span>` : ''}</li>`).join('');
+    openModal({
+      title: 'Remove recipes',
+      body: `${del.length ? `<p><b>${plural(del.length, 'recipe')} will be deleted</b> (this cannot be undone):</p><ul class="rec-rm-list">${names(del)}</ul>` : ''}
+        ${hide.length ? `<p style="margin-top:12px;"><b>${plural(hide.length, 'recipe')} will be hidden instead</b> (made inactive: off the counter and the QR menu).
+          ${hide.length === 1 ? 'It has' : 'They have'} sales or production history, or make an inventory item, so deleting would break your records. You can show inactive recipes again with "Show inactive".</p>
+          <ul class="rec-rm-list">${names(hide)}</ul>` : ''}`,
+      foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-danger" data-ok>Remove ${plural(del.length + hide.length, 'recipe')}</button>`,
+      onClose: () => { if(!answered) resolve(false); },
+      onMount: (root) => {
+        root.querySelector('[data-cancel]').onclick = () => { answered = true; closeModal(); resolve(false); };
+        root.querySelector('[data-ok]').onclick = () => { answered = true; closeModal(); resolve(true); };
+      },
+    });
+  });
+}
+async function removePickedRecipes(){
+  const picked = [...recPicked].map(id => state.recipes.find(r => r.id === id)).filter(Boolean);
+  if(!picked.length) return;
+  let reasons;
+  try{ reasons = await recipeHistoryReasons(picked.map(r => r.id)); }
+  catch(err){ toast('Could not check the recipes\' history: ' + friendlyError(err), 'error'); return; }
+  const del = [], hide = [];
+  picked.forEach(r => { if(reasons[r.id] && reasons[r.id].length) hide.push({r, why: reasons[r.id]}); else del.push({r}); });
+  if(!await pickedRemoveDialog(del, hide)) return;
+  const now = nowISO(), ops = [];
+  del.forEach(({r}) => { ops.push(Ops.delWhere('recipe_ingredients', {recipe_id: r.id})); ops.push(Ops.del('recipes', r.id)); });
+  hide.forEach(({r}) => ops.push(hideRecipeOp(r.id, now)));
+  const details = [del.length ? 'Deleted: ' + del.map(x => x.r.name).join(', ') : '', hide.length ? 'Hidden (has history): ' + hide.map(x => x.r.name).join(', ') : ''].filter(Boolean).join(' · ');
+  ops.push(Ops.audit('Recipes removed', details, null));
+  const msg = [del.length ? plural(del.length, 'recipe') + ' deleted' : '', hide.length ? plural(hide.length, 'recipe') + ' hidden' : ''].filter(Boolean).join(', ');
+  if(await boSave(ops, {success: msg})){
+    recPicked.clear();
+    if(state.route === 'recipes') renderRecipes();
+  }
+}
+
+/* ---- units in recipes (owner request #3, 2026-10-25) ----
+   The owner may type a recipe or option amount in any unit of the ingredient's family
+   (150 mL of an ingredient kept in L). What is STORED is always the ingredient's base unit
+   (quantity / ingredient_qty_delta); the chosen unit is kept only to show it the same way
+   again (recipe_ingredients.unit, option.unit). Changing the unit converts the shown number. */
+function qtyInputValue(q){ const n = Number(q); return isFinite(n) ? String(Number(n.toFixed(6))) : ''; }
+function recUnitOptionsHtml(baseUnit, selected){
+  return compatibleUnits(baseUnit).map(u => `<option value="${esc(u)}" ${u === selected ? 'selected' : ''}>${esc(unitLabel(u))}</option>`).join('');
+}
+// Fills a unit dropdown for this ingredient; keeps `preferred` when it fits, else the base unit.
+function fillUnitSelect(sel, ing, preferred){
+  if(!ing){ sel.innerHTML = ''; sel.dataset.prev = ''; sel.disabled = true; return; }
+  const units = compatibleUnits(ing.base_unit);
+  const u = units.includes(preferred) ? preferred : ing.base_unit;
+  sel.innerHTML = recUnitOptionsHtml(ing.base_unit, u);
+  sel.value = u; sel.dataset.prev = u; sel.dataset.base = ing.base_unit;
+  sel.disabled = units.length < 2;
+}
+// The unit dropdown changed (owner decision 2026-10-26):
+//  * a number the owner TYPED keeps its number, only its unit changes (typed 1.5, pick kg -> 1.5 kg);
+//  * a number filled in from saved data (not edited yet) is converted (saved 100 g -> 0.1 kg).
+// Typing in the box marks it (input.dataset.typed); see markTyped().
+function markTyped(input){ input.dataset.typed = '1'; }
+function convertShownQty(input, sel){
+  const from = sel.dataset.prev, to = sel.value;
+  if(input.value !== '' && from && to && from !== to && !input.dataset.typed){
+    const v = convertQuantity(input.value, from, to);
+    if(v != null) input.value = qtyInputValue(v);
+  }
+  sel.dataset.prev = to;
+}
+// "saved as 1500 g" under a box typed in another unit than the base unit (empty otherwise)
+function savedAsText(value, unit, baseUnit){
+  if(!baseUnit || !unit || unit === baseUnit || value === '' || value == null) return '';
+  const v = toBaseUnit(num(value), unit, baseUnit);
+  return v == null ? '' : 'saved as ' + formatQuantity(v, baseUnit, baseUnit, 4);
+}
+// cost of one shown unit (cost per base unit x base units in one shown unit), e.g. ₱0.10/mL -> ₱100.00 / L
+function costPerShownUnit(costPerBase, baseUnit, unit){
+  const f = unit && unit !== baseUnit ? convertQuantity(1, unit, baseUnit) : 1;
+  return num(costPerBase) * (f == null ? 1 : f);
+}
+// Typed amount + chosen unit -> amount in the ingredient's base unit.
+function baseQtyOf(value, unit, baseUnit){
+  if(!baseUnit) return num(value);
+  const v = toBaseUnit(num(value), unit || baseUnit, baseUnit);
+  return v == null ? num(value) : v;
+}
+function rowBaseQty(tr){
+  const ing = ingredientById(tr.querySelector('.ri-ing').value);
+  return ing ? baseQtyOf(tr.querySelector('.ri-qty').value, tr.querySelector('.ri-unit').value, ing.base_unit) : 0;
+}
+// Shown amount for a stored base quantity, e.g. "150" + "mL" (4 decimals where tiny amounts matter)
+function shownQty(qtyBase, baseUnit, unit){
+  const r = fromBaseUnit(qtyBase, baseUnit, unit);
+  return {num: String(Number(Number(r.qty).toFixed(4))), unit: unitLabel(r.unit)};
+}
+
+/* ---- recipe history: which recipes can't be deleted (they'd break records) ----
+   A recipe used by a sale, a production batch, or that makes an inventory item is
+   kept (made inactive) instead. Checked BEFORE saving, so one all-or-nothing call
+   deletes the rest (a delete that hits such a reference would fail the whole call). */
+async function recipeHistoryReasons(ids){
+  const reasons = {};
+  const add = (id, why) => { (reasons[id] = reasons[id] || []).includes(why) || reasons[id].push(why); };
+  ids.forEach(id => {
+    const r = state.recipes.find(x => x.id === id);
+    if(r && r.produced_ingredient_id) add(id, 'makes an inventory item');
+    if(state.ingredients.some(i => i.source_recipe_id === id)) add(id, 'makes an inventory item');
+    if(state.productionBatches.some(b => b.recipe_id === id)) add(id, 'has production history');
+  });
+  // one small question per recipe and table ("is there at least one row?"), a few at a time,
+  // so a recipe with many sales can't hide another recipe's history
+  const ask = async (id) => {
+    const [sold, made] = await Promise.all([
+      cloud.select('sale_items', {select: 'id', eq: {recipe_id: id}, limit: 1}),
+      cloud.select('production_batches', {select: 'id', eq: {recipe_id: id}, limit: 1}),
+    ]);
+    if((sold || []).length) add(id, 'has sales history');
+    if((made || []).length) add(id, 'has production history');
+  };
+  for(let i = 0; i < ids.length; i += 8) await Promise.all(ids.slice(i, i + 8).map(ask));
+  return reasons;
+}
+function hideRecipeOp(id, now){ return Ops.update('recipes', {id, active: false, pos_visible: false, qr_visible: false, updated_at: now || nowISO()}); }
 
 /* ---- the options (modifier groups) editor, used inside the recipe form ---- */
 function optionsEditor(container, groups){
   const ingOptions = (sel) => `<option value="">— none —</option>` + state.ingredients.filter(i => i.active !== false || i.id === sel).sort(byName)
-    .map(i => `<option value="${esc(i.id)}" ${sel === i.id ? 'selected' : ''}>${esc(i.name)} (${esc(i.base_unit)})</option>`).join('');
+    .map(i => `<option value="${esc(i.id)}" ${sel === i.id ? 'selected' : ''}>${esc(i.name)} (${esc(unitLabel(i.base_unit))})</option>`).join('');
   function optionRowHtml(o){
     o = o || {id: uid(), label: '', price_delta: 0, ingredient_id: '', ingredient_qty_delta: 0};
+    const ing = o.ingredient_id ? ingredientById(o.ingredient_id) : null;
+    const shown = ing ? fromBaseUnit(o.ingredient_qty_delta, ing.base_unit, o.unit) : {qty: num(o.ingredient_qty_delta), unit: ''};
+    const units = ing ? compatibleUnits(ing.base_unit) : [];
     return `<tr data-opt="${esc(o.id)}">
       <td><input class="mo-label" maxlength="40" value="${esc(o.label || '')}" placeholder="e.g. Large" aria-label="Option name"></td>
       <td><input class="mo-price" type="number" step="any" value="${esc(num(o.price_delta))}" style="min-width:76px;" aria-label="Price change in pesos"></td>
       <td><select class="mo-ing" aria-label="Uses extra ingredient">${ingOptions(o.ingredient_id || '')}</select></td>
-      <td><input class="mo-qty" type="number" step="any" value="${esc(num(o.ingredient_qty_delta))}" style="min-width:76px;" aria-label="Extra amount"></td>
+      <td><input class="mo-qty" type="number" step="any" value="${esc(qtyInputValue(shown.qty))}" style="min-width:76px;" aria-label="Extra amount"><div class="hint mo-saved">${esc(ing ? savedAsText(shown.qty, shown.unit, ing.base_unit) : '')}</div></td>
+      <td><select class="mo-unit" aria-label="Unit of the extra amount" data-prev="${esc(shown.unit)}" data-base="${esc(ing ? ing.base_unit : '')}" ${units.length < 2 ? 'disabled' : ''}>${ing ? recUnitOptionsHtml(ing.base_unit, shown.unit) : ''}</select></td>
       <td><button type="button" class="btn btn-sm btn-ghost mo-rm" title="Remove this option" aria-label="Remove this option">✕</button></td></tr>`;
   }
   function addGroup(g){
@@ -112,7 +284,7 @@ function optionsEditor(container, groups){
         <button type="button" class="btn btn-sm btn-ghost mod-move" data-move="-1" title="Move up" aria-label="Move group up">↑</button>
         <button type="button" class="btn btn-sm btn-ghost mod-move" data-move="1" title="Move down" aria-label="Move group down">↓</button>
         <button type="button" class="btn btn-sm btn-ghost mg-rm">Remove group</button></div>
-      <table class="ri-table"><thead><tr><th>Option</th><th>Price change ₱</th><th>Uses extra</th><th>Extra amount</th><th></th></tr></thead>
+      <table class="ri-table"><thead><tr><th>Option</th><th>Price change ₱</th><th>Uses extra</th><th>Extra amount</th><th>Unit</th><th></th></tr></thead>
         <tbody>${((g.options || []).length ? g.options : [null]).map(optionRowHtml).join('')}</tbody></table>
       <button type="button" class="btn btn-sm btn-outline mo-add" style="margin-top:6px;">+ Add option</button>`;
     container.appendChild(box);
@@ -128,6 +300,22 @@ function optionsEditor(container, groups){
       if(t.dataset.move === '1' && box.nextElementSibling) container.insertBefore(box.nextElementSibling, box);
     }
   });
+  const savedHint = (tr) => {
+    const ing = ingredientById(tr.querySelector('.mo-ing').value);
+    tr.querySelector('.mo-saved').textContent = ing ? savedAsText(tr.querySelector('.mo-qty').value, tr.querySelector('.mo-unit').value, ing.base_unit) : '';
+  };
+  container.addEventListener('change', (e) => {
+    const t = e.target, tr = t.closest('tr');
+    if(!tr || !tr.querySelector('.mo-saved')) return;
+    if(t.classList.contains('mo-ing')) fillUnitSelect(tr.querySelector('.mo-unit'), ingredientById(t.value), tr.querySelector('.mo-unit').value);
+    else if(t.classList.contains('mo-unit')) convertShownQty(tr.querySelector('.mo-qty'), t);
+    savedHint(tr);
+  });
+  container.addEventListener('input', (e) => {
+    const t = e.target, tr = t.closest('tr');
+    if(!tr || !t.classList.contains('mo-qty')) return;
+    markTyped(t); savedHint(tr);
+  });
   (groups || []).forEach(addGroup);
   return {
     addGroup: () => { addGroup(null); const n = container.querySelector('.mod-ed-group:last-child .mg-name'); if(n) n.focus(); },
@@ -136,12 +324,18 @@ function optionsEditor(container, groups){
       const groups = [];
       for(const box of container.querySelectorAll('.mod-ed-group')){
         const name = box.querySelector('.mg-name').value.trim();
-        const options = [...box.querySelectorAll('tbody tr')].map(tr => ({
-          id: tr.dataset.opt, label: tr.querySelector('.mo-label').value.trim(),
-          price_delta: num(tr.querySelector('.mo-price').value),
-          ingredient_id: tr.querySelector('.mo-ing').value || null,
-          ingredient_qty_delta: num(tr.querySelector('.mo-qty').value),
-        })).filter(o => o.label);
+        const options = [...box.querySelectorAll('tbody tr')].map(tr => {
+          const ing = ingredientById(tr.querySelector('.mo-ing').value);
+          const unit = ing ? (tr.querySelector('.mo-unit').value || ing.base_unit) : null;
+          // stored in the ingredient's BASE unit (what the counter and the server deduct); unit = how it was typed
+          return {
+            id: tr.dataset.opt, label: tr.querySelector('.mo-label').value.trim(),
+            price_delta: num(tr.querySelector('.mo-price').value),
+            ingredient_id: ing ? ing.id : null,
+            ingredient_qty_delta: ing ? baseQtyOf(tr.querySelector('.mo-qty').value, unit, ing.base_unit) : num(tr.querySelector('.mo-qty').value),
+            unit,
+          };
+        }).filter(o => o.label);
         if(!name && !options.length) continue;                 // empty group: ignored
         if(!name) return {error: 'Give every option group a name (e.g. Size).'};
         if(!options.length) return {error: `Add at least one option to "${name}", or remove the group.`};
@@ -165,6 +359,12 @@ function openRecipeForm(id){
   const editing = id ? state.recipes.find(r => r.id === id) : null;
   const existingLines = editing ? state.recipeIngredients.filter(ri => ri.recipe_id === editing.id) : [];
   const alreadyLinked = editing && editing.produced_ingredient_id;   // once linked, can't unlink here (protects its stock history)
+  // Expected yield is stored in the produced item's base unit (that's what production adds to stock);
+  // the owner may type it in another unit of the same family (e.g. 1.5 L for an item counted in mL).
+  const linkedIng = alreadyLinked ? ingredientById(editing.produced_ingredient_id) : null;
+  const linkedBase = linkedIng ? linkedIng.base_unit : null;
+  const yieldShown = editing && editing.expected_yield != null && editing.expected_yield !== ''
+    ? (linkedBase ? (convertQuantity(editing.expected_yield, editing.yield_unit || linkedBase, linkedBase) ?? num(editing.expected_yield)) : num(editing.expected_yield)) : '';
   const body = `
     <div class="form-grid">
       <div class="form-row"><label for="r-name">Recipe name</label><input id="r-name" maxlength="80" value="${esc(editing ? editing.name : '')}" placeholder="e.g. Iced Spanish Latte"></div>
@@ -184,8 +384,11 @@ function openRecipeForm(id){
       ${alreadyLinked ? `<div class="hint">Linked to the inventory item "${esc(ingName(editing.produced_ingredient_id))}" — it can't be unlinked here, to protect its stock and production history.</div>` : ''}
       <div id="r-production-fields" style="display:none;margin-top:12px;">
         <div class="form-grid">
-          <div class="form-row"><label for="r-yield">Expected yield</label><input type="number" step="any" min="0" id="r-yield" value="${esc(editing ? (editing.expected_yield || '') : '')}" placeholder="e.g. 1000"></div>
-          <div class="form-row"><label for="r-yield-unit">Yield unit</label><select id="r-yield-unit" ${alreadyLinked ? 'disabled' : ''}>${YIELD_UNITS.map(u => `<option value="${u}" ${editing && editing.yield_unit === u ? 'selected' : ''}>${u}</option>`).join('')}</select></div>
+          <div class="form-row"><label for="r-yield">Expected yield</label><input type="number" step="any" min="0" id="r-yield" value="${esc(yieldShown === '' || !yieldShown ? '' : qtyInputValue(yieldShown))}" placeholder="e.g. 1000"></div>
+          <div class="form-row"><label for="r-yield-unit">Yield unit</label><select id="r-yield-unit" ${(linkedBase && compatibleUnits(linkedBase).length < 2) || (alreadyLinked && !linkedBase) ? 'disabled' : ''} data-prev="${esc(linkedBase || (editing && editing.yield_unit) || YIELD_UNITS[0])}">${linkedBase
+            ? recUnitOptionsHtml(linkedBase, linkedBase)
+            : YIELD_UNITS.map(u => `<option value="${u}" ${editing && editing.yield_unit === u ? 'selected' : ''}>${esc(unitLabel(u))}</option>`).join('')}</select>
+            ${linkedBase ? `<div class="hint">Saved in ${esc(unitLabel(linkedBase))}, the unit "${esc(ingName(editing.produced_ingredient_id))}" is counted in. <span id="r-yield-saved"></span></div>` : ''}</div>
         </div>
         <div class="form-row mb-0"><label for="r-instructions">Production instructions (optional)</label><textarea id="r-instructions" rows="2" placeholder="e.g. Simmer sugar and water to caramel, whisk in warm cream off the heat.">${esc(editing ? (editing.production_instructions || '') : '')}</textarea></div>
       </div>
@@ -260,24 +463,30 @@ function openRecipeForm(id){
     root.querySelector('#mod-add-group').onclick = () => optEd.addGroup();
 
     function addRow(line){
+      const lineIng = line ? ingredientById(line.ingredient_id) : null;
+      const shown = lineIng ? fromBaseUnit(line.quantity, lineIng.base_unit, line.unit) : {qty: line ? num(line.quantity) : '', unit: ''};
       const tr = el(`<tr>
         <td><select class="ri-ing" aria-label="Ingredient"><option value="">Choose…</option>${ingredientOptionsGrouped(line ? line.ingredient_id : null, excludeId)}</select></td>
-        <td><input type="number" step="any" min="0" class="ri-qty" value="${esc(line ? num(line.quantity) : '')}" placeholder="0" aria-label="Quantity"></td>
-        <td><span class="ri-unit text-light"></span></td>
+        <td><input type="number" step="any" min="0" class="ri-qty" value="${esc(line ? qtyInputValue(shown.qty) : '')}" placeholder="0" aria-label="Quantity"><div class="hint ri-saved"></div></td>
+        <td><select class="ri-unit" aria-label="Unit"></select></td>
         <td class="ri-unitcost text-light">—</td>
         <td class="ri-totalcost"><b>—</b></td>
         <td><button class="btn btn-sm btn-ghost ri-remove" type="button" aria-label="Remove ingredient">✕</button></td></tr>`);
       tbody.appendChild(tr);
-      const ingSel = tr.querySelector('.ri-ing'), qtyInput = tr.querySelector('.ri-qty');
+      const ingSel = tr.querySelector('.ri-ing'), qtyInput = tr.querySelector('.ri-qty'), unitSel = tr.querySelector('.ri-unit');
+      fillUnitSelect(unitSel, lineIng, shown.unit);
       function refreshRow(){
         const ing = ingredientById(ingSel.value);
-        tr.querySelector('.ri-unit').textContent = ing ? ing.base_unit : '';
         const cost = ing ? (ingredientCosting(ing.id).current || 0) : 0;
-        tr.querySelector('.ri-unitcost').innerHTML = ing ? fmtMoney(cost) + '/' + esc(ing.base_unit) + (isProducedItem(ing) ? ' <span class="badge badge-gray" style="font-size:10px;">produced</span>' : '') : '—';
-        tr.querySelector('.ri-totalcost').innerHTML = `<b>${fmtMoney(cost * num(qtyInput.value))}</b>`;
+        const u = ing ? (unitSel.value || ing.base_unit) : '';
+        tr.querySelector('.ri-unitcost').innerHTML = ing ? fmtMoney(costPerShownUnit(cost, ing.base_unit, u)) + ' / ' + esc(unitLabel(u)) + (isProducedItem(ing) ? ' <span class="badge badge-gray" style="font-size:10px;">produced</span>' : '') : '—';
+        tr.querySelector('.ri-saved').textContent = ing ? savedAsText(qtyInput.value, u, ing.base_unit) : '';
+        tr.querySelector('.ri-totalcost').innerHTML = `<b>${fmtMoney(cost * rowBaseQty(tr))}</b>`;
         refreshSummary();
       }
-      ingSel.onchange = refreshRow; qtyInput.oninput = refreshRow;
+      ingSel.onchange = () => { fillUnitSelect(unitSel, ingredientById(ingSel.value), unitSel.value); refreshRow(); };
+      unitSel.onchange = () => { convertShownQty(qtyInput, unitSel); refreshRow(); };
+      qtyInput.oninput = () => { markTyped(qtyInput); refreshRow(); };
       tr.querySelector('.ri-remove').onclick = () => { tr.remove(); refreshSummary(); };
       refreshRow();
     }
@@ -285,11 +494,13 @@ function openRecipeForm(id){
       let total = 0;
       tbody.querySelectorAll('tr').forEach(tr => {
         const ing = ingredientById(tr.querySelector('.ri-ing').value);
-        total += (ing ? (ingredientCosting(ing.id).current || 0) : 0) * num(tr.querySelector('.ri-qty').value);
+        total += (ing ? (ingredientCosting(ing.id).current || 0) : 0) * rowBaseQty(tr);
       });
       const price = num(root.querySelector('#r-price').value);
       const profit = price - total, fcp = price > 0 ? total / price * 100 : 0;
-      const yieldVal = num(root.querySelector('#r-yield').value);
+      const yieldVal = yieldBaseQty();
+      const ys = root.querySelector('#r-yield-saved');
+      if(ys) ys.textContent = savedAsText(root.querySelector('#r-yield').value, root.querySelector('#r-yield-unit').value, linkedBase);
       root.querySelector('#r-summary').innerHTML = price > 0 ? `
         <div class="item"><div class="lbl">Total cost</div><div class="val">${fmtMoney(total)}</div></div>
         <div class="item"><div class="lbl">Selling price</div><div class="val">${fmtMoney(price)}</div></div>
@@ -300,7 +511,13 @@ function openRecipeForm(id){
     }
     root.querySelector('#ri-add-row').onclick = () => addRow(null);
     root.querySelector('#r-price').oninput = refreshSummary;
-    root.querySelector('#r-yield').oninput = refreshSummary;
+    root.querySelector('#r-yield').oninput = () => { markTyped(root.querySelector('#r-yield')); refreshSummary(); };
+    // the yield in the unit it is stored in (the produced item's base unit when already linked)
+    function yieldBaseQty(){
+      const v = num(root.querySelector('#r-yield').value);
+      return linkedBase ? baseQtyOf(v, root.querySelector('#r-yield-unit').value, linkedBase) : v;
+    }
+    root.querySelector('#r-yield-unit').onchange = (e) => { convertShownQty(root.querySelector('#r-yield'), e.target); refreshSummary(); };
     if(existingLines.length) existingLines.forEach(addRow); else addRow(null);
     syncProduces();
 
@@ -309,6 +526,15 @@ function openRecipeForm(id){
       if(alreadyLinked){
         const ok = await confirmDialog(`<b>${esc(editing.name)}</b> produces an inventory item, so it can't be deleted (that would break its stock history). Make it <b>inactive</b> instead? It will be hidden from the menus and the production list.`, 'Make inactive');
         if(ok && await boSave([Ops.update('recipes', {id: editing.id, active: false, pos_visible: false, qr_visible: false, updated_at: nowISO()}), Ops.audit('Recipe made inactive', editing.name, editing.id)], {success: 'Recipe made inactive'})){ closeModal(); navigate('recipes'); }
+        return;
+      }
+      // sales or production history -> it can't be deleted (checked first: a refused delete would fail the call)
+      let why;
+      try{ why = (await recipeHistoryReasons([editing.id]))[editing.id]; }
+      catch(err){ toast(friendlyError(err), 'error'); return; }
+      if(why && why.length){
+        const hide = await confirmDialog(`<b>${esc(editing.name)}</b> ${esc(why.join(' and '))}, so it can't be deleted. Hide it from the counter and the QR menu instead (make it inactive)?`, 'Hide it');
+        if(hide && await boSave([hideRecipeOp(editing.id), Ops.audit('Recipe hidden', editing.name, editing.id)], {success: 'Recipe hidden'})){ closeModal(); navigate('recipes'); }
         return;
       }
       const ok = await confirmDialog(`Delete the recipe <b>${esc(editing.name)}</b>? This cannot be undone.`, 'Delete');
@@ -333,13 +559,16 @@ function openRecipeForm(id){
       const name = root.querySelector('#r-name').value.trim();
       const price = num(root.querySelector('#r-price').value);
       const produces = producesBox.checked;
-      const yieldQty = num(root.querySelector('#r-yield').value);
-      const yieldUnit = root.querySelector('#r-yield-unit').value;
+      const yieldQty = yieldBaseQty();
+      const yieldUnit = linkedBase || root.querySelector('#r-yield-unit').value;
       if(!name){ toast('Enter a recipe name', 'error'); return; }
       if(price < 0){ toast('The selling price cannot be below zero', 'error'); return; }
       if(produces && yieldQty <= 0){ toast('Enter an expected yield above 0 for a production recipe', 'error'); return; }
-      const rows = [...tbody.querySelectorAll('tr')].map(tr => ({ingredient_id: tr.querySelector('.ri-ing').value, quantity: num(tr.querySelector('.ri-qty').value)}))
-        .filter(r => r.ingredient_id && r.quantity > 0);
+      // quantity in the ingredient's base unit; unit = the unit it was typed in (shown again next time)
+      const rows = [...tbody.querySelectorAll('tr')].map(tr => {
+        const ing = ingredientById(tr.querySelector('.ri-ing').value);
+        return {ingredient_id: ing ? ing.id : '', quantity: rowBaseQty(tr), unit: ing ? (tr.querySelector('.ri-unit').value || ing.base_unit) : null};
+      }).filter(r => r.ingredient_id && r.quantity > 0);
       if(!rows.length){ toast('Add at least one ingredient with a quantity', 'error'); return; }
       if(excludeId && rows.some(r => r.ingredient_id === excludeId)){ toast('A recipe cannot use its own produced item as an ingredient', 'error'); return; }
       const dup = rows.find((r, i) => rows.findIndex(x => x.ingredient_id === r.ingredient_id) !== i);
@@ -360,7 +589,7 @@ function openRecipeForm(id){
         notes: root.querySelector('#r-notes').value, updated_at: now,
         is_production_recipe: produces,
         expected_yield: produces ? yieldQty : (editing ? editing.expected_yield : null),
-        yield_unit: produces ? (alreadyLinked ? editing.yield_unit : yieldUnit) : (editing ? editing.yield_unit : null),
+        yield_unit: produces ? (alreadyLinked ? (linkedBase || editing.yield_unit) : yieldUnit) : (editing ? editing.yield_unit : null),
         production_instructions: produces ? root.querySelector('#r-instructions').value : (editing ? editing.production_instructions || '' : ''),
         pos_visible: root.querySelector('#r-posvis').checked,
         qr_visible: root.querySelector('#r-qrvis').checked,
@@ -396,7 +625,7 @@ function openRecipeForm(id){
         }
       }
       ops.push(Ops.delWhere('recipe_ingredients', {recipe_id: recipeId}));
-      rows.forEach(r => ops.push(Ops.upsert('recipe_ingredients', {id: uid(), recipe_id: recipeId, ingredient_id: r.ingredient_id, quantity: r.quantity, unit: (ingredientById(r.ingredient_id) || {}).base_unit || null})));
+      rows.forEach(r => ops.push(Ops.upsert('recipe_ingredients', {id: uid(), recipe_id: recipeId, ingredient_id: r.ingredient_id, quantity: r.quantity, unit: r.unit || (ingredientById(r.ingredient_id) || {}).base_unit || null})));
       const priceNote = editing && num(editing.selling_price) !== price ? ` · price ${fmtMoney(editing.selling_price)} → ${fmtMoney(price)}` : '';
       ops.push(Ops.audit(editing ? 'Recipe updated' : 'Recipe created', name + priceNote, recipeId));
       if(await boSave(ops, {success: editing ? 'Recipe updated' : 'Recipe created'})){
@@ -475,7 +704,7 @@ function renderRecipeDetail(id){
           ${recipe.qr_visible !== false ? '<span class="badge badge-green">On the QR menu</span>' : '<span class="badge badge-gray">Not on the QR menu</span>'}
           ${recipe.sold_out ? '<span class="badge badge-red">Sold out</span>' : ''}<span class="tag-pill">Menu order ${esc(num(recipe.sort_order))}</span></div>
         ${recipe.description ? `<div style="margin-top:6px;">${esc(recipe.description)}</div>` : ''}
-        ${groups.length ? groups.map(g => `<div><b>${esc(g.name)}</b> <span class="text-light">(${g.multi_select ? 'pick any' : 'pick one'}${g.required ? ', required' : ''})</span>: ${(g.options || []).map(o => `${esc(o.label)}${num(o.price_delta) ? ` (${num(o.price_delta) > 0 ? '+' : ''}${fmtMoney(o.price_delta)})` : ''}${o.ingredient_id ? ` <span class="text-light">+${fmtNum(o.ingredient_qty_delta, 0)} ${esc((ingredientById(o.ingredient_id) || {}).base_unit || '')} ${esc(ingName(o.ingredient_id))}</span>` : ''}`).join(', ')}</div>`).join('')
+        ${groups.length ? groups.map(g => `<div><b>${esc(g.name)}</b> <span class="text-light">(${g.multi_select ? 'pick any' : 'pick one'}${g.required ? ', required' : ''})</span>: ${(g.options || []).map(o => `${esc(o.label)}${num(o.price_delta) ? ` (${num(o.price_delta) > 0 ? '+' : ''}${fmtMoney(o.price_delta)})` : ''}${o.ingredient_id ? ` <span class="text-light">+${esc(formatQuantity(o.ingredient_qty_delta, (ingredientById(o.ingredient_id) || {}).base_unit, o.unit, 4))} ${esc(ingName(o.ingredient_id))}</span>` : ''}`).join(', ')}</div>`).join('')
           : '<div class="text-light">No options (size, milk…). Add them with "Edit recipe".</div>'}
       </div>` : ''}
     <div class="section-title">Ingredient breakdown</div>
@@ -484,8 +713,9 @@ function renderRecipeDetail(id){
       <tbody>${m.lines.map(l => `<tr>
         <td><a class="linklike" data-ing="${esc(l.ingredient_id)}">${esc(ingName(l.ingredient_id))}</a></td>
         <td>${l.isProduced ? '<span class="badge badge-gray">Produced ingredient</span>' : '<span class="badge badge-gray" style="opacity:.6;">Raw ingredient</span>'}</td>
-        <td class="num">${fmtNum(l.quantity, 2)}</td><td>${esc(l.unit || (ingredientById(l.ingredient_id) || {}).base_unit || '')}</td>
-        <td class="num">${fmtMoney(l.unitCost)}</td><td class="num"><b>${fmtMoney(l.lineCost)}</b></td></tr>`).join('')}
+        ${(() => { const base = (ingredientById(l.ingredient_id) || {}).base_unit || l.unit;
+          const r = fromBaseUnit(l.quantity, base, l.unit), q = shownQty(l.quantity, base, l.unit);
+          return `<td class="num">${esc(q.num)}</td><td>${esc(q.unit)}</td><td class="num">${fmtMoney(costPerShownUnit(l.unitCost, base, r.unit))} / ${esc(unitLabel(r.unit))}</td>`; })()}<td class="num"><b>${fmtMoney(l.lineCost)}</b></td></tr>`).join('')}
       <tr style="background:var(--beige);"><td colspan="5" style="text-align:right;"><b>Total ${sellsDirectly ? 'recipe' : 'batch'} cost</b></td><td class="num"><b>${fmtMoney(m.cost)}</b></td></tr>
       </tbody></table></div>
     <div class="section-title">Cost history snapshot</div>

@@ -32,7 +32,10 @@ async function runFileImport(page, file){
   let t = await runFileImport(page, __dirname + '/fixtures/old-backup.json');
   console.log('     result: ' + t.replace(/\s+/g, ' ').trim());
   ok(/1 staff member keeps their old PIN/.test(t) && /Zed already had a PIN here/.test(t), 'PIN note: Lia keeps her old PIN; Zed (owner) keeps his current one');
-  ok(/30 new records added, 3 were already here/.test(t) && /1 skipped because/.test(t), 'old backup: 30 new records, 3 already here (Coffee, House-Made, owner Zed), 1 broken line skipped');
+  // batch 1 (lead-approved 2026-10-26): the fixture's ₱0 pay-in is now skipped as a broken line -> 29 new (was 30)
+  ok(/29 new records added, 3 were already here/.test(t) && /1 skipped because what they belong to is missing/.test(t), 'old backup: 29 new records, 3 already here (Coffee, House-Made, owner Zed), 1 line whose parent is missing skipped');
+  ok(/1 skipped because it is a broken line \(a pay-in or pay-out of ₱0 or less\)/.test(t), 'old backup: the ₱0 pay-in is skipped as "a broken line (a pay-in or pay-out of ₱0 or less)" and the import finishes');
+  ok(sql(`select count(*) from cash_movements where amount <= 0`) === '0', 'no ₱0 cash movement saved');
   await page.screenshot({path: SHOTS + 'f-import-done.png', fullPage: true});
   const syrupIng = one(`select id, source_recipe_id, local_id from ingredients where name='Brown Sugar Syrup'`);
   const syrupRec = one(`select id, produced_ingredient_id, local_id from recipes where name='Brown Sugar Syrup'`);
@@ -54,7 +57,8 @@ async function runFileImport(page, file){
 
   // ---- run it again: nothing new
   t = await runFileImport(page, __dirname + '/fixtures/old-backup.json');
-  ok(/^\s*Done\. 0 new records added, 33 were already here/.test(t), 'second import of the same file adds nothing (33 already here)');
+  console.log('     second result: ' + t.replace(/\s+/g, ' ').trim().slice(0, 300));
+  ok(/^\s*Done\. 0 new records added, 32 were already here/.test(t), 'second import of the same file adds nothing (32 already here)');
   const after = Number(sql(`select (select count(*) from ingredients)+(select count(*) from recipes)+(select count(*) from sales)+(select count(*) from inventory_transactions)`));
   ok(after === before + 3 + 2 + 1 + 8, 'record counts unchanged by the second run');
 
@@ -157,7 +161,8 @@ async function runFileImport(page, file){
   ok(opened, 'new shop account: sign-up opens the Back Office', opened ? '' : (await p3.textContent('body')).replace(/\s+/g, ' ').slice(0, 300));
   if(opened){
     const nb = sql(`select business_id from profiles p join auth.users u on u.id=p.id where u.email='bea@example.com'`);
-    ok(nb !== biz && sql(`select count(*) from categories where business_id='${nb}'`) === '9' && sql(`select name from suppliers where business_id='${nb}'`) === 'Local Supplier', 'new shop account: own shop with the starter categories (8 + House-Made) and a default supplier');
+    ok(nb !== biz && sql(`select count(*) from categories where business_id='${nb}'`) === '10' && sql(`select name from suppliers where business_id='${nb}'`) === 'Local Supplier', 'new shop account: own shop with the starter categories (9 incl. Raw materials + House-Made) and a default supplier');
+    ok(sql(`select count(*) from categories where business_id='${nb}' and name='Raw materials'`) === '1', 'new shop account: "Raw materials" is one of the starter categories');
     ok((await p3.textContent('#sidebar')).includes('Second Shop'), 'new shop opens on its own dashboard');
   }
   await c3.close();

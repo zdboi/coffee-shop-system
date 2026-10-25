@@ -2,6 +2,17 @@
 -- information_schema / pg_policies output they pasted. Column lists are exact; keys,
 -- foreign keys and CHECK constraints are educated guesses that deliberately include
 -- the kinds of constraints the 004 migration has to cope with. TEST ONLY.
+--
+-- CHECK rules known to be on the LIVE database before our scripts (2026-10-20, found
+-- by two live-only failures, fixed by 005 and 006). Unnamed column checks, so Postgres
+-- names them <table>_<column>_check, as on live:
+--   devices.device_type in ('POS','KDS')     STAND-IN: the real live list is unknown; 005 must replace it
+--   sync_operations.operation_type in ('INSERT','UPDATE','DELETE')   (replaced by 006)
+--   cash_movements.amount > 0                (kept: the server never writes a pay-in/out <= 0)
+--   reconciliation_issues.status in ('OPEN','ACKNOWLEDGED','RESOLVED')   (kept: our apps never write it)
+-- Older lists below (profiles.role without DEVICE, payments.method without MAYA/BANK)
+-- are replaced by 004 section "CHECK constraints". sales.source and the staff,
+-- dining_tables and qr_orders tables don't exist before 004; their rules come from 004.
 
 create table public.businesses (id uuid primary key default gen_random_uuid(), name text not null, created_at timestamptz default now());
 create table public.stores (id uuid primary key default gen_random_uuid(), business_id uuid not null references public.businesses(id) on delete cascade, name text not null, address text, contact text, created_at timestamptz default now());
@@ -14,7 +25,7 @@ create table public.profiles (
   pin_hash text, active boolean default true,
   created_at timestamptz default now(), updated_at timestamptz default now()
 );
-create table public.devices (id uuid primary key default gen_random_uuid(), business_id uuid not null references public.businesses(id) on delete cascade, store_id uuid references public.stores(id), device_tag text, device_name text, device_type text, last_seen_at timestamptz, created_at timestamptz default now());
+create table public.devices (id uuid primary key default gen_random_uuid(), business_id uuid not null references public.businesses(id) on delete cascade, store_id uuid references public.stores(id), device_tag text, device_name text, device_type text check (device_type in ('POS','KDS')), last_seen_at timestamptz, created_at timestamptz default now());
 create table public.settings (
   business_id uuid primary key references public.businesses(id) on delete cascade,
   currency text default 'PHP', costing_method text default 'weighted_average', low_stock_default_threshold numeric default 10, food_cost_warning_pct numeric default 35,
@@ -74,10 +85,10 @@ create table public.sales (
 create table public.sale_items (id uuid primary key default gen_random_uuid(), local_id text, business_id uuid not null references public.businesses(id) on delete cascade, sale_id uuid not null references public.sales(id) on delete cascade, recipe_id uuid references public.recipes(id), name text, quantity numeric, unit_price numeric, modifiers jsonb default '[]'::jsonb, line_total numeric, created_at timestamptz default now());
 create table public.payments (id uuid primary key default gen_random_uuid(), local_id text, business_id uuid not null references public.businesses(id) on delete cascade, sale_id uuid not null references public.sales(id) on delete cascade, method text check (method in ('CASH','GCASH','CARD','OTHER')), amount numeric, tendered numeric, change numeric, reference text, status text, created_at timestamptz default now());
 create table public.refunds (id uuid primary key default gen_random_uuid(), local_id text, business_id uuid not null references public.businesses(id) on delete cascade, sale_id uuid references public.sales(id), shift_id uuid references public.shifts(id), type text check (type in ('VOID','FULL_REFUND','PARTIAL_REFUND')), amount numeric, reason text, items jsonb, approved_by uuid references public.profiles(id), approved_by_name text, date timestamptz, notes text, created_at timestamptz default now());
-create table public.cash_movements (id uuid primary key default gen_random_uuid(), local_id text, business_id uuid not null references public.businesses(id) on delete cascade, shift_id uuid references public.shifts(id), type text check (type in ('PAY_IN','PAY_OUT')), amount numeric, reason text, performed_by uuid references public.profiles(id), performed_by_name text, at timestamptz, created_at timestamptz default now());
+create table public.cash_movements (id uuid primary key default gen_random_uuid(), local_id text, business_id uuid not null references public.businesses(id) on delete cascade, shift_id uuid references public.shifts(id), type text check (type in ('PAY_IN','PAY_OUT')), amount numeric check (amount > 0), reason text, performed_by uuid references public.profiles(id), performed_by_name text, at timestamptz, created_at timestamptz default now());
 create table public.audit_log (id uuid primary key default gen_random_uuid(), local_id text, business_id uuid not null references public.businesses(id) on delete cascade, action text, actor_id uuid references public.profiles(id), actor_name text, details text, reference_id text, at timestamptz default now());
-create table public.sync_operations (operation_id uuid primary key, business_id uuid not null references public.businesses(id) on delete cascade, device_id uuid references public.devices(id), entity_type text, entity_id uuid, operation_type text, processed_at timestamptz default now(), result_summary text);
-create table public.reconciliation_issues (id uuid primary key default gen_random_uuid(), business_id uuid not null references public.businesses(id) on delete cascade, ingredient_id uuid references public.ingredients(id), issue_type text, expected_stock numeric, actual_stock numeric, discrepancy numeric, related_transaction_ids jsonb, originating_devices jsonb, status text, detected_at timestamptz default now(), resolved_at timestamptz, resolved_by uuid references public.profiles(id), resolution_notes text);
+create table public.sync_operations (operation_id uuid primary key, business_id uuid not null references public.businesses(id) on delete cascade, device_id uuid references public.devices(id), entity_type text, entity_id uuid, operation_type text check (operation_type in ('INSERT','UPDATE','DELETE')), processed_at timestamptz default now(), result_summary text);
+create table public.reconciliation_issues (id uuid primary key default gen_random_uuid(), business_id uuid not null references public.businesses(id) on delete cascade, ingredient_id uuid references public.ingredients(id), issue_type text, expected_stock numeric, actual_stock numeric, discrepancy numeric, related_transaction_ids jsonb, originating_devices jsonb, status text check (status in ('OPEN','ACKNOWLEDGED','RESOLVED')), detected_at timestamptz default now(), resolved_at timestamptz, resolved_by uuid references public.profiles(id), resolution_notes text);
 
 -- 001 helper functions (exact bodies from the user's pg_proc output)
 create or replace function public.current_business_id() returns uuid language sql stable security definer as $function$

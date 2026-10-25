@@ -140,3 +140,10 @@
 .qr-total{font-family:var(--font-display);font-weight:700;font-size:17px;margin-top:8px;text-align:right;}
 .qr-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
 @media(max-width:1000px){ .qr-board{grid-template-columns:1fr;} }
+
+/* Side menu: Back Office sits at the very bottom, apart from the selling screens,
+   so it is not tapped by mistake (owner feedback, 2026-10-25). */
+#nav{display:flex;flex-direction:column;}
+#nav .nav-spacer{flex:1 0 28px;}   /* pushes it down; keeps at least a 28px gap on short screens */
+#nav .nav-back-office{padding-top:14px;padding-bottom:14px;border-top:1px solid rgba(255,255,255,0.12);text-decoration:none;}
+#nav .nav-back-office:focus-visible{outline:2px solid var(--amber);outline-offset:-2px;}
