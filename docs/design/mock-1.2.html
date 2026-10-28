@@ -9,7 +9,7 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:var(--cc-font-body);color:var(--cc-ink);background:#d9cdb6;font-size:15px;line-height:1.45}
 .frame{width:1280px;height:800px;margin:24px auto;background:var(--cc-paper);display:grid;grid-template-columns:220px 1fr;overflow:hidden;border-radius:14px;box-shadow:var(--cc-shadow-lift)}
-.disp{font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);text-transform:var(--cc-display-case);font-weight:400;line-height:1.05}
+.disp{font-family:var(--cc-font-display);text-transform:var(--cc-display-case);letter-spacing:.5px;line-height:1}
 .sech{font-family:var(--cc-font-body);font-weight:800;letter-spacing:.2px}
 svg.i{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
 /* sidebar */
@@ -43,7 +43,7 @@ svg.i{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .search{display:flex;align-items:center;gap:10px;min-height:48px;padding:0 14px;border-radius:12px;background:var(--cc-card);border:1px solid var(--cc-line);color:var(--cc-muted)}
 .chips{display:flex;gap:8px;flex-wrap:wrap}
 .sec{display:flex;align-items:baseline;gap:10px;margin:4px 0 8px}
-.sec h2{font-size:19px}
+.sec h2{font-size:22px}
 .sec span{color:var(--cc-muted);font-size:13px;font-weight:600}
 .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
 .tile{min-height:92px;border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;justify-content:space-between;box-shadow:var(--cc-shadow)}
@@ -199,7 +199,7 @@ td{padding:9px 8px;border-bottom:1px solid var(--cc-line)}
         <div class="search"><svg class="i"><use href="#i-search"/></svg>Search the menu</div>
         <div class="chips"><span class="chip on">All</span><span class="chip">Hot coffee</span><span class="chip">Iced coffee</span><span class="chip">Non-coffee</span><span class="chip">Pastries</span><span class="chip">Rice meals</span></div>
         <div>
-          <div class="sec"><h2 class="sech">Hot coffee</h2><span>5 items</span></div>
+          <div class="sec"><h2 class="disp">Hot coffee</h2><span>5 items</span></div>
           <div class="grid">
             <div class="tile t-cocoa"><span class="n">Americano</span><span class="p">₱120</span></div>
             <div class="tile t-cocoa"><span class="n">Café latte</span><span class="p">₱150</span></div>
@@ -209,7 +209,7 @@ td{padding:9px 8px;border-bottom:1px solid var(--cc-line)}
           </div>
         </div>
         <div>
-          <div class="sec"><h2 class="sech">Iced coffee</h2><span>5 items</span></div>
+          <div class="sec"><h2 class="disp">Iced coffee</h2><span>5 items</span></div>
           <div class="grid">
             <div class="tile t-terracotta"><span class="n">Iced latte</span><span class="p">₱160</span></div>
             <div class="tile t-terracotta"><span class="n">Iced Spanish latte</span><span class="p">₱175</span></div>
@@ -219,7 +219,7 @@ td{padding:9px 8px;border-bottom:1px solid var(--cc-line)}
           </div>
         </div>
         <div>
-          <div class="sec"><h2 class="sech">Non-coffee</h2><span>3 items</span></div>
+          <div class="sec"><h2 class="disp">Non-coffee</h2><span>3 items</span></div>
           <div class="grid">
             <div class="tile t-sage light"><span class="n">Matcha latte</span><span class="p">₱170</span></div>
             <div class="tile t-sage light"><span class="n">Chocolate</span><span class="p">₱150</span></div>
@@ -227,7 +227,7 @@ td{padding:9px 8px;border-bottom:1px solid var(--cc-line)}
           </div>
         </div>
         <div>
-          <div class="sec"><h2 class="sech">Pastries</h2><span>4 items</span></div>
+          <div class="sec"><h2 class="disp">Pastries</h2><span>4 items</span></div>
           <div class="grid">
             <div class="tile t-butter light"><span class="n">Ensaymada</span><span class="p">₱85</span></div>
             <div class="tile t-butter light"><span class="n">Banana bread</span><span class="p">₱95</span></div>
