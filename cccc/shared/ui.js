@@ -185,3 +185,142 @@ function timeAgo(d){
   if(s < 86400) return Math.floor(s/3600)+' h ago';
   return fmtDate(d);
 }
+
+/* ================= Icons (release 1.2) =================
+   icon(name, {size, label, className}) -> inline SVG string.
+   Line icons on a 24 x 24 grid, drawn with currentColor, so they take the text colour.
+   No label: aria-hidden (decorative; the button/link text names the action).
+   With a label: role="img" + <title>, for icon-only controls.
+   Unknown names give '' (never throws). ICON_NAMES lists every name. */
+const ICON_PATHS = {
+  'orders':        '<path d="M6 8h12l-1.2 11.2a2 2 0 0 1-2 1.8H9.2a2 2 0 0 1-2-1.8z"/><path d="M5 5h14v3H5z"/><path d="M9 12h6"/>',
+  'qr':            '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/>',
+  'users':         '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/>',
+  'user':          '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  'receipt':       '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
+  'clock':         '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  'grid':          '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  'lock':          '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+  'search':        '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+  'inbox':         '<path d="M3 13h5l1.5 3h5L16 13h5"/><path d="M5 5h14l2 8v6H3v-6z"/>',
+  'plus':          '<path d="M12 5v14M5 12h14"/>',
+  'minus':         '<path d="M5 12h14"/>',
+  'trash':         '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M9 7V4h6v3"/>',
+  'edit':          '<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+  'check':         '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  'x':             '<path d="M6 6l12 12M18 6 6 18"/>',
+  'chevron-left':  '<path d="m15 5-7 7 7 7"/>',
+  'chevron-right': '<path d="m9 5 7 7-7 7"/>',
+  'chevron-down':  '<path d="m5 9 7 7 7-7"/>',
+  'printer':       '<path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/>',
+  'cash':          '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.8"/><path d="M6 9.5v.01M18 14.5v.01"/>',
+  'card':          '<rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 10h19M6.5 15h4"/>',
+  'phone':         '<rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18.5h2"/>',
+  'wifi-off':      '<path d="M3 3l18 18"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M5 12.9a10 10 0 0 1 5.2-2.8M14.5 10.2A10 10 0 0 1 19 12.9"/><path d="M2 9.3a14.8 14.8 0 0 1 4.3-2.6M10.5 5.6A15 15 0 0 1 22 9.3"/><path d="M12 20h.01"/>',
+  'alert':         '<path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.5v.01"/>',
+  'star':          '<path d="m12 3 2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8l-5.4 2.9 1.1-6.1-4.5-4.2 6.1-.8z"/>',
+  'gift':          '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M5 12v9h14v-9M12 8v13"/><path d="M12 8S10.5 3.5 8 4.5 9 8 12 8zM12 8s1.5-4.5 4-3.5S15 8 12 8z"/>',
+  'map':           '<path d="m3 6 6-2.5 6 2.5 6-2.5v14.5L15 20.5 9 18l-6 2.5z"/><path d="M9 3.5V18M15 6v14.5"/>',
+  'table-square':  '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 3h6M9 21h6M3 9v6M21 9v6"/>',
+  'table-round':   '<circle cx="12" cy="12" r="6"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2"/>',
+  'settings':      '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+  'logout':        '<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/><path d="M10 16l-4-4 4-4M6 12h10"/>',
+  'download':      '<path d="M12 4v11M7 10.5l5 5 5-5"/><path d="M4 19.5h16"/>',
+  'upload':        '<path d="M12 15.5V4.5M7 9l5-5 5 5"/><path d="M4 19.5h16"/>',
+  'filter':        '<path d="M3.5 5h17l-6.5 8v6l-4-2v-4z"/>',
+  'refresh':       '<path d="M20 11a8 8 0 0 0-14.3-4.3L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.3 4.3L20 15"/><path d="M20 20v-5h-5"/>',
+  'home':          '<path d="M3.5 11 12 4l8.5 7"/><path d="M6 9.5V20h12V9.5"/><path d="M10 20v-6h4v6"/>',
+  'box':           '<path d="m12 3 8.5 4.5v9L12 21l-8.5-4.5v-9z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
+  'chart':         '<path d="M4 4v16h16"/><path d="M8 16v-4M12 16V8M16 16v-7"/>',
+  'cup':           '<path d="M5 8h11v6a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5z"/><path d="M16 10h1.5a2.5 2.5 0 0 1 0 5H16"/><path d="M8 3.5v2M11 3.5v2"/>',
+  'info':          '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5v.01"/>',
+};
+const ICON_NAMES = Object.keys(ICON_PATHS);
+function icon(name, opts){
+  const body = ICON_PATHS[name];
+  if(!body) return '';
+  opts = opts || {};
+  const n = Number(opts.size);
+  const size = (isFinite(n) && n > 0 && n <= 256) ? Math.round(n) : 22;
+  const cls = 'cc-icon' + (opts.className ? ' ' + escapeHtml(opts.className) : '');
+  const label = opts.label != null && String(opts.label).trim() !== '' ? String(opts.label) : '';
+  const a11y = label ? `role="img" aria-label="${escapeHtml(label)}"` : 'aria-hidden="true" focusable="false"';
+  return `<svg class="${cls}" ${a11y} width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">`
+    + (label ? `<title>${escapeHtml(label)}</title>` : '') + body + '</svg>';
+}
+
+/* ================= Brand theme + logo (release 1.2) =================
+   settings.theme: 'CUSTOM' = the shop's own colours / logo / font from Settings.
+   Anything else (missing, 'CCCC', or the old 'light' / 'dark') = the CCCC brand look. */
+function brandTheme(settings){
+  const s = settings || (typeof state !== 'undefined' && state && state.settings) || {};
+  return String(s.theme || '').toUpperCase() === 'CUSTOM' ? 'CUSTOM' : 'CCCC';
+}
+// Folder of the bundled brand files, worked out from where this script was loaded
+// (…/cccc/shared/ui.js -> …/cccc/shared/brand/), so it is right for every app folder.
+const BRAND_DIR = (function(){
+  try{
+    const src = document.currentScript && document.currentScript.src;
+    if(src) return new URL('brand/', src).href;
+  }catch(e){}
+  return '../shared/brand/';   // apps live one folder below cccc/ (front/, back/, order/)
+})();
+const BRAND_ASSETS = {
+  mark:             'tile-icon-192.webp',        // square tile icon (small marks, sign-in cards)
+  'mark-large':     'tile-icon-512.webp',
+  'wide-cream':     'logo-horizontal-cream.webp',
+  'wide-terracotta':'logo-horizontal-terracotta.webp',
+  'lockup-cream':   'logo-lockup-cream.webp',
+  'wordmark-dark':       'wordmark-dark.webp',       // on the dark ink sidebar
+  'wordmark-terracotta': 'wordmark-terracotta.webp', // on terracotta
+  'wordmark-cream':      'wordmark-cream.webp',      // on paper / cream
+};
+const BRAND_NAME = 'Cavite City Coffee Club';
+function brandAssetUrl(file){ return BRAND_DIR + file; }
+// Safe custom logo URL (https / same-site relative only; never javascript: or data:).
+function _customLogoUrl(s){
+  const u = s && s.logo_url ? String(s.logo_url).trim() : '';
+  if(!u) return '';
+  if(/^https:\/\//i.test(u) || /^\.{0,2}\//.test(u)) return u;
+  return '';
+}
+// brandLogo(variant, settings?) -> {src, alt, custom}
+//   variant: 'mark' (default) | 'mark-large' | 'wide-cream' | 'wide-terracotta' | 'lockup-cream'
+//   CCCC theme (or no logo_url): the bundled image. CUSTOM theme with logo_url: that image.
+function brandLogo(variant, settings){
+  const s = settings || (typeof state !== 'undefined' && state && state.settings) || {};
+  const custom = brandTheme(s) === 'CUSTOM' ? _customLogoUrl(s) : '';
+  if(custom) return {src: custom, alt: '', custom: true};
+  const file = BRAND_ASSETS[variant] && !/^wordmark-/.test(variant) ? BRAND_ASSETS[variant] : BRAND_ASSETS.mark;
+  return {src: brandAssetUrl(file), alt: '', custom: false};
+}
+// brandWordmark(variant, settings?) -> {src, alt, text}
+//   variant: 'dark' (ink sidebar, default) | 'terracotta' | 'cream' (paper / cream background).
+//   CCCC theme: the Brunson wordmark image, alt "Cavite City Coffee Club" (src set, text '').
+//   CUSTOM theme: no image (src ''); text = the business name to show as plain text.
+//   The shop name is never typed in the display font.
+function brandWordmark(variant, settings){
+  const s = settings || (typeof state !== 'undefined' && state && state.settings) || {};
+  if(brandTheme(s) === 'CUSTOM'){
+    const name = (s.business_name || (typeof state !== 'undefined' && state && state.business && state.business.name) || s.app_name || '').trim();
+    return {src: '', alt: name, text: name};
+  }
+  const key = 'wordmark-' + (variant === 'terracotta' || variant === 'cream' ? variant : 'dark');
+  return {src: brandAssetUrl(BRAND_ASSETS[key]), alt: BRAND_NAME, text: ''};
+}
+// Ready-made HTML for screens. Every value is escaped.
+//   brandLogoHtml('mark', {className:'mark', alt:''})   -> <img …>
+//   brandWordmarkHtml('dark', {className:'wm'})        -> <img …> or <span class="…">Business name</span>
+function brandLogoHtml(variant, opts){
+  opts = opts || {};
+  const l = brandLogo(variant, opts.settings);
+  const alt = opts.alt != null ? opts.alt : l.alt;
+  return `<img class="${escapeHtml(opts.className || 'brand-mark')}" src="${escapeHtml(l.src)}" alt="${escapeHtml(alt)}" decoding="async">`;
+}
+function brandWordmarkHtml(variant, opts){
+  opts = opts || {};
+  const w = brandWordmark(variant, opts.settings);
+  const cls = escapeHtml(opts.className || 'brand-wordmark');
+  if(!w.src) return `<span class="${cls} brand-name-text">${escapeHtml(w.text)}</span>`;
+  return `<img class="${cls}" src="${escapeHtml(w.src)}" alt="${escapeHtml(w.alt)}" decoding="async">`;
+}

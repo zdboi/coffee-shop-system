@@ -171,7 +171,8 @@ const state = {
 // Settings stored in Supabase (shared by every device of the shop)
 const DEFAULT_SETTINGS = {
   currency:'PHP', costing_method:'weighted_average',
-  low_stock_default_threshold: 10, food_cost_warning_pct: 35, theme:'light',
+  low_stock_default_threshold: 10, food_cost_warning_pct: 35,
+  theme:'CCCC',   // 'CCCC' = brand look (default) | 'CUSTOM' = the colours/logo/font below. Old rows: 'light'/'dark' = CCCC.
   business_name: '', app_name: 'Brew Ledger', logo_url: null,
   primary_color: '#241209', secondary_color: '#33513f', accent_color: '#c17a3d',
   background_color: '#f7f1e6', card_color: '#fffdf9', text_color: '#2c1e14',
@@ -209,12 +210,18 @@ function setSettingsFromServer(row){
   if(row) SERVER_SETTING_KEYS.forEach(k => { if(row[k] !== undefined && row[k] !== null) s[k] = row[k]; });
   ['tax_pct','service_charge_pct','low_stock_default_threshold','food_cost_warning_pct','backup_retain_count','stamps_per_reward','payout_review_limit']
     .forEach(k => { s[k] = Number(s[k])||0; });
+  // Sub-category tile colours (column added by 008). Kept out of DEFAULT_SETTINGS so a
+  // full settings save never sends the column to a database that doesn't have it yet.
+  s.subcategory_colors = cleanSubcategoryColors(row && row.subcategory_colors);
   state.settings = Object.assign(s, loadDeviceSettings());
   return state.settings;
 }
 function serverSettingsRow(){
   const row = {};
   SERVER_SETTING_KEYS.forEach(k => { row[k] = state.settings[k]; });
+  // The counter's offline copy keeps the tile colours too (only when there are any).
+  if(state.settings.subcategory_colors && Object.keys(state.settings.subcategory_colors).length)
+    row.subcategory_colors = Object.assign({}, state.settings.subcategory_colors);
   row.updated_at = new Date().toISOString();
   return row;
 }
@@ -579,9 +586,13 @@ function isBackupDue(lastBackupISO, frequency){
   return new Date() >= nextBackupDueDate(lastBackupISO, frequency);
 }
 
-/* ================= Branding / theme (shared) ================= */
+/* ================= Branding / theme (shared) =================
+   Release 1.2: settings.theme decides the look (brandTheme() in ui.js).
+   - 'CCCC' (default; also missing / old 'light' / old 'dark'): the brand look from
+     brand/tokens.css. Saved colours and fonts are NOT applied and no outside font is loaded.
+   - 'CUSTOM': the shop's saved colours and font, mapped onto the --cc-* tokens. */
 const FONT_OPTIONS = [
-  {id:'default', label:'Default (Fraunces + Inter)', bodyStack:"'Inter', system-ui, -apple-system, sans-serif"},
+  {id:'default', label:'Default (CCCC brand fonts)', bodyStack:null},
   {id:'system', label:'System Default (fully offline)', bodyStack:"-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"},
   {id:'inter', label:'Inter', bodyStack:"'Inter', system-ui, sans-serif", cdn:'Inter:wght@400;500;600;700'},
   {id:'roboto', label:'Roboto', bodyStack:"'Roboto', system-ui, sans-serif", cdn:'Roboto:wght@400;500;700'},
@@ -591,19 +602,32 @@ const FONT_OPTIONS = [
 ];
 const FONT_SIZES = {small:'13.5px', medium:'15px', large:'16.5px'};
 
-function lightenHex(hex, percent){
-  try{
-    hex = String(hex).replace('#','');
-    if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
-    const num = parseInt(hex,16);
-    let r=(num>>16)&0xFF, g=(num>>8)&0xFF, b=num&0xFF;
-    r = Math.min(255, Math.round(r+(255-r)*percent/100));
-    g = Math.min(255, Math.round(g+(255-g)*percent/100));
-    b = Math.min(255, Math.round(b+(255-b)*percent/100));
-    return '#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
-  }catch(e){ return hex; }
+function _hexParts(hex){
+  hex = String(hex == null ? '' : hex).trim().replace('#','');
+  if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+  if(!/^[0-9a-fA-F]{6}$/.test(hex)) return null;
+  const num = parseInt(hex,16);
+  return [(num>>16)&0xFF, (num>>8)&0xFF, num&0xFF];
 }
+function _hexOf(rgb){ return '#'+rgb.map(v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join(''); }
+function lightenHex(hex, percent){
+  const p = _hexParts(hex);
+  if(!p) return hex;
+  return _hexOf(p.map(v => v+(255-v)*percent/100));
+}
+function darkenHex(hex, percent){
+  const p = _hexParts(hex);
+  if(!p) return hex;
+  return _hexOf(p.map(v => v*(1-percent/100)));
+}
+function isHexColor(v){ return _hexParts(v) !== null; }
+
+// Every CSS variable the custom theme may set on <html>; cleared again for the CCCC look.
+const CUSTOM_THEME_VARS = ['--ui-dark','--cc-terracotta','--cc-terracotta-deep','--cc-terracotta-tint','--cc-butter',
+  '--cc-paper','--cc-cream','--cc-card','--cc-ink','--cc-font-body','--cc-font-display'];
+
 function applyFontChoice(fontId){
+  const root = document.documentElement.style;
   const opt = FONT_OPTIONS.find(f=>f.id===fontId) || FONT_OPTIONS[0];
   if(opt.cdn && !document.getElementById('font-cdn-'+opt.id)){
     const link = document.createElement('link');
@@ -611,24 +635,85 @@ function applyFontChoice(fontId){
     link.href = `https://fonts.googleapis.com/css2?family=${opt.cdn}&display=swap`;
     document.head.appendChild(link);
   }
-  document.documentElement.style.setProperty('--font-body', opt.bodyStack);
-  if(fontId==='system') document.documentElement.style.setProperty('--font-display', opt.bodyStack);
-  else document.documentElement.style.removeProperty('--font-display');
+  if(opt.bodyStack) root.setProperty('--cc-font-body', opt.bodyStack);
+  else root.removeProperty('--cc-font-body');
+  if(fontId==='system') root.setProperty('--cc-font-display', opt.bodyStack);
+  else root.removeProperty('--cc-font-display');
 }
+// overrides: a settings-like object (Back Office preview), else state.settings.
 function applyCustomTheme(overrides){
-  const s = overrides || state.settings;
+  const s = overrides || state.settings || {};
   const root = document.documentElement.style;
-  root.setProperty('--espresso-dark', s.primary_color);
-  root.setProperty('--espresso', s.primary_color);
-  root.setProperty('--green', s.secondary_color);
-  root.setProperty('--green-light', lightenHex(s.secondary_color, 18));
-  root.setProperty('--amber', s.accent_color);
-  root.setProperty('--cream', s.background_color);
-  root.setProperty('--white', s.card_color);
-  root.setProperty('--text', s.text_color);
-  applyFontChoice(s.font_family);
+  CUSTOM_THEME_VARS.forEach(v => root.removeProperty(v));
+  // Old (pre-1.2) variables this function used to set: clear them so the brand mapping in styles.css applies.
+  ['--espresso-dark','--espresso','--green','--green-light','--amber','--cream','--white','--text','--font-body','--font-display']
+    .forEach(v => root.removeProperty(v));
   root.setProperty('--base-font-size', FONT_SIZES[s.font_size]||FONT_SIZES.medium);
-  document.body.classList.toggle('dark', s.theme==='dark');
+  if(brandTheme(s) === 'CUSTOM'){
+    const set = (v, hex) => { if(isHexColor(hex)) root.setProperty(v, hex); };
+    set('--ui-dark', s.primary_color);                       // sidebar, sign-in backdrop, toasts
+    if(isHexColor(s.secondary_color)){                        // main buttons, active item
+      root.setProperty('--cc-terracotta', s.secondary_color);
+      root.setProperty('--cc-terracotta-deep', darkenHex(s.secondary_color, 22));
+      root.setProperty('--cc-terracotta-tint', lightenHex(s.secondary_color, 85));
+    }
+    set('--cc-butter', s.accent_color);                       // accents on dark, badges
+    set('--cc-paper', s.background_color);
+    if(isHexColor(s.background_color)) root.setProperty('--cc-cream', darkenHex(s.background_color, 3));
+    set('--cc-card', s.card_color);
+    set('--cc-ink', s.text_color);
+    applyFontChoice(s.font_family);
+  }
+  document.body.classList.toggle('dark', s.theme==='dark');   // old dark mode (pre-1.2 setting)
+}
+
+/* ================= Sub-category tile colours (release 1.2) =================
+   The database stores a KEY per sub-category name (settings.subcategory_colors,
+   e.g. {"Iced coffee": "terracotta"}); the colours live in brand/tokens.css.
+   Raw colour codes are never accepted here. */
+const TILE_COLORS = {
+  terracotta:      {label:'Terracotta'},
+  deep_terracotta: {label:'Deep terracotta'},
+  olive:           {label:'Olive'},
+  gold:            {label:'Gold', light:true},
+  butter:          {label:'Butter', light:true},
+  ink:             {label:'Ink'},
+  sage:            {label:'Sage', light:true},
+  clay:            {label:'Clay', light:true},
+  cocoa:           {label:'Cocoa'},
+  sky:             {label:'Sky', light:true},
+};
+const TILE_COLOR_KEYS = Object.keys(TILE_COLORS);
+function isTileColorKey(key){ return typeof key === 'string' && Object.prototype.hasOwnProperty.call(TILE_COLORS, key); }
+// Keeps only {name: known key} pairs (same rule as the database check).
+function cleanSubcategoryColors(map){
+  const out = {};
+  if(!map || typeof map !== 'object' || Array.isArray(map)) return out;
+  Object.keys(map).forEach(name => {
+    const n = String(name).trim();
+    if(n && n.length <= 40 && isTileColorKey(map[name])) out[name] = map[name];
+  });
+  return out;
+}
+// tileColorKeyFor('Iced coffee') -> 'terracotta' | null (not set / unknown).
+// Exact name first, then a case- and space-insensitive match.
+function tileColorKeyFor(subcategoryName){
+  const map = state && state.settings && state.settings.subcategory_colors;
+  if(!map || typeof map !== 'object' || subcategoryName == null) return null;
+  const name = String(subcategoryName);
+  if(Object.prototype.hasOwnProperty.call(map, name)) return isTileColorKey(map[name]) ? map[name] : null;
+  const want = name.trim().toLowerCase();
+  if(!want) return null;
+  const hit = Object.keys(map).find(k => k.trim().toLowerCase() === want);
+  return hit && isTileColorKey(map[hit]) ? map[hit] : null;
+}
+// tileStyleVars('olive') -> 'background:var(--tile-olive-bg);color:var(--tile-olive-fg);'
+// Light tiles also get a thin border so they show on the paper background.
+// Unknown / empty key -> '' (the screen keeps its default tile look).
+function tileStyleVars(key){
+  if(!isTileColorKey(key)) return '';
+  return `background:var(--tile-${key}-bg);color:var(--tile-${key}-fg);`
+    + (TILE_COLORS[key].light ? 'border-color:var(--tile-border-light);border-style:solid;border-width:1px;' : '');
 }
 
 /* ================= Google Drive backups (optional, per device) ================= */
