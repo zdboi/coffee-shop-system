@@ -5,7 +5,11 @@
    borders and decoration only, never text. */
 
 /* Braton Composer (Alit Design, bought by the owner): page titles and brand moments only.
-   Its automatic swash capitals are switched off (see --cc-display-features) so words stay readable.
+   NO SWASH (owner, 2026-10-29): Braton's capital letters are the swash forms and its lowercase
+   letters are plain small capitals, so display text is shown in lowercase (--cc-display-case)
+   with swash features off (--cc-display-features). Result: clean capitals, no swashes.
+   The shop name "Cavite City Coffee Club" is never typed in Braton: use the Brunson wordmark
+   images (wordmark-dark / -terracotta / -cream .webp), drawn exactly like the logo.
    No ₱ sign in this font: the browser falls back to the body font for it. */
 @font-face{
   font-family:'Braton Composer';
@@ -38,7 +42,8 @@
 
   /* Type */
   --cc-font-display:'Braton Composer',Georgia,'Times New Roman',serif;
-  --cc-display-features:"calt" 0,"swsh" 0,"salt" 0,"dlig" 0,"liga" 0;
+  --cc-display-features:"calt" 0,"swsh" 0,"salt" 0,"dlig" 0,"liga" 0,"aalt" 0;
+  --cc-display-case:lowercase;   /* use with text-transform on every Braton element */
   --cc-font-body:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
   --cc-font-num:ui-monospace,'Cascadia Mono','Segoe UI Mono',Menlo,monospace;
 

@@ -9,14 +9,15 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:var(--cc-font-body);color:var(--cc-ink);background:#d9cdb6;font-size:15px;line-height:1.45}
 .frame{width:1280px;height:800px;margin:24px auto;background:var(--cc-paper);display:grid;grid-template-columns:220px 1fr;overflow:hidden;border-radius:14px;box-shadow:var(--cc-shadow-lift)}
-.disp{font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);font-weight:400;line-height:1.05}
+.disp{font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);text-transform:var(--cc-display-case);font-weight:400;line-height:1.05}
 .sech{font-family:var(--cc-font-body);font-weight:800;letter-spacing:.2px}
 svg.i{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
 /* sidebar */
 .side{background:var(--cc-ink);color:var(--cc-paper);display:flex;flex-direction:column;padding:18px 12px}
 .brand{display:flex;gap:10px;align-items:center;padding:0 6px 18px;border-bottom:1px solid rgba(241,228,179,.15)}
 .brand img{width:46px;height:46px;border-radius:8px}
-.brand b{font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);font-weight:400;font-size:16px;line-height:1.1;color:var(--cc-butter);white-space:nowrap}
+.brand img.wm{width:128px;height:auto;border-radius:0;display:block}
+.brand b{font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);text-transform:var(--cc-display-case);font-weight:400;font-size:16px;line-height:1.1;color:var(--cc-butter);white-space:nowrap}
 .brand small{display:block;font-size:11px;color:#cdbfa3;margin-top:4px;letter-spacing:.4px}
 .nav{margin-top:14px;display:flex;flex-direction:column;gap:4px}
 .nav a{display:flex;align-items:center;gap:12px;min-height:48px;padding:0 12px;border-radius:10px;color:#e9dfc8;text-decoration:none;font-weight:600;font-size:15px}
@@ -76,7 +77,7 @@ svg.i{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .tot{border-top:2px solid var(--cc-ink);padding-top:10px;display:grid;gap:4px;font-size:14px;color:var(--cc-ink-2)}
 .tot div{display:flex;justify-content:space-between}
 .tot .big{font-size:28px;color:var(--cc-ink);font-weight:800;margin-top:4px}
-.tot .big span:first-child{font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);font-weight:400;font-size:28px}
+.tot .big span:first-child{font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);text-transform:var(--cc-display-case);font-weight:400;font-size:28px}
 .pay{margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .pay .btn.primary{grid-column:1/-1;min-height:60px;font-size:18px}
 /* QR board + floor plan */
@@ -112,7 +113,7 @@ svg.i{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .ci small{display:block;color:var(--cc-muted);font-size:12px}
 .cdet{display:flex;flex-direction:column;gap:14px}
 .card{background:var(--cc-card);border:1px solid var(--cc-line);border-radius:14px;padding:16px}
-.card h4{font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);font-weight:400;font-size:24px;margin-bottom:10px}
+.card h4{font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);text-transform:var(--cc-display-case);font-weight:400;font-size:24px;margin-bottom:10px}
 .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
 .kpi small{display:block;color:var(--cc-muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
 .kpi b{font-size:26px}
@@ -131,12 +132,12 @@ td{padding:9px 8px;border-bottom:1px solid var(--cc-line)}
 .phone{width:390px;height:844px;margin:24px auto;background:var(--cc-paper);border-radius:28px;overflow:hidden;box-shadow:var(--cc-shadow-lift);display:flex;flex-direction:column}
 .ph-head{background:var(--cc-terracotta);color:var(--cc-butter);padding:18px 16px 14px;display:flex;align-items:center;gap:12px}
 .ph-head img{width:52px;height:52px;border-radius:9px}
-.ph-head b{font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);font-weight:400;font-size:24px;line-height:1}
+.ph-head b{font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);text-transform:var(--cc-display-case);font-weight:400;font-size:24px;line-height:1}
 .ph-head b span{display:block;color:var(--cc-ink)}
 .ph-head small{display:block;font-size:12px;color:#fff;margin-top:4px}
 .ph-body{padding:14px 16px;display:flex;flex-direction:column;gap:12px;flex:1;overflow:hidden}
 .member{background:var(--cc-card);border-radius:16px;border:1px solid var(--cc-line);overflow:hidden}
-.member .mh{background:var(--cc-ink);color:var(--cc-butter);padding:10px 14px;font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);font-size:21px;display:flex;justify-content:space-between}
+.member .mh{background:var(--cc-ink);color:var(--cc-butter);padding:10px 14px;font-family:var(--cc-font-display);font-feature-settings:var(--cc-display-features);text-transform:var(--cc-display-case);font-size:21px;display:flex;justify-content:space-between}
 .member .mb{padding:10px 14px;display:grid;gap:8px;font-size:13px;color:var(--cc-ink-2)}
 .member .mb .row{display:flex;align-items:center;gap:8px}
 .member .mb .row b{width:44px;color:var(--cc-ink)}
@@ -177,7 +178,7 @@ td{padding:9px 8px;border-bottom:1px solid var(--cc-line)}
 <div class="caption">1 · Counter: Orders (was "Sell"), grouped by sub-category, tile colours per sub-category</div>
 <section class="frame" id="mock-orders">
   <aside class="side">
-    <div class="brand"><img src="../../cccc/shared/brand/tile-icon-192.webp" alt=""><div><b>Cavite City<br>Coffee Club</b><small>Counter 1</small></div></div>
+    <div class="brand"><img src="../../cccc/shared/brand/tile-icon-192.webp" alt=""><div><img class="wm" src="../../cccc/shared/brand/wordmark-dark.webp" alt="Cavite City Coffee Club"><small>Counter 1</small></div></div>
     <nav class="nav">
       <a class="on"><svg class="i"><use href="#i-orders"/></svg>Orders</a>
       <a><svg class="i"><use href="#i-qr"/></svg>QR orders<span class="badge">2</span></a>
@@ -256,7 +257,7 @@ td{padding:9px 8px;border-bottom:1px solid var(--cc-line)}
 <div class="caption">2 · Counter: QR orders board with your floor plan (tables waiting for payment light up)</div>
 <section class="frame" id="mock-qr">
   <aside class="side">
-    <div class="brand"><img src="../../cccc/shared/brand/tile-icon-192.webp" alt=""><div><b>Cavite City<br>Coffee Club</b><small>Counter 1</small></div></div>
+    <div class="brand"><img src="../../cccc/shared/brand/tile-icon-192.webp" alt=""><div><img class="wm" src="../../cccc/shared/brand/wordmark-dark.webp" alt="Cavite City Coffee Club"><small>Counter 1</small></div></div>
     <nav class="nav">
       <a><svg class="i"><use href="#i-orders"/></svg>Orders</a>
       <a class="on"><svg class="i"><use href="#i-qr"/></svg>QR orders<span class="badge">2</span></a>
@@ -295,7 +296,7 @@ td{padding:9px 8px;border-bottom:1px solid var(--cc-line)}
 <div class="caption">3 · Counter: Customers (managers also see money; cashiers don't). One 15-stamp card: ₱10 off at 5, ₱50 off at 10, free drink or food at 15</div>
 <section class="frame" id="mock-customers">
   <aside class="side">
-    <div class="brand"><img src="../../cccc/shared/brand/tile-icon-192.webp" alt=""><div><b>Cavite City<br>Coffee Club</b><small>Counter 1</small></div></div>
+    <div class="brand"><img src="../../cccc/shared/brand/tile-icon-192.webp" alt=""><div><img class="wm" src="../../cccc/shared/brand/wordmark-dark.webp" alt="Cavite City Coffee Club"><small>Counter 1</small></div></div>
     <nav class="nav">
       <a><svg class="i"><use href="#i-orders"/></svg>Orders</a>
       <a><svg class="i"><use href="#i-qr"/></svg>QR orders<span class="badge">2</span></a>
@@ -350,7 +351,7 @@ td{padding:9px 8px;border-bottom:1px solid var(--cc-line)}
 
 <div class="caption">4 · Customer's phone: QR order page with both stamp cards</div>
 <section class="phone" id="mock-phone">
-  <div class="ph-head"><img src="../../cccc/shared/brand/tile-icon-192.webp" alt=""><div><b>Cavite City<span>Coffee Club</span></b><small>Table T2 · Dine in</small></div></div>
+  <div class="ph-head"><img src="../../cccc/shared/brand/tile-icon-192.webp" alt=""><div><img src="../../cccc/shared/brand/wordmark-terracotta.webp" alt="Cavite City Coffee Club" style="width:170px;height:auto;border-radius:0;display:block"><small>Table T2 · Dine in</small></div></div>
   <div class="ph-body">
     <div style="font-size:15px"><b>Welcome back, Mika!</b></div>
     <div class="member"><div class="mh"><span>Stamp card</span><span>Bienvenido!</span></div>
