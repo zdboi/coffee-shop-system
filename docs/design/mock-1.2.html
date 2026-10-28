@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CCCC 1.2 design mock</title>
+<link rel="stylesheet" href="../../cccc/shared/brand/tokens.css">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--cc-font-body);color:var(--cc-ink);background:#d9cdb6;font-size:15px;line-height:1.45}
+.frame{width:1280px;height:800px;margin:24px auto;background:var(--cc-paper);display:grid;grid-template-columns:220px 1fr;overflow:hidden;border-radius:14px;box-shadow:var(--cc-shadow-lift)}
+.disp{font-family:var(--cc-font-display);text-transform:uppercase;letter-spacing:.5px;line-height:1}
+svg.i{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+/* sidebar */
+.side{background:var(--cc-ink);color:var(--cc-paper);display:flex;flex-direction:column;padding:18px 12px}
+.brand{display:flex;gap:10px;align-items:center;padding:0 6px 18px;border-bottom:1px solid rgba(241,228,179,.15)}
+.brand img{width:46px;height:46px;border-radius:8px}
+.brand b{font-family:var(--cc-font-display);font-size:19px;line-height:.95;color:var(--cc-butter);text-transform:uppercase}
+.brand small{display:block;font-size:11px;color:#cdbfa3;margin-top:4px;letter-spacing:.4px}
+.nav{margin-top:14px;display:flex;flex-direction:column;gap:4px}
+.nav a{display:flex;align-items:center;gap:12px;min-height:48px;padding:0 12px;border-radius:10px;color:#e9dfc8;text-decoration:none;font-weight:600;font-size:15px}
+.nav a.on{background:var(--cc-terracotta);color:#fff}
+.nav a .badge{margin-left:auto;background:var(--cc-butter);color:var(--cc-ink);font-size:12px;font-weight:700;border-radius:99px;padding:1px 8px}
+.side .foot{margin-top:auto;display:flex;flex-direction:column;gap:8px}
+.who{font-size:13px;color:#cdbfa3;padding:0 6px}
+.who b{color:var(--cc-paper);display:block;font-size:14px}
+.pill{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 12px;border-radius:10px;background:rgba(241,228,179,.08);color:#e9dfc8;font-size:13px;font-weight:600}
+.dot{width:9px;height:9px;border-radius:50%;background:#7fbf87}
+/* main */
+.main{display:flex;flex-direction:column;min-width:0}
+.top{display:flex;align-items:center;gap:12px;padding:16px 24px;border-bottom:1px solid var(--cc-line);background:var(--cc-paper)}
+.top h1{font-size:34px;color:var(--cc-ink)}
+.chip{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 14px;border-radius:99px;border:1px solid var(--cc-line);background:var(--cc-card);font-weight:600;font-size:14px;color:var(--cc-ink-2)}
+.chip.on{background:var(--cc-ink);color:var(--cc-butter);border-color:var(--cc-ink)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:0 18px;border-radius:12px;border:0;font-weight:700;font-size:15px;font-family:inherit}
+.btn.primary{background:var(--cc-terracotta);color:#fff}
+.btn.ghost{background:var(--cc-card);border:1px solid var(--cc-line);color:var(--cc-ink)}
+.sp{flex:1}
+.body{flex:1;display:grid;grid-template-columns:1fr 340px;min-height:0}
+.left{padding:16px 24px;overflow:hidden;display:flex;flex-direction:column;gap:14px}
+.search{display:flex;align-items:center;gap:10px;min-height:48px;padding:0 14px;border-radius:12px;background:var(--cc-card);border:1px solid var(--cc-line);color:var(--cc-muted)}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.sec{display:flex;align-items:baseline;gap:10px;margin:4px 0 8px}
+.sec h2{font-size:22px}
+.sec span{color:var(--cc-muted);font-size:13px;font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.tile{min-height:92px;border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;justify-content:space-between;box-shadow:var(--cc-shadow)}
+.tile .n{font-weight:700;font-size:15px;line-height:1.2}
+.tile .p{font-weight:700;font-size:14px;opacity:.95}
+.tile.light{border:1px solid var(--tile-border-light)}
+.tile .so{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;background:rgba(255,253,248,.9);color:var(--cc-danger);padding:1px 6px;border-radius:6px;align-self:flex-start}
+.t-terracotta{background:var(--tile-terracotta-bg);color:var(--tile-terracotta-fg)}
+.t-olive{background:var(--tile-olive-bg);color:var(--tile-olive-fg)}
+.t-butter{background:var(--tile-butter-bg);color:var(--tile-butter-fg)}
+.t-cocoa{background:var(--tile-cocoa-bg);color:var(--tile-cocoa-fg)}
+.t-sage{background:var(--tile-sage-bg);color:var(--tile-sage-fg)}
+.t-gold{background:var(--tile-gold-bg);color:var(--tile-gold-fg)}
+.t-ink{background:var(--tile-ink-bg);color:var(--tile-ink-fg)}
+.t-clay{background:var(--tile-clay-bg);color:var(--tile-clay-fg)}
+.t-sky{background:var(--tile-sky-bg);color:var(--tile-sky-fg)}
+.t-deep_terracotta{background:var(--tile-deep_terracotta-bg);color:var(--tile-deep_terracotta-fg)}
+/* cart */
+.cart{background:var(--cc-cream);border-left:1px solid var(--cc-line);display:flex;flex-direction:column;padding:16px}
+.cart h3{font-size:24px}
+.cust{margin-top:10px;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:var(--cc-card);border:1px solid var(--cc-line)}
+.av{width:36px;height:36px;border-radius:50%;background:var(--cc-terracotta-tint);color:var(--cc-terracotta-deep);display:grid;place-items:center;font-weight:800}
+.cust small{display:block;color:var(--cc-muted);font-size:12px}
+.stamps{display:flex;gap:6px;margin-left:auto}
+.st{white-space:nowrap;font-size:12px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--cc-ink);color:var(--cc-butter)}
+.st.f{background:var(--cc-olive-deep);color:var(--cc-paper)}
+.lines{margin-top:12px;display:flex;flex-direction:column;gap:2px;flex:1}
+.ln{display:grid;grid-template-columns:28px 1fr auto;gap:8px;padding:10px 4px;border-bottom:1px dashed var(--cc-sand)}
+.ln b{font-size:15px}.ln small{display:block;color:var(--cc-muted);font-size:12px}
+.q{width:28px;height:28px;border-radius:8px;background:var(--cc-card);border:1px solid var(--cc-line);display:grid;place-items:center;font-weight:700;font-size:13px}
+.tot{border-top:2px solid var(--cc-ink);padding-top:10px;display:grid;gap:4px;font-size:14px;color:var(--cc-ink-2)}
+.tot div{display:flex;justify-content:space-between}
+.tot .big{font-size:28px;color:var(--cc-ink);font-weight:800;margin-top:4px}
+.tot .big span:first-child{font-family:var(--cc-font-display);font-weight:400;font-size:26px}
+.pay{margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pay .btn.primary{grid-column:1/-1;min-height:60px;font-size:18px}
+/* QR board + floor plan */
+.board{flex:1;display:grid;grid-template-columns:1fr 360px;min-height:0}
+.plan{margin:16px 0 16px 24px;border-radius:16px;background:var(--cc-card);border:1px solid var(--cc-line);position:relative;overflow:hidden;background-image:radial-gradient(var(--cc-line) 1px,transparent 1px);background-size:24px 24px}
+.shape{position:absolute;display:grid;place-items:center;text-align:center;font-weight:700;font-size:13px}
+.tbl{background:var(--cc-paper);border:2px solid var(--cc-ink-2);color:var(--cc-ink)}
+.tbl.round{border-radius:50%}.tbl.sq{border-radius:10px}
+.tbl .lb{font-family:var(--cc-font-display);font-size:20px;display:block}
+.tbl small{font-size:11px;font-weight:700;color:var(--cc-muted)}
+.tbl.wait{background:var(--cc-terracotta);border-color:var(--cc-terracotta-deep);color:#fff}
+.tbl.wait small{color:#fff}
+.tbl.serve{background:var(--cc-butter);border-color:var(--cc-olive)}
+.fx{background:var(--cc-sand);color:var(--cc-ink-2);border-radius:8px;font-size:12px;letter-spacing:.5px;text-transform:uppercase}
+.fx.wall{background:var(--cc-ink-2);border-radius:3px}
+.legend{position:absolute;left:16px;bottom:14px;display:flex;gap:14px;font-size:12px;font-weight:600;color:var(--cc-ink-2)}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:4px;margin-right:5px;vertical-align:-1px;border:1px solid var(--cc-ink-2)}
+.qcol{padding:16px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.oc{background:var(--cc-card);border:1px solid var(--cc-line);border-radius:14px;padding:12px 14px;box-shadow:var(--cc-shadow)}
+.oc.new{border-left:6px solid var(--cc-terracotta)}
+.oc .h{display:flex;align-items:center;gap:8px}
+.oc .h b{font-family:var(--cc-font-display);font-size:22px}
+.tag{font-size:12px;font-weight:700;border-radius:99px;padding:2px 9px;background:var(--cc-terracotta-tint);color:var(--cc-terracotta-deep)}
+.tag.ok{background:var(--cc-success-tint);color:var(--cc-success)}
+.oc ul{list-style:none;margin:8px 0;font-size:14px;color:var(--cc-ink-2)}
+.oc .row{display:flex;gap:8px}
+.oc .row .btn{min-height:44px;flex:1;font-size:14px}
+/* customers */
+.cpanel{padding:16px 24px;display:grid;grid-template-columns:320px 1fr;gap:16px;flex:1;min-height:0}
+.clist{background:var(--cc-card);border:1px solid var(--cc-line);border-radius:14px;overflow:hidden}
+.ci{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--cc-line);min-height:60px}
+.ci.on{background:var(--cc-terracotta-tint)}
+.ci small{display:block;color:var(--cc-muted);font-size:12px}
+.cdet{display:flex;flex-direction:column;gap:14px}
+.card{background:var(--cc-card);border:1px solid var(--cc-line);border-radius:14px;padding:16px}
+.card h4{font-family:var(--cc-font-display);font-weight:400;font-size:20px;text-transform:uppercase;margin-bottom:10px}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.kpi small{display:block;color:var(--cc-muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+.kpi b{font-size:26px}
+.lock{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--cc-muted);font-weight:600}
+.stampcard{display:flex;gap:6px;flex-wrap:wrap}
+.cup{width:26px;height:26px;border-radius:50%;border:2px dashed var(--cc-olive)}
+.cup.fill{background:var(--cc-ink);border:2px solid var(--cc-ink)}
+.cup.ff{background:var(--cc-olive-deep);border:2px solid var(--cc-olive-deep)}
+.fav{display:flex;flex-direction:column;gap:8px}
+.fav div{display:flex;align-items:center;gap:10px}
+.bar{height:10px;border-radius:6px;background:var(--cc-terracotta)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-size:12px;color:var(--cc-muted);text-transform:uppercase;letter-spacing:.4px;padding:6px 8px;border-bottom:1px solid var(--cc-line)}
+td{padding:9px 8px;border-bottom:1px solid var(--cc-line)}
+/* phone */
+.phone{width:390px;height:844px;margin:24px auto;background:var(--cc-paper);border-radius:28px;overflow:hidden;box-shadow:var(--cc-shadow-lift);display:flex;flex-direction:column}
+.ph-head{background:var(--cc-terracotta);color:var(--cc-butter);padding:18px 16px 14px;display:flex;align-items:center;gap:12px}
+.ph-head img{width:52px;height:52px;border-radius:9px}
+.ph-head b{font-family:var(--cc-font-display);font-size:24px;line-height:.92;text-transform:uppercase}
+.ph-head b span{display:block;color:var(--cc-ink)}
+.ph-head small{display:block;font-size:12px;color:#fff;margin-top:4px}
+.ph-body{padding:14px 16px;display:flex;flex-direction:column;gap:12px;flex:1;overflow:hidden}
+.member{background:var(--cc-card);border-radius:16px;border:1px solid var(--cc-line);overflow:hidden}
+.member .mh{background:var(--cc-ink);color:var(--cc-butter);padding:10px 14px;font-family:var(--cc-font-display);font-size:18px;text-transform:uppercase;display:flex;justify-content:space-between}
+.member .mb{padding:10px 14px;display:grid;gap:8px;font-size:13px;color:var(--cc-ink-2)}
+.member .mb .row{display:flex;align-items:center;gap:8px}
+.member .mb .row b{width:44px;color:var(--cc-ink)}
+.cup.s{width:19px;height:19px}
+.member .mb .row{gap:5px}
+.ph-cats{display:flex;gap:8px;overflow:hidden}
+.item{display:flex;gap:12px;align-items:center;background:var(--cc-card);border:1px solid var(--cc-line);border-radius:14px;padding:10px}
+.thumb{width:62px;height:62px;border-radius:10px;flex:none}
+.item b{display:block;font-size:15px}.item small{color:var(--cc-muted);font-size:12px}
+.add{margin-left:auto;width:44px;height:44px;border-radius:12px;background:var(--cc-terracotta);color:#fff;display:grid;place-items:center;font-size:24px;font-weight:700}
+.ph-cart{margin:0 16px 16px;min-height:56px;border-radius:14px;background:var(--cc-ink);color:var(--cc-butter);display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-weight:700}
+.caption{max-width:1280px;margin:0 auto;font-weight:700;color:var(--cc-ink-2);padding:24px 8px 0}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-orders" viewBox="0 0 24 24"><path d="M6 8h12l-1.2 11.2a2 2 0 0 1-2 1.8H9.2a2 2 0 0 1-2-1.8z"/><path d="M5 5h14v3H5z"/><path d="M9 12h6"/></symbol>
+  <symbol id="i-qr" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></symbol>
+  <symbol id="i-receipt" viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3 13h5l1.5 3h5L16 13h5"/><path d="M5 5h14l2 8v6H3v-6z"/></symbol>
+</svg>
+
+<div class="caption">1 · Counter: Orders (was "Sell"), grouped by sub-category, tile colours per sub-category</div>
+<section class="frame" id="mock-orders">
+  <aside class="side">
+    <div class="brand"><img src="../../cccc/shared/brand/tile-icon-192.webp" alt=""><div><b>Cavite City<br>Coffee Club</b><small>Counter 1</small></div></div>
+    <nav class="nav">
+      <a class="on"><svg class="i"><use href="#i-orders"/></svg>Orders</a>
+      <a><svg class="i"><use href="#i-qr"/></svg>QR orders<span class="badge">2</span></a>
+      <a><svg class="i"><use href="#i-users"/></svg>Customers</a>
+      <a><svg class="i"><use href="#i-receipt"/></svg>Sales</a>
+      <a><svg class="i"><use href="#i-clock"/></svg>Shift &amp; cash</a>
+    </nav>
+    <div class="foot">
+      <div class="who"><b>Jake</b>Manager</div>
+      <div class="pill"><span class="dot"></span>Online · all uploaded</div>
+      <div class="pill"><svg class="i" style="width:18px;height:18px"><use href="#i-lock"/></svg>Lock / switch user</div>
+    </div>
+  </aside>
+  <main class="main">
+    <div class="top"><h1 class="disp">Orders</h1><span class="chip">Shift S-0142 · 3h 12m</span><span class="sp"></span><span class="btn ghost"><svg class="i"><use href="#i-inbox"/></svg>Held (1)</span></div>
+    <div class="body">
+      <div class="left">
+        <div class="search"><svg class="i"><use href="#i-search"/></svg>Search the menu</div>
+        <div class="chips"><span class="chip on">All</span><span class="chip">Hot coffee</span><span class="chip">Iced coffee</span><span class="chip">Non-coffee</span><span class="chip">Pastries</span><span class="chip">Rice meals</span></div>
+        <div>
+          <div class="sec"><h2 class="disp">Hot coffee</h2><span>5 items</span></div>
+          <div class="grid">
+            <div class="tile t-cocoa"><span class="n">Americano</span><span class="p">₱120</span></div>
+            <div class="tile t-cocoa"><span class="n">Café latte</span><span class="p">₱150</span></div>
+            <div class="tile t-cocoa"><span class="n">Cappuccino</span><span class="p">₱150</span></div>
+            <div class="tile t-cocoa"><span class="n">Spanish latte</span><span class="p">₱165</span></div>
+            <div class="tile t-cocoa"><span class="n">Flat white</span><span class="p">₱160</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="sec"><h2 class="disp">Iced coffee</h2><span>5 items</span></div>
+          <div class="grid">
+            <div class="tile t-terracotta"><span class="n">Iced latte</span><span class="p">₱160</span></div>
+            <div class="tile t-terracotta"><span class="n">Iced Spanish latte</span><span class="p">₱175</span></div>
+            <div class="tile t-terracotta"><span class="n">Iced mocha</span><span class="p">₱180</span></div>
+            <div class="tile t-terracotta"><span class="n">Cavite cold brew</span><span class="p">₱170</span></div>
+            <div class="tile t-terracotta"><span class="so">Sold out</span><span class="n">Sea salt latte</span><span class="p">₱185</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="sec"><h2 class="disp">Non-coffee</h2><span>3 items</span></div>
+          <div class="grid">
+            <div class="tile t-sage light"><span class="n">Matcha latte</span><span class="p">₱170</span></div>
+            <div class="tile t-sage light"><span class="n">Chocolate</span><span class="p">₱150</span></div>
+            <div class="tile t-sage light"><span class="n">Strawberry milk</span><span class="p">₱160</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="sec"><h2 class="disp">Pastries</h2><span>4 items</span></div>
+          <div class="grid">
+            <div class="tile t-butter light"><span class="n">Ensaymada</span><span class="p">₱85</span></div>
+            <div class="tile t-butter light"><span class="n">Banana bread</span><span class="p">₱95</span></div>
+            <div class="tile t-butter light"><span class="n">Bibingka cheesecake</span><span class="p">₱140</span></div>
+            <div class="tile t-butter light"><span class="n">Croissant</span><span class="p">₱110</span></div>
+          </div>
+        </div>
+      </div>
+      <aside class="cart">
+        <h3 class="disp">Current order</h3>
+        <div class="cust"><div class="av">M</div><div><b>Mika</b><small>0917 ••• 4567 · 14 visits</small></div><div class="stamps"><span class="st">Drink 6</span><span class="st f">Food 3</span></div></div>
+        <div class="lines">
+          <div class="ln"><span class="q">2</span><div><b>Iced Spanish latte</b><small>Large · Oat milk</small></div><b>₱390</b></div>
+          <div class="ln"><span class="q">1</span><div><b>Ensaymada</b><small>Warm</small></div><b>₱85</b></div>
+        </div>
+        <div class="tot">
+          <div><span>Subtotal</span><span>₱475.00</span></div>
+          <div><span>VAT (incl.)</span><span>₱50.89</span></div>
+          <div class="big"><span>Total</span><span>₱475.00</span></div>
+        </div>
+        <div class="pay"><span class="btn ghost">Hold</span><span class="btn ghost">Discount</span><span class="btn primary">Charge ₱475.00</span></div>
+      </aside>
+    </div>
+  </main>
+</section>
+
+<div class="caption">2 · Counter: QR orders board with your floor plan (tables waiting for payment light up)</div>
+<section class="frame" id="mock-qr">
+  <aside class="side">
+    <div class="brand"><img src="../../cccc/shared/brand/tile-icon-192.webp" alt=""><div><b>Cavite City<br>Coffee Club</b><small>Counter 1</small></div></div>
+    <nav class="nav">
+      <a><svg class="i"><use href="#i-orders"/></svg>Orders</a>
+      <a class="on"><svg class="i"><use href="#i-qr"/></svg>QR orders<span class="badge">2</span></a>
+      <a><svg class="i"><use href="#i-users"/></svg>Customers</a>
+      <a><svg class="i"><use href="#i-receipt"/></svg>Sales</a>
+      <a><svg class="i"><use href="#i-clock"/></svg>Shift &amp; cash</a>
+    </nav>
+    <div class="foot"><div class="who"><b>Jake</b>Manager</div><div class="pill"><span class="dot"></span>Online · all uploaded</div></div>
+  </aside>
+  <main class="main">
+    <div class="top"><h1 class="disp">QR orders</h1><span class="chip on">Floor plan</span><span class="chip">List</span><span class="sp"></span><span class="chip">2 waiting · 1 being made</span></div>
+    <div class="board">
+      <div class="plan">
+        <div class="shape fx wall" style="left:0;top:0;width:100%;height:10px"></div>
+        <div class="shape fx" style="left:40px;top:40px;width:260px;height:70px">Counter &amp; bar</div>
+        <div class="shape fx" style="left:520px;top:40px;width:90px;height:44px">Door</div>
+        <div class="shape tbl sq" style="left:60px;top:170px;width:110px;height:110px"><div><span class="lb">T1</span><small>4 seats</small></div></div>
+        <div class="shape tbl sq wait" style="left:220px;top:170px;width:110px;height:110px"><div><span class="lb">T2</span><small>Waiting · ₱475</small></div></div>
+        <div class="shape tbl round" style="left:370px;top:160px;width:120px;height:120px"><div><span class="lb">T3</span><small>2 seats</small></div></div>
+        <div class="shape tbl round serve" style="left:530px;top:160px;width:120px;height:120px"><div><span class="lb">T4</span><small>Being made</small></div></div>
+        <div class="shape tbl sq" style="left:60px;top:340px;width:270px;height:100px"><div><span class="lb">T5</span><small>Long table · 8 seats</small></div></div>
+        <div class="shape tbl round wait" style="left:390px;top:340px;width:100px;height:100px"><div><span class="lb">T6</span><small>Waiting</small></div></div>
+        <div class="shape tbl round" style="left:540px;top:340px;width:100px;height:100px"><div><span class="lb">T7</span></div></div>
+        <div class="shape fx" style="left:560px;top:480px;width:110px;height:40px">Patio</div>
+        <div class="legend"><span><i style="background:var(--cc-terracotta)"></i>Waiting for payment</span><span><i style="background:var(--cc-butter)"></i>Being made</span><span><i style="background:var(--cc-paper)"></i>Free</span></div>
+      </div>
+      <div class="qcol">
+        <div class="oc new"><div class="h"><b>Q-018</b><span class="tag">New</span><span class="sp"></span><b style="font-size:16px;font-family:var(--cc-font-body)">₱475</b></div><div style="font-size:13px;color:var(--cc-muted)">Table T2 · Dine in · for Mika · 2 min ago</div><ul><li>2 × Iced Spanish latte (Large, Oat)</li><li>1 × Ensaymada</li></ul><div class="row"><span class="btn ghost">Decline</span><span class="btn primary">Take payment</span></div></div>
+        <div class="oc new"><div class="h"><b>Q-017</b><span class="tag">New</span><span class="sp"></span><b style="font-size:16px;font-family:var(--cc-font-body)">₱150</b></div><div style="font-size:13px;color:var(--cc-muted)">Table T6 · Dine in · 5 min ago</div><ul><li>1 × Café latte</li></ul><div class="row"><span class="btn ghost">Decline</span><span class="btn primary">Take payment</span></div></div>
+        <div class="oc"><div class="h"><b>Q-016</b><span class="tag ok">Paid · being made</span></div><div style="font-size:13px;color:var(--cc-muted)">Table T4 · Dine in · for Paolo</div></div>
+      </div>
+    </div>
+  </main>
+</section>
+
+<div class="caption">3 · Counter: Customers (managers also see money; cashiers don't)</div>
+<section class="frame" id="mock-customers">
+  <aside class="side">
+    <div class="brand"><img src="../../cccc/shared/brand/tile-icon-192.webp" alt=""><div><b>Cavite City<br>Coffee Club</b><small>Counter 1</small></div></div>
+    <nav class="nav">
+      <a><svg class="i"><use href="#i-orders"/></svg>Orders</a>
+      <a><svg class="i"><use href="#i-qr"/></svg>QR orders<span class="badge">2</span></a>
+      <a class="on"><svg class="i"><use href="#i-users"/></svg>Customers</a>
+      <a><svg class="i"><use href="#i-receipt"/></svg>Sales</a>
+      <a><svg class="i"><use href="#i-clock"/></svg>Shift &amp; cash</a>
+    </nav>
+    <div class="foot"><div class="who"><b>Jake</b>Manager</div><div class="pill"><span class="dot"></span>Online · all uploaded</div></div>
+  </aside>
+  <main class="main">
+    <div class="top"><h1 class="disp">Customers</h1><span class="sp"></span><span class="btn primary">Add customer</span></div>
+    <div class="cpanel">
+      <div class="clist">
+        <div class="ci" style="padding:10px"><div class="search" style="width:100%"><svg class="i"><use href="#i-search"/></svg>Search by nickname</div></div>
+        <div class="ci on"><div class="av">M</div><div><b>Mika</b><small>0917 ••• 4567 · last visit today</small></div></div>
+        <div class="ci"><div class="av">P</div><div><b>Paolo</b><small>0928 ••• 1102 · yesterday</small></div></div>
+        <div class="ci"><div class="av">A</div><div><b>Ate Joy</b><small>No phone · 3 days ago</small></div></div>
+        <div class="ci"><div class="av">R</div><div><b>Rico</b><small>0995 ••• 8830 · last week</small></div></div>
+      </div>
+      <div class="cdet">
+        <div class="cards">
+          <div class="card kpi"><small>Visits</small><b>14</b></div>
+          <div class="card kpi"><small>Drink stamps</small><b>6 / 10</b></div>
+          <div class="card kpi"><small>Food stamps</small><b>3 / 10</b></div>
+          <div class="card kpi"><small>Total spent</small><b>₱6,240</b><div class="lock"><svg class="i" style="width:14px;height:14px"><use href="#i-lock"/></svg>Managers only</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+          <div class="card"><h4>Stamp cards</h4>
+            <div style="font-size:13px;color:var(--cc-muted);margin-bottom:6px">One drink stamp and one food stamp per day.</div>
+            <div class="stampcard"><span class="cup fill"></span><span class="cup fill"></span><span class="cup fill"></span><span class="cup fill"></span><span class="cup fill"></span><span class="cup fill"></span><span class="cup"></span><span class="cup"></span><span class="cup"></span><span class="cup"></span></div>
+            <div class="stampcard" style="margin-top:8px"><span class="cup ff"></span><span class="cup ff"></span><span class="cup ff"></span><span class="cup"></span><span class="cup"></span><span class="cup"></span><span class="cup"></span><span class="cup"></span><span class="cup"></span><span class="cup"></span></div>
+          </div>
+          <div class="card"><h4>Favourites</h4>
+            <div class="fav">
+              <div><b style="width:160px">Iced Spanish latte</b><span class="bar" style="width:150px"></span><span>9×</span></div>
+              <div><b style="width:160px">Ensaymada</b><span class="bar" style="width:84px"></span><span>5×</span></div>
+              <div><b style="width:160px">Café latte</b><span class="bar" style="width:50px"></span><span>3×</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="card"><h4>Recent orders</h4>
+          <table><thead><tr><th>When</th><th>Order</th><th>Items</th><th style="text-align:right">Total</th></tr></thead><tbody>
+            <tr><td>Today 9:12</td><td>S-1088</td><td>2 × Iced Spanish latte, 1 × Ensaymada</td><td style="text-align:right">₱475</td></tr>
+            <tr><td>Mon 16:40</td><td>Q-012</td><td>1 × Iced Spanish latte</td><td style="text-align:right">₱175</td></tr>
+            <tr><td>Sat 10:05</td><td>S-1031</td><td>1 × Café latte, 1 × Banana bread</td><td style="text-align:right">₱245</td></tr>
+          </tbody></table>
+        </div>
+      </div>
+    </div>
+  </main>
+</section>
+
+<div class="caption">4 · Customer's phone: QR order page with both stamp cards</div>
+<section class="phone" id="mock-phone">
+  <div class="ph-head"><img src="../../cccc/shared/brand/tile-icon-192.webp" alt=""><div><b>Cavite City<span>Coffee Club</span></b><small>Table T2 · Dine in</small></div></div>
+  <div class="ph-body">
+    <div style="font-size:15px"><b>Welcome back, Mika!</b></div>
+    <div class="member"><div class="mh"><span>Member card</span><span>Bienvenido!</span></div>
+      <div class="mb">
+        <div class="row"><b>Drinks</b><span class="cup s fill"></span><span class="cup s fill"></span><span class="cup s fill"></span><span class="cup s fill"></span><span class="cup s fill"></span><span class="cup s fill"></span><span class="cup s"></span><span class="cup s"></span><span class="cup s"></span><span class="cup s"></span></div>
+        <div class="row"><b>Food</b><span class="cup s ff"></span><span class="cup s ff"></span><span class="cup s ff"></span><span class="cup s"></span><span class="cup s"></span><span class="cup s"></span><span class="cup s"></span><span class="cup s"></span><span class="cup s"></span><span class="cup s"></span></div>
+        <div>One stamp per day for a drink, one for food.</div>
+      </div></div>
+    <div class="ph-cats"><span class="chip on">Hot coffee</span><span class="chip">Iced coffee</span><span class="chip">Non-coffee</span></div>
+    <h2 class="disp" style="font-size:22px">Hot coffee</h2>
+    <div class="item"><div class="thumb" style="background:var(--tile-cocoa-bg)"></div><div><b>Americano</b><small>Double shot, hot water</small><div style="font-weight:700">₱120</div></div><span class="add">+</span></div>
+    <div class="item"><div class="thumb" style="background:var(--tile-cocoa-bg)"></div><div><b>Café latte</b><small>Espresso, steamed milk</small><div style="font-weight:700">₱150</div></div><span class="add">+</span></div>
+    <div class="item"><div class="thumb" style="background:var(--tile-cocoa-bg)"></div><div><b>Spanish latte</b><small>With condensed milk</small><div style="font-weight:700">₱165</div></div><span class="add">+</span></div>
+  </div>
+  <div class="ph-cart"><span>View order · 3 items</span><span>₱475</span></div>
+</section>
+</body>
+</html>

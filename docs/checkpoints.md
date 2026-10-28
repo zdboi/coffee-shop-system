@@ -12,7 +12,8 @@ If an update goes wrong, tell C: **"Go back to the last working version."**
 
 | Apps | Live since | Browse | Download |
 |---|---|---|---|
-| Counter, Back Office, QR page (all apps) | 2026-10-20 (pull request #1) | [a53238e](https://github.com/zdboi/coffee-shop-system/tree/a53238e77f374c38c4f730101b84f5a5898ee00f) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/a53238e77f374c38c4f730101b84f5a5898ee00f.zip) |
+| Counter, Back Office, QR page (all apps), release 1.1 | 2026-10-26 (pull request #2; database script 007 run) | [0741e1b](https://github.com/zdboi/coffee-shop-system/tree/0741e1b567a6e662f52d38d1b0d4872720e6777e) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/0741e1b567a6e662f52d38d1b0d4872720e6777e.zip) |
+| *(previous)* release 1.0 | 2026-10-20 (pull request #1) | [a53238e](https://github.com/zdboi/coffee-shop-system/tree/a53238e77f374c38c4f730101b84f5a5898ee00f) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/a53238e77f374c38c4f730101b84f5a5898ee00f.zip) |
 
 Older working versions stay in the table below, so you can go back further if needed.
 
@@ -27,6 +28,7 @@ Older working versions stay in the table below, so you can go back further if ne
 | 6 | **Ready for go-live** | 2026-10-20 | Optional CAPTCHA built (off); final security verdict "ready"; 3,238 tests pass; old pages archived; pull request #1 open for you. |
 | 7 | **Live** | 2026-10-20 | New apps live on your site; database scripts 004–006 run; counter tested and uploading. |
 | 8 | **Release 1.1 ready** | 2026-10-26 | Batch 1 (your feedback #1–#6): units everywhere, category manager, Excel import/export, tick-and-remove recipes, counter menu. 3,716 tests pass; security review ready. Waiting for you to publish. |
+| 9 | **Release 1.1 live** | 2026-10-29 | You merged pull request #2 and ran `007_batch1.sql` ("it works"). This is now the last working version. |
 
 ## Look at or download a checkpoint
 

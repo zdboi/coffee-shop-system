@@ -1,0 +1,69 @@
+/* Cavite City Coffee Club: brand tokens (release 1.2).
+   Owned by the lead. Every app loads this file first; screens use these variables,
+   never raw hex. Colours come from the logo prototype (2026-10-29); every text
+   pair below passes 4.5:1 contrast (checked). Olive-gold (--cc-olive) is 3.1:1 on paper:
+   borders and decoration only, never text. */
+
+/* Brunson: headings only (logo font). Licence: see docs/design/README.md.
+   No ₱ sign in this font: the browser falls back to the body font for it. */
+@font-face{
+  font-family:'Brunson';
+  src:url('brunson.woff') format('woff');
+  font-weight:400 900; font-style:normal; font-display:swap;
+}
+
+:root{
+  /* Brand */
+  --cc-terracotta:#B5432B;      /* main brand colour, primary buttons */
+  --cc-terracotta-deep:#8E2F1C; /* pressed / hover, strong headings */
+  --cc-terracotta-tint:#F4E1D8; /* selected rows, soft highlights */
+  --cc-butter:#F1E4B3;          /* accents on dark, active chips */
+  --cc-paper:#FBF6EA;           /* page background */
+  --cc-cream:#F6EEDC;           /* panels, sidebar */
+  --cc-sand:#E8D2AE;            /* dividers on cream */
+  --cc-card:#FFFDF8;            /* cards, inputs */
+  --cc-ink:#1F1B19;             /* main text, dark surfaces */
+  --cc-ink-2:#5A4C42;           /* secondary text (7.6:1) */
+  --cc-muted:#6B5D52;           /* hints, captions (5.9:1) */
+  --cc-olive:#9E8B57;           /* decoration only */
+  --cc-olive-deep:#6E5F33;      /* olive text (5.8:1) */
+  --cc-line:#E3D6BD;            /* borders */
+
+  /* Status (text-safe on paper and white) */
+  --cc-success:#2F6B3A; --cc-success-tint:#E3EFDF;
+  --cc-warning:#8A5A00; --cc-warning-tint:#F7EACB;
+  --cc-danger:#A12A1B;  --cc-danger-tint:#F6DEDA;
+  --cc-info:#2E5A6B;    --cc-info-tint:#DDEBEF;
+
+  /* Type */
+  --cc-font-display:'Brunson','Arial Narrow',Impact,sans-serif;
+  --cc-font-body:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  --cc-font-num:ui-monospace,'Cascadia Mono','Segoe UI Mono',Menlo,monospace;
+
+  /* Shape and space (8 px rhythm) */
+  --cc-radius-sm:8px; --cc-radius:12px; --cc-radius-lg:18px;
+  --cc-space-1:4px; --cc-space-2:8px; --cc-space-3:12px; --cc-space-4:16px; --cc-space-5:24px; --cc-space-6:32px;
+  --cc-touch:48px;              /* minimum tap size on the counter */
+  --cc-shadow:0 1px 2px rgba(31,27,25,.06),0 4px 14px rgba(31,27,25,.07);
+  --cc-shadow-lift:0 2px 4px rgba(31,27,25,.08),0 10px 24px rgba(31,27,25,.12);
+  --cc-focus:0 0 0 3px var(--cc-paper),0 0 0 6px var(--cc-terracotta);
+  --cc-ease:cubic-bezier(.2,.7,.2,1); --cc-fast:140ms; --cc-mid:220ms;
+
+  /* Sub-category tile colours (brand-safe; the database stores the KEY, e.g. "olive").
+     bg + fg pairs all pass 4.5:1; light tiles get a border on the paper background. */
+  --tile-terracotta-bg:#B5432B;      --tile-terracotta-fg:#FFFFFF;
+  --tile-deep_terracotta-bg:#8E2F1C; --tile-deep_terracotta-fg:#FBF6EA;
+  --tile-olive-bg:#6E6233;           --tile-olive-fg:#FBF6EA;
+  --tile-gold-bg:#D6C48A;            --tile-gold-fg:#1F1B19;
+  --tile-butter-bg:#F1E4B3;          --tile-butter-fg:#1F1B19;
+  --tile-ink-bg:#1F1B19;             --tile-ink-fg:#F1E4B3;
+  --tile-sage-bg:#B9C4A0;            --tile-sage-fg:#1F1B19;
+  --tile-clay-bg:#E2A88F;            --tile-clay-fg:#1F1B19;
+  --tile-cocoa-bg:#5A3A2A;           --tile-cocoa-fg:#FBF6EA;
+  --tile-sky-bg:#A9C6CF;             --tile-sky-fg:#1F1B19;
+  --tile-border-light:rgba(31,27,25,.18);
+}
+
+@media (prefers-reduced-motion: reduce){
+  :root{ --cc-fast:0ms; --cc-mid:0ms; }
+}
