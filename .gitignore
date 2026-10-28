@@ -10,6 +10,3 @@ private/
 *costing*.xlsx
 *developer changelog*
 !tests/fixtures/demo_*.xlsx
-
-# Brunson webfont: kept local until the owner confirms its licence allows web use (2026-10-29)
-cccc/shared/brand/brunson.woff
