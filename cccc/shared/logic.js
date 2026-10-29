@@ -658,19 +658,21 @@ function loyaltyCardView(summary, rewardsConfig){
     next: next ? {stamp: next.stamp, type: next.type, amount: next.amount, label: next.label, to_go: next.to_go} : null,
     ready, ready_count: ready.length};
 }
-// Cart lines a FREE_ITEM reward may be used on: a drink / pastry / food item with quantity > 0.
+// A line a FREE_ITEM reward can use: a whole quantity of at least 1 (server rule, 008 M3).
+function _wholeQtyLine(l){ const q = Number(l && l.quantity); return isFinite(q) && q >= 1 && Math.floor(q) === q; }
+// Cart lines a FREE_ITEM reward may be used on: a drink / pastry / food item, whole quantity >= 1.
 function rewardEligibleLines(lines){
   return (lines || []).filter(l => {
-    if(!l || !l.recipe_id || !(Number(l.quantity) > 0)) return false;
+    if(!l || !l.recipe_id || !_wholeQtyLine(l)) return false;
     const rec = state.recipes.find(r => r.id === l.recipe_id);
     return !!rec && REWARD_ITEM_TYPES.includes(recipeTypeOf(rec));
   });
 }
 // How much a chosen ready reward takes off this cart (₱, centavos):
 //   AMOUNT_OFF -> its amount;
-//   FREE_ITEM  -> the price of ONE of the chosen item (cart line unit_price = recipe price
-//                 + chosen options). If the same item is on several lines the DEAREST line
-//                 counts, as on the server.
+//   FREE_ITEM  -> the price of ONE of the chosen item: per line min(unit_price, line_total)
+//                 (unit_price = recipe price + chosen options); only lines with a whole
+//                 quantity >= 1 count, and if the item is on several the DEAREST counts (server rule).
 //   Both capped at subtotal − manager discount.
 //   choice: the chosen cart line ({recipe_id}) or a recipe id (FREE_ITEM only).
 // Returns 0 when nothing applies (e.g. FREE_ITEM with no matching line).
@@ -684,7 +686,10 @@ function loyaltyRewardAmount(reward, lines, discount, choice){
     const rid = choice && typeof choice === 'object' ? choice.recipe_id : choice;
     if(!rid) return 0;
     lines.forEach(l => {
-      if(l && l.recipe_id === rid && Number(l.quantity) > 0) amt = Math.max(amt, Math.max(0, Number(l.unit_price) || 0));
+      if(!l || l.recipe_id !== rid || !_wholeQtyLine(l)) return;
+      const unit = Math.max(0, Number(l.unit_price) || 0);
+      const lt = (l.line_total === undefined || l.line_total === null || l.line_total === '') ? unit * Number(l.quantity) : Math.max(0, Number(l.line_total) || 0);
+      amt = Math.max(amt, Math.min(unit, lt));
     });
   } else return 0;
   const t = computeSaleTotals(lines, discount, {tax_pct: 0, service_charge_pct: 0});
