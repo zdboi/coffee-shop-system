@@ -461,8 +461,8 @@ $$;
 --   * a sale counts when it is finished and not voided / fully refunded
 --     (status COMPLETED or PARTIALLY_REFUNDED), its total is above ₱0, and it
 --     is not waiting for the owner's check because of a price below the menu
---     (needs_review with PRICE_BELOW_MENU / NOT_ON_MENU; once the owner clears
---     needs_review it counts). QR orders count once they are paid at the counter.
+--     or a payment that doesn't cover it (needs_review with PRICE_BELOW_MENU /
+--     NOT_ON_MENU / PAYMENT_MISMATCH; once the owner clears needs_review it counts). QR orders count once they are paid at the counter.
 --   * a line counts when its unit price is above ₱0, its quantity is at least 1
 --     and not all of it was given back.
 --   * a day = a calendar day in the shop's time zone (Asia/Manila), taken from
@@ -495,7 +495,7 @@ language sql stable security definer set search_path = public as $$
     from public.sales x
     where x.business_id = p_biz and x.customer_id = p_customer and x.status in ('COMPLETED', 'PARTIALLY_REFUNDED')
       and coalesce(x.grand_total, 0) > 0
-      and not (coalesce(x.needs_review, false) and coalesce(x.review_reason, '') ~ '(PRICE_BELOW_MENU|NOT_ON_MENU)')
+      and not (coalesce(x.needs_review, false) and coalesce(x.review_reason, '') ~ '(PRICE_BELOW_MENU|NOT_ON_MENU|PAYMENT_MISMATCH)')
       and (p_exclude_sale is null or x.id <> p_exclude_sale)
   ),
   s as (
@@ -910,7 +910,9 @@ begin
   return nullif(array_to_string(v_reasons, ', '), '');
 end $$;
 
--- Same as 004, plus loyalty_discount: a finished sale's money can't change.
+-- Same as 004, plus loyalty_discount and received_at (when the server got it,
+-- which bounds the stamp day): neither can change on a finished sale, by anyone.
+-- A new (imported) sale may still be inserted with its own received_at.
 create or replace function public._lock_finished_sale() returns trigger
 language plpgsql set search_path = public as $$
 begin
@@ -920,6 +922,7 @@ begin
           or new.discount_value is distinct from old.discount_value
           or new.discount_amount is distinct from old.discount_amount
           or new.loyalty_discount is distinct from old.loyalty_discount
+          or new.received_at is distinct from old.received_at
           or new.tax_amount is distinct from old.tax_amount
           or new.service_charge_amount is distinct from old.service_charge_amount
           or new.grand_total is distinct from old.grand_total
