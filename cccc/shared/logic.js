@@ -1048,11 +1048,18 @@ const SALES_HINTS = {
   voids: 'Sales cancelled in full. Already left out of Sales.',
 };
 
+// Release 1.2: the stamp-card rewards line. Kept out of SALES_LABELS / SALES_HINTS so
+// those stay as they were (tests pin their keys); salesSummaryRows() uses these words.
+const LOYALTY_SALES_LABEL = 'Loyalty rewards';
+const LOYALTY_SALES_HINT = 'Stamp card rewards customers used, taken off after discounts.';
+
 // The full accounting picture for one shift (same maths as the original POS, incl. the
 // void double-count fix). `data` lets reports pass their own loaded records; otherwise state.
 // Sales figures (finished sales = not HELD, not VOIDED):
 //   itemSales     = Σ subtotals                  ("Item sales (before discounts)")
 //   discounts     = Σ discounts
+//   loyaltyRewards = Σ loyalty_discount (stamp card rewards, release 1.2)
+//   itemSales − discounts − loyaltyRewards + taxAndService = sales
 //   taxAndService = Σ tax + Σ service charge
 //   sales         = Σ grand totals               ("Sales": what customers paid)
 //   refunds       = refunds made in this shift (voids not included)
@@ -1070,6 +1077,7 @@ function shiftMetrics(shift, data){
 
   const grossSales = nonVoided.reduce((s,x)=> s + Number(x.subtotal||0), 0);
   const discountTotal = nonVoided.reduce((s,x)=> s + Number(x.discount_amount||0), 0);
+  const loyaltyRewards = nonVoided.reduce((s,x)=> s + Number(x.loyalty_discount||0), 0);
   const taxTotal = nonVoided.reduce((s,x)=> s + Number(x.tax_amount||0), 0);
   const serviceTotal = nonVoided.reduce((s,x)=> s + Number(x.service_charge_amount||0), 0);
   const grossGrandTotal = nonVoided.reduce((s,x)=> s + Number(x.grand_total||0), 0);
@@ -1111,7 +1119,7 @@ function shiftMetrics(shift, data){
   return {
     transactionCount: nonVoided.length, voidedCount,
     // clear names (use these with SALES_LABELS)
-    itemSales: grossSales, discounts: discountTotal, taxAndService: taxTotal + serviceTotal,
+    itemSales: grossSales, discounts: discountTotal, loyaltyRewards, taxAndService: taxTotal + serviceTotal,
     sales: grossGrandTotal, refunds: refundsOnly, voids: voidsOnly, netSales,
     // older names, unchanged
     grossSales, discountTotal, taxTotal, serviceTotal,
@@ -1130,6 +1138,8 @@ function shiftMetrics(shift, data){
 // saved when it closed are used (gross_sales, refunds_total, net_sales; Sales =
 // net_sales + refunds_total), like the X/Z reports do; discounts and tax & service are
 // not saved on the shift, so they always come from m.
+// The "Loyalty rewards" row (after Discounts) appears only when rewards were used
+// (m.loyaltyRewards > 0), so a shift without rewards shows the same rows as before.
 function salesSummaryRows(m, shift){
   if(!m) return [];
   const closed = !!(shift && shift.status === 'CLOSED');
@@ -1142,14 +1152,17 @@ function salesSummaryRows(m, shift){
   const v = {
     itemSales: savedItems !== null ? savedItems : m.itemSales,
     discounts: m.discounts,
+    loyaltyRewards: Number(m.loyaltyRewards) || 0,
     taxAndService: m.taxAndService,
     sales: (savedNet !== null && savedRefunds !== null) ? savedNet + savedRefunds : m.sales,
     refunds: savedRefunds !== null ? savedRefunds : m.refunds,
     netSales: savedNet !== null ? savedNet : m.netSales,
   };
-  const sign = {discounts: '-', taxAndService: '+', refunds: '-'};
-  return ['itemSales', 'discounts', 'taxAndService', 'sales', 'refunds', 'netSales'].map(key => ({
-    key, label: SALES_LABELS[key], hint: SALES_HINTS[key], amount: Number(v[key]) || 0,
+  const sign = {discounts: '-', loyaltyRewards: '-', taxAndService: '+', refunds: '-'};
+  const keys = ['itemSales', 'discounts'].concat(v.loyaltyRewards > 0 ? ['loyaltyRewards'] : [], ['taxAndService', 'sales', 'refunds', 'netSales']);
+  return keys.map(key => ({
+    key, label: key === 'loyaltyRewards' ? LOYALTY_SALES_LABEL : SALES_LABELS[key],
+    hint: key === 'loyaltyRewards' ? LOYALTY_SALES_HINT : SALES_HINTS[key], amount: Number(v[key]) || 0,
     sign: sign[key] || '', total: key === 'sales' || key === 'netSales',
   }));
 }
@@ -1163,6 +1176,8 @@ function shiftDuration(shift){
 }
 
 /* ================= Receipts (shared by Front Office + Back Office) ================= */
+// opts.rewardLabel: words of the stamp reward used (e.g. "₱10 off"), shown as
+// "Stamp reward: ₱10 off" when sale.loyalty_discount > 0 (else just "Stamp reward").
 function receiptHtml(sale, items, payments, opts){
   opts = opts || {};
   const s = state.settings;
@@ -1199,6 +1214,7 @@ function receiptHtml(sale, items, payments, opts){
     <!-- Customer receipt words: Subtotal = "Item sales (before discounts)", Total = what the customer paid ("Sales"). -->
     <div class="row"><span>Subtotal</span><span>${fmtMoney(sale.subtotal)}</span></div>
     ${Number(sale.discount_amount)>0?`<div class="row"><span>Discount</span><span>-${fmtMoney(sale.discount_amount)}</span></div>`:''}
+    ${Number(sale.loyalty_discount)>0?`<div class="row"><span>${opts.rewardLabel?'Stamp reward: '+escapeHtml(opts.rewardLabel):'Stamp reward'}</span><span>-${fmtMoney(sale.loyalty_discount)}</span></div>`:''}
     ${Number(sale.tax_amount)>0?`<div class="row"><span>Tax</span><span>${fmtMoney(sale.tax_amount)}</span></div>`:''}
     ${Number(sale.service_charge_amount)>0?`<div class="row"><span>Service charge</span><span>${fmtMoney(sale.service_charge_amount)}</span></div>`:''}
     <div class="row" style="font-weight:700;font-size:14px;margin-top:4px;"><span>Total</span><span>${fmtMoney(sale.grand_total)}</span></div>
