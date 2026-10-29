@@ -517,3 +517,22 @@ select test.chk(abs((:'tot'::jsonb->>'item_sales')::numeric - (:'tot'::jsonb->>'
 select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
 select test.chk((select count(*) from dining_tables) > 0 and (select count(*) from ingredient_brands) > 0, 'S/L3: owner still reads tables and brands');
 reset role;
+
+-- N1: a real-price sale that was not paid in full (PAYMENT_MISMATCH) earns no stamp until the owner clears the flag
+select visits as v1, drink_stamps as d1s from public._customer_loyalty(:'biz', :'zed') \gset
+select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
+select public.fo_sync('device-key-0001-abcdef', jsonb_set(test.zed_op('a0000000-0000-0000-0000-000000000ab6', '99999999-0000-0000-0000-000000000ab6', now() - interval '4 days', 150, 165, :'zed'),
+  '{0,data,payment,amount}', '1')) as r6 \gset
+reset role;
+select test.chk(:'r6'::jsonb->0->>'status' = 'ok' and (select needs_review and review_reason like '%PAYMENT_MISMATCH%' from sales where id = '99999999-0000-0000-0000-000000000ab6')
+            and (select visits = :v1 and drink_stamps = :d1s from public._customer_loyalty(:'biz', :'zed')), 'S/N1: unpaid real-price sale (PAYMENT_MISMATCH) earns no stamp', :'r6');
+update sales set needs_review = false where id = '99999999-0000-0000-0000-000000000ab6';
+select test.chk((select visits = :v1 + 1 and drink_stamps = :d1s + 1 from public._customer_loyalty(:'biz', :'zed')), 'S/N1: ... counts once the owner clears the flag');
+-- received_at can't be changed (or emptied) on a finished sale, even by the owner's Back Office
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"sales","row":{"id":"99999999-0000-0000-0000-000000000ab1","received_at":"2020-01-01T00:00:00Z"}}]')$$) = 'SALE_LOCKED'
+            and test.err($$select public.apply_changes('[{"op":"update","table":"sales","row":{"id":"99999999-0000-0000-0000-000000000ab1","received_at":null}}]')$$) = 'SALE_LOCKED',
+  'S/low: received_at can''t be changed or emptied on a finished sale');
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"sales","row":{"id":"99999999-0000-0000-0000-000000000ab9","transaction_number":"IMP-1","transaction_date":"2025-01-01T00:00:00Z","status":"COMPLETED","subtotal":100,"discount_amount":0,"tax_amount":0,"service_charge_amount":0,"grand_total":100,"received_at":"2025-01-01T00:05:00Z"}}]')$$) = 'NO ERROR',
+  'S/low: an imported (new) finished sale may still bring its own received_at');
+reset role;
