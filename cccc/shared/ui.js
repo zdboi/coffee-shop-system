@@ -117,6 +117,16 @@ const ERROR_TEXT = {
   // Staff PINs
   PIN_TOO_SHORT: 'Managers and the owner need a 6-digit PIN.',
   PIN_UPDATE_NEEDED: 'This manager PIN is too short to approve. Ask the owner to set a new 6-digit PIN in Back Office → Staff.',
+  // Stamp card rewards (release 1.2, 008)
+  REWARD_NOT_AVAILABLE: 'This reward can\'t be used on this sale. Ask a manager to check the customer\'s stamp card.',
+  REWARD_AMOUNT_MISMATCH: 'The reward amount didn\'t match. Remove the reward and add it again.',
+  BAD_LOYALTY_REWARDS: 'The stamp card settings are not valid. Each reward needs a stamp number within the card size, and an amount above ₱0 for "amount off" rewards.',
+  // Ingredient brands (release 1.2, 008)
+  BRAND_IN_USE: 'This brand has purchases or stock, so it can\'t be deleted. Switch it off instead.',
+  BRAND_MISMATCH: 'That brand belongs to a different ingredient. Choose one of this ingredient\'s brands.',
+  BRAND_NOT_ALLOWED: 'A brand can only be set on starting stock, a purchase or a stock increase.',
+  // Sub-category tile colours (release 1.2, 008)
+  BAD_SUBCATEGORY_COLORS: 'The tile colours could not be saved. Pick a colour from the list for each sub-category (names up to 40 characters).',
   // CAPTCHA (Cloudflare Turnstile) before an anonymous sign-in
   CAPTCHA_FAILED: 'We couldn\'t confirm you\'re a person. Check your internet and try again.',
   // Anything unexpected on the server
