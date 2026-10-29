@@ -37,7 +37,7 @@ function sortedTables(){
 }
 function renderTables(){
   if(state.route !== 'tables') return;      // a save finished after the owner moved on
-  const bar = setTopbarActions(`<button class="btn btn-amber" id="print-qr">🖨 Print QR codes</button>`);
+  const bar = setTopbarActions(`<button class="btn btn-amber" id="print-qr">${icon('printer', {size: 20})} Print QR codes</button>`);
   bar.querySelector('#print-qr').onclick = openPrintQrPicker;
   const content = document.getElementById('content');
   const tables = sortedTables();
@@ -45,12 +45,15 @@ function renderTables(){
   const s = state.settings;
   content.innerHTML = `
     ${s.qr_ordering_enabled ? '' : `<div class="notice warn">QR ordering is <b>off</b>: customers can see the menu but can't order. <a class="linklike" id="go-qr-on">Turn it on in Settings</a>.</div>`}
+    <div class="section-title" style="margin-top:0;">${icon('map')} Floor plan</div>
+    ${floorPlanCardHtml()}
+    <div class="section-title">${icon('qr')} Table QR codes</div>
     <div class="card">
       <p class="hint" style="margin-top:0;">Each table has its own QR code, so orders arrive with the table name. The <b>Takeaway</b> code is for the counter (order ahead, pick up). If a printed code is misused, use <b>New code</b> — the old one stops working.</p>
       <div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>QR</th><th>Name</th><th>Type</th><th class="num">Order</th><th>Status</th><th></th></tr></thead><tbody>
         ${tables.length ? tables.map(t => `<tr class="${t.active ? '' : 'muted-row'}">
           <td><div class="qr-mini" aria-hidden="true">${qrSvg(tableOrderUrl(t))}</div></td>
-          <td><b>${esc(t.label)}</b></td><td>${t.kind === 'TAKEAWAY' ? 'Takeaway' : 'Table'}</td><td class="num">${esc(num(t.sort_order))}</td>
+          <td><b>${esc(t.label)}</b>${t.kind !== 'TAKEAWAY' && t.seats ? `<div class="sub-line">${esc(plural(num(t.seats), 'seat'))}</div>` : ''}${t.kind !== 'TAKEAWAY' && (t.pos_x == null || t.pos_x === '') ? '<div class="sub-line">Not on the floor plan yet</div>' : ''}</td><td>${t.kind === 'TAKEAWAY' ? 'Takeaway' : 'Table'}</td><td class="num">${esc(num(t.sort_order))}</td>
           <td>${t.active ? '<span class="badge badge-green">On</span>' : '<span class="badge badge-gray">Off</span>'}</td>
           <td class="row-actions">
             <button class="btn btn-sm btn-ghost" data-copy="${esc(t.id)}">Copy link</button>
@@ -61,8 +64,8 @@ function renderTables(){
           : '<tr><td colspan="6" class="text-light" style="padding:14px;">No tables yet.</td></tr>'}
       </tbody></table></div>
       <div class="field-inline" style="margin-top:12px;">
-        <button class="btn btn-primary btn-sm" id="add-tables">+ Add tables</button>
-        <button class="btn btn-outline btn-sm" id="add-takeaway">+ Add a takeaway code</button>
+        <button class="btn btn-primary btn-sm" id="add-tables">${icon('plus', {size: 18})} Add tables</button>
+        <button class="btn btn-outline btn-sm" id="add-takeaway">${icon('plus', {size: 18})} Add a takeaway code</button>
       </div>
       <p class="hint">Customer order page: <span class="mono">${esc(orderPageBase())}</span> ${s.order_page_url ? '(set in Settings → QR ordering)' : '(worked out from this site\'s address; you can change it in Settings → QR ordering)'}</p>
     </div>
@@ -78,6 +81,7 @@ function renderTables(){
       </tbody></table></div>
     </div>`;
   const on = content.querySelector('#go-qr-on'); if(on) on.onclick = () => { BO_SETTINGS_TAB = 'qr'; navigate('settings'); };
+  wireFloorPlan(content);
   content.querySelector('#go-recipes').onclick = () => navigate('recipes');
   content.querySelector('#add-tables').onclick = () => openAddTablesModal('DINE_IN');
   content.querySelector('#add-takeaway').onclick = () => openAddTablesModal('TAKEAWAY');
@@ -468,6 +472,118 @@ function drawAudit(){
   </tbody></table></div>${list.length > 600 ? '<p class="hint">Showing the latest 600. Search or download the CSV for the rest.</p>' : ''}` : emptyBlock('No entries for these dates.');
 }
 
+/* ================= Loyalty: the stamp card (release 1.2) =================
+   One card of card_size stamps (15). A customer gets one stamp for a drink and one for
+   food on each day they buy (at most 2 a day); the SERVER counts them. Rewards sit at
+   stamp numbers on the card: AMOUNT_OFF (pesos off a sale) or FREE_ITEM (one drink or
+   food). Saved as settings.loyalty_rewards; the database checks it (BAD_LOYALTY_REWARDS),
+   and isValidLoyaltyRewards() in ../shared/logic.js is the same rule. */
+const LY_TYPES = {AMOUNT_OFF: 'Amount off', FREE_ITEM: 'Free drink or food'};
+let LY_DRAFT = null;
+function loyaltySettingsHtml(s){
+  LY_DRAFT = loyaltyConfig(s);
+  return `<div class="card">
+    <div class="toggle-row"><span><b>Stamp card</b><br><span class="hint">Customers see their card on the QR order page; staff see it at the counter.</span></span><label class="switch"><input type="checkbox" id="ly-on" ${s.loyalty_enabled ? 'checked' : ''}><span class="slider-tog"></span></label></div>
+    <p class="ly-rule">One stamp for a drink and one for food, each day (max 2 a day).</p>
+    <div class="form-row" style="max-width:220px;"><label for="ly-size">Stamps on one card</label><input type="number" min="1" max="100" step="1" id="ly-size" value="${esc(LY_DRAFT.card_size)}"></div>
+    <div class="section-title" style="font-size:20px;margin:6px 0 4px;">Rewards on the card</div>
+    <p class="hint" style="margin:0 0 6px;">A reward is ready when the customer reaches that stamp. Rewards they don't use stay ready (they don't expire). A full card starts a new one.</p>
+    <div class="ly-rewards" id="ly-rewards"></div>
+    <button type="button" class="btn btn-sm btn-outline" id="ly-add">${icon('plus', {size: 18})} Add a reward</button>
+    <div class="section-title" style="font-size:20px;margin:18px 0 4px;">What customers see</div>
+    <div id="ly-preview"></div>
+    <div class="field-inline" style="margin-top:16px;"><button class="btn btn-primary" id="ly-save">Save stamp card</button><button class="btn btn-ghost" id="ly-reset" type="button">Back to the usual card (5: ₱10 off, 10: ₱50 off, 15: free item)</button></div>
+  </div>`;
+}
+function lyReadRows(root){
+  const size = Math.round(num(root.querySelector('#ly-size').value));
+  const rewards = [...root.querySelectorAll('[data-ly-row]')].map(row => {
+    const type = row.querySelector('.ly-type').value;
+    const r = {stamp: Math.round(num(row.querySelector('.ly-stamp').value)), type};
+    if(type === 'AMOUNT_OFF') r.amount = roundMoney(row.querySelector('.ly-amount').value);
+    const label = row.querySelector('.ly-labelin').value.replace(/[<>]/g, '').trim();
+    r.label = label || (type === 'AMOUNT_OFF' ? `₱${fmtNum(r.amount, Number.isInteger(r.amount) ? 0 : 2)} off` : 'One free drink or food');
+    return r;
+  });
+  return {card_size: size, rewards};
+}
+// plain words for what is wrong (same rule as the database)
+function lyProblem(cfg){
+  if(!(Number.isInteger(cfg.card_size) && cfg.card_size >= 1 && cfg.card_size <= 100)) return 'The card needs 1 to 100 stamps.';
+  if(!cfg.rewards.length) return 'Add at least one reward.';
+  if(cfg.rewards.length > 10) return 'A card can have up to 10 rewards.';
+  const seen = new Set();
+  for(const r of cfg.rewards){
+    if(!(Number.isInteger(r.stamp) && r.stamp >= 1 && r.stamp <= cfg.card_size)) return `Each reward needs a stamp number from 1 to ${cfg.card_size}.`;
+    if(seen.has(r.stamp)) return `Two rewards are on stamp ${r.stamp}. Use each stamp once.`;
+    seen.add(r.stamp);
+    if(r.type === 'AMOUNT_OFF' && !(r.amount > 0 && r.amount <= 10000)) return `The reward on stamp ${r.stamp} needs an amount from ₱0.01 to ₱10,000.`;
+    if(r.label && r.label.length > 40) return `The name of the reward on stamp ${r.stamp} is too long (40 characters at most).`;
+  }
+  return isValidLoyaltyRewards(cfg) ? '' : 'The stamp card settings are not valid.';
+}
+function lyDrawRows(root){
+  const box = root.querySelector('#ly-rewards');
+  box.innerHTML = LY_DRAFT.rewards.map((r, i) => `<div class="ly-row" data-ly-row="${i}">
+      <div class="form-row"><label for="ly-stamp-${i}">On stamp</label><input class="ly-stamp" id="ly-stamp-${i}" type="number" min="1" max="100" step="1" value="${esc(r.stamp)}"></div>
+      <div class="form-row"><label for="ly-type-${i}">Reward</label><select class="ly-type" id="ly-type-${i}">${Object.keys(LY_TYPES).map(k => `<option value="${k}" ${r.type === k ? 'selected' : ''}>${LY_TYPES[k]}</option>`).join('')}</select></div>
+      <div class="form-row"><label for="ly-amount-${i}">Amount (₱)</label><input class="ly-amount" id="ly-amount-${i}" type="number" min="1" max="10000" step="any" value="${r.type === 'AMOUNT_OFF' ? esc(r.amount) : ''}" ${r.type === 'AMOUNT_OFF' ? '' : 'disabled placeholder="—"'}></div>
+      <div class="form-row ly-label"><label for="ly-label-${i}">Name customers see</label><input class="ly-labelin" id="ly-label-${i}" maxlength="40" value="${esc(r.label || '')}" placeholder="${r.type === 'AMOUNT_OFF' ? 'e.g. ₱10 off' : 'One free drink or food'}"></div>
+      <button type="button" class="btn btn-sm btn-ghost ly-rm" data-ly-rm="${i}" aria-label="Remove the reward on stamp ${esc(r.stamp)}" ${LY_DRAFT.rewards.length <= 1 ? 'disabled' : ''}>${icon('trash', {size: 18})}</button>
+    </div>`).join('');
+  box.querySelectorAll('input, select').forEach(el => el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
+    const was = LY_DRAFT.rewards.map(r => r.type).join();
+    LY_DRAFT = lyReadRows(root);
+    if(LY_DRAFT.rewards.map(r => r.type).join() !== was) lyDrawRows(root);     // the amount box comes and goes
+    lyDrawPreview(root);
+  }));
+  box.querySelectorAll('[data-ly-rm]').forEach(b => b.onclick = () => { LY_DRAFT = lyReadRows(root); LY_DRAFT.rewards.splice(Number(b.dataset.lyRm), 1); lyDrawRows(root); lyDrawPreview(root); });
+  root.querySelector('#ly-add').disabled = LY_DRAFT.rewards.length >= 10;
+}
+// the card as customers see it: a circle per stamp, rewards marked on their stamp
+function stampCardHtml(cfg, filled){
+  const at = {}; cfg.rewards.forEach(r => { at[r.stamp] = r; });
+  const size = Math.max(1, Math.min(100, Number(cfg.card_size) || 1));
+  let cups = '';
+  for(let n = 1; n <= size; n++){
+    const r = at[n];
+    const tag = r ? (r.type === 'FREE_ITEM' ? 'FREE' : '₱' + fmtNum(r.amount, Number.isInteger(r.amount) ? 0 : 2)) : '';
+    cups += `<span class="cup${n <= (filled || 0) ? ' fill' : ''}${r ? ' reward' : ''}" title="Stamp ${n}${r ? ': ' + esc(rewardLabel(r)) : ''}">${tag ? esc(tag) : ''}</span>`;
+  }
+  return `<div class="stampcard" role="img" aria-label="Stamp card with ${size} stamps${filled ? ', ' + filled + ' filled' : ''}">${cups}</div>`;
+}
+function lyDrawPreview(root){
+  const cfg = LY_DRAFT;
+  const bad = lyProblem(cfg);
+  const sorted = cfg.rewards.slice().sort((a, b) => a.stamp - b.stamp);
+  root.querySelector('#ly-preview').innerHTML = bad ? `<div class="notice warn">${esc(bad)}</div>`
+    : `${stampCardHtml(cfg, 0)}<div class="rw-list">${sorted.map(r => `<div><span class="rtag">Stamp ${esc(r.stamp)}</span>${esc(rewardLabel(r))}</div>`).join('')}</div>`;
+}
+function wireLoyaltySettings(root){
+  lyDrawRows(root); lyDrawPreview(root);
+  root.querySelector('#ly-size').oninput = () => { LY_DRAFT = lyReadRows(root); lyDrawPreview(root); };
+  root.querySelector('#ly-add').onclick = () => {
+    LY_DRAFT = lyReadRows(root);
+    const used = new Set(LY_DRAFT.rewards.map(r => r.stamp));
+    let n = LY_DRAFT.card_size; while(n > 1 && used.has(n)) n--;
+    LY_DRAFT.rewards.push({stamp: n, type: 'AMOUNT_OFF', amount: 20, label: '₱20 off'});
+    lyDrawRows(root); lyDrawPreview(root);
+  };
+  root.querySelector('#ly-reset').onclick = () => { LY_DRAFT = cleanLoyaltyRewards(null); root.querySelector('#ly-size').value = LY_DRAFT.card_size; lyDrawRows(root); lyDrawPreview(root); };
+  root.querySelector('#ly-save').onclick = (e) => busy(e.currentTarget, async () => {
+    const cfg = lyReadRows(root);
+    const bad = lyProblem(cfg);
+    if(bad){ toast(bad, 'error'); return; }
+    cfg.rewards.sort((a, b) => a.stamp - b.stamp);
+    const on = root.querySelector('#ly-on').checked;
+    // its own update (the stamp card + on/off only), so nothing else in the settings is touched
+    const ok = await boSave([Ops.update('settings', {loyalty_enabled: on, loyalty_rewards: cfg, updated_at: nowISO()}),
+      Ops.audit('Loyalty settings saved', `${on ? 'on' : 'off'} · ${cfg.card_size} stamps · ` + cfg.rewards.map(r => `${r.stamp}: ${rewardLabel(r)}`).join(', '))],
+      {success: 'Stamp card saved — counters and the QR page pick it up within a few minutes'});
+    if(ok && state.route === 'settings') renderSettings();
+  });
+}
+
 /* ================= Settings ================= */
 let BO_SETTINGS_TAB = 'general';
 const COLOR_KEYS = ['primary_color', 'secondary_color', 'accent_color', 'background_color', 'card_color', 'text_color'];
@@ -518,7 +634,7 @@ function renderSettings(){
       </div>
       <div class="form-row" style="max-width:360px;"><label for="set-payout-limit">Ask me to review cash pay-outs above (₱)</label><input type="number" min="0" step="any" id="set-payout-limit" value="${esc(num(s.payout_review_limit))}" ${BO.hasPayoutLimit ? '' : 'disabled'}>
         <div class="hint">${BO.hasPayoutLimit ? 'A pay-out (cash taken out of a counter drawer) bigger than this shows in Transactions → "Needs review".' : 'Available after the latest database update is installed.'}</div></div>
-      <div class="toggle-row" style="border:none;"><span>Dark theme<br><span class="hint">For the Back Office and the counters.</span></span><label class="switch"><input type="checkbox" id="set-dark" ${s.theme === 'dark' ? 'checked' : ''}><span class="slider-tog"></span></label></div>
+      <p class="hint" style="margin:0 0 14px;">The look of the apps (Cavite City Coffee Club or your own colours) is in <a class="linklike" data-tab-link="branding">Branding</a>.</p>
       <button class="btn btn-primary" id="save-general">Save</button>
     </div>`;
   if(tab === 'branding') html = `
@@ -528,13 +644,20 @@ function renderSettings(){
         <div class="form-row"><label for="cz-appname">App name</label><input id="cz-appname" maxlength="40" value="${esc(s.app_name || 'Brew Ledger')}" placeholder="Brew Ledger"></div>
       </div>
       <div class="hint" style="margin:-6px 0 14px;">The shop name shows on receipts, the counters, the QR order page and printed reports.</div>
+      <div class="form-row"><label>Theme</label></div>
+      <div class="theme-pick" role="radiogroup" aria-label="Theme">
+        <label class="theme-opt"><input type="radio" name="cz-theme" id="cz-theme-cccc" value="CCCC" ${brandTheme(s) === 'CCCC' ? 'checked' : ''}><span><b>Cavite City Coffee Club (recommended)</b><small>The shop's own logo, colours and fonts on every screen.</small></span></label>
+        <label class="theme-opt"><input type="radio" name="cz-theme" id="cz-theme-custom" value="CUSTOM" ${brandTheme(s) === 'CUSTOM' ? 'checked' : ''}><span><b>Custom colours</b><small>Your own colours, font and logo, for example for another shop.</small></span></label>
+      </div>
       <div class="form-row"><label>Logo</label></div>
       <div class="field-inline" style="margin-bottom:16px;">
-        <div class="logo-preview" id="cz-logo-preview">${s.logo_url ? `<img src="${esc(s.logo_url)}" alt="">` : '<span style="font-size:22px;">☕</span>'}</div>
+        <div class="logo-preview" id="cz-logo-preview">${s.logo_url ? `<img src="${esc(s.logo_url)}" alt="">` : brandLogoHtml('mark', {className: 'brand-mark', alt: ''})}</div>
         <button class="btn btn-outline btn-sm" id="cz-logo-upload">Upload a logo</button>
         <button class="btn btn-ghost btn-sm" id="cz-logo-remove" ${!s.logo_url ? 'disabled' : ''}>Remove logo</button>
         <input type="file" id="cz-logo-input" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" style="display:none;">
       </div>
+      <p class="hint" id="cz-logo-note" style="margin:-8px 0 16px;">With the Cavite City Coffee Club theme the shop's logo is used everywhere; an uploaded logo shows with <b>Custom colours</b> (and on printed QR cards).</p>
+      <div id="cz-custom-block" ${brandTheme(s) === 'CUSTOM' ? '' : 'hidden'}>
       <div class="form-row"><label>Ready-made colours</label></div>
       <div class="field-inline" style="gap:12px;margin-bottom:16px;">
         ${Object.entries(COLOR_PRESETS).map(([name, p]) => `<div style="text-align:center;"><button type="button" class="preset-swatch" data-preset="${name}" style="background:linear-gradient(135deg, ${p.primary_color} 50%, ${p.accent_color} 50%);" aria-label="${name} colours"></button><div class="text-light" style="font-size:11px;margin-top:4px;">${name}</div></div>`).join('')}
@@ -547,6 +670,7 @@ function renderSettings(){
       <div class="form-grid">
         <div class="form-row"><label for="cz-font">Font</label><select id="cz-font">${FONT_OPTIONS.map(f => `<option value="${f.id}" ${s.font_family === f.id ? 'selected' : ''}>${esc(f.label)}</option>`).join('')}</select></div>
         <div class="form-row"><label for="cz-fontsize">Text size</label><select id="cz-fontsize">${['small', 'medium', 'large'].map(z => `<option value="${z}" ${s.font_size === z ? 'selected' : ''}>${z[0].toUpperCase() + z.slice(1)}</option>`).join('')}</select></div>
+      </div>
       </div>
       <div class="hint" style="margin-bottom:14px;">Changes show here straight away as a preview. Counters and the QR page update after you save.</div>
       <div class="field-inline"><button class="btn btn-primary" id="cz-save">Save branding</button><button class="btn btn-outline" id="cz-reset-all">Reset all to defaults</button></div>
@@ -576,24 +700,20 @@ function renderSettings(){
         <div class="hint">Leave empty to use this website's own order page. The table codes are this address plus "?t=" and the table's code — change it only if you move the order page, then print the QR codes again.</div></div>
       <button class="btn btn-primary" id="qr-save">Save</button>
     </div>`;
-  if(tab === 'loyalty') html = `
-    <div class="card">
-      <div class="toggle-row"><span><b>Loyalty stamps</b><br><span class="hint">Customers see their stamp card on the QR order page.</span></span><label class="switch"><input type="checkbox" id="ly-on" ${s.loyalty_enabled ? 'checked' : ''}><span class="slider-tog"></span></label></div>
-      <div class="form-row" style="margin-top:12px;max-width:260px;"><label for="ly-stamps">Stamps for one reward</label><input type="number" min="1" max="50" step="1" id="ly-stamps" value="${esc(num(s.stamps_per_reward) || 10)}"></div>
-      <button class="btn btn-primary" id="ly-save">Save</button>
-    </div>`;
+  if(tab === 'loyalty') html = loyaltySettingsHtml(s);
   content.innerHTML = `<div class="settings-block" style="max-width:760px;">
     <div class="seg" style="margin-bottom:16px;flex-wrap:wrap;" role="tablist">${SETTINGS_TABS.map(t => `<button class="seg-btn ${tab === t.id ? 'active' : ''}" data-tab="${t.id}" role="tab" aria-selected="${tab === t.id}">${t.label}</button>`).join('')}</div>
     ${html}
     <p class="hint" style="margin-top:14px;">Backups, importing old data and Google Drive are in <a class="linklike" id="go-backup">Backup &amp; import</a>.</p></div>`;
   content.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { applyCustomTheme(); BO_SETTINGS_TAB = b.dataset.tab; renderSettings(); });
+  content.querySelectorAll('[data-tab-link]').forEach(a => a.onclick = () => { applyCustomTheme(); BO_SETTINGS_TAB = a.dataset.tabLink; renderSettings(); });
   content.querySelector('#go-backup').onclick = () => navigate('backup');
   const $ = (id) => content.querySelector('#' + id);
 
   if(tab === 'general'){
     $('save-general').onclick = (e) => busy(e.currentTarget, async () => {
       const ch = {costing_method: $('set-costing').value, low_stock_default_threshold: Math.max(0, num($('set-lowstock').value)),
-        food_cost_warning_pct: Math.max(0, num($('set-foodcost').value)) || 35, theme: $('set-dark').checked ? 'dark' : 'light'};
+        food_cost_warning_pct: Math.max(0, num($('set-foodcost').value)) || 35};
       if(BO.hasPayoutLimit){
         const lim = $('set-payout-limit').value.trim();
         if(lim === '' || !(num(lim) >= 0)){ toast('Enter the pay-out amount to review (₱0 or more)', 'error'); return; }
@@ -631,13 +751,7 @@ function renderSettings(){
       await saveSettings(ch, 'QR ordering settings saved', ch.qr_ordering_enabled ? 'ordering on' : 'ordering off');
     });
   }
-  if(tab === 'loyalty'){
-    $('ly-save').onclick = (e) => busy(e.currentTarget, async () => {
-      const n = Math.round(num($('ly-stamps').value));
-      if(n < 1 || n > 50){ toast('Choose 1 to 50 stamps', 'error'); return; }
-      await saveSettings({loyalty_enabled: $('ly-on').checked, stamps_per_reward: n}, 'Loyalty settings saved', `${$('ly-on').checked ? 'on' : 'off'}, ${n} stamps`);
-    });
-  }
+  if(tab === 'loyalty') wireLoyaltySettings(content);
   if(tab === 'branding'){
     let pendingLogo;   // undefined = unchanged, null = remove, Blob = new
     const draft = () => {
@@ -646,8 +760,11 @@ function renderSettings(){
       d.app_name = $('cz-appname').value.trim() || 'Brew Ledger';
       COLOR_KEYS.forEach(k => { d[k] = $('cz-' + k).value; });
       d.font_family = $('cz-font').value; d.font_size = $('cz-fontsize').value;
+      d.theme = $('cz-theme-custom').checked ? 'CUSTOM' : 'CCCC';
       return d;
     };
+    const syncTheme = () => { $('cz-custom-block').hidden = !$('cz-theme-custom').checked; preview(); };
+    $('cz-theme-cccc').onchange = syncTheme; $('cz-theme-custom').onchange = syncTheme;
     const preview = () => applyCustomTheme(draft());
     COLOR_KEYS.forEach(k => {
       $('cz-' + k).oninput = () => { $('cz-' + k + '-hex').value = $('cz-' + k).value; preview(); };
@@ -670,20 +787,21 @@ function renderSettings(){
         toast('Logo ready — press "Save branding" to use it');
       }catch(err){ toast(err.message || 'Could not read that picture', 'error'); }
     };
-    $('cz-logo-remove').onclick = () => { pendingLogo = null; $('cz-logo-preview').innerHTML = '<span style="font-size:22px;">☕</span>'; $('cz-logo-remove').disabled = true; };
+    $('cz-logo-remove').onclick = () => { pendingLogo = null; $('cz-logo-preview').innerHTML = brandLogoHtml('mark', {className: 'brand-mark', alt: '', settings: Object.assign({}, state.settings, {theme: 'CCCC'})}); $('cz-logo-remove').disabled = true; };
     $('cz-save').onclick = (e) => busy(e.currentTarget, async () => {
       const d = draft();
       if(!d.business_name){ toast('Enter the shop name', 'error'); return; }
       const bad = COLOR_KEYS.find(k => !/^#[0-9a-fA-F]{6}$/.test(d[k]));
       if(bad){ toast(`The ${COLOR_LABEL[bad].toLowerCase()} colour is not a valid colour code`, 'error'); return; }
-      const ch = {business_name: d.business_name, app_name: d.app_name, font_family: d.font_family, font_size: d.font_size};
-      COLOR_KEYS.forEach(k => { ch[k] = d[k]; });
+      const ch = {business_name: d.business_name, app_name: d.app_name, theme: d.theme};
+      // the saved colours and font only change with Custom colours (the brand theme ignores them)
+      if(d.theme === 'CUSTOM'){ ch.font_family = d.font_family; ch.font_size = d.font_size; COLOR_KEYS.forEach(k => { ch[k] = d[k]; }); }
       if(pendingLogo === null) ch.logo_url = null;
       else if(pendingLogo){
         try{ ch.logo_url = await uploadShopImage(pendingLogo, `logo-${Date.now()}.png`, 'image/png'); }
         catch(err){ toast('The logo could not be uploaded: ' + friendlyError(err), 'error'); return; }
       }
-      if(await saveSettings(ch, 'Branding saved', d.business_name)){ pendingLogo = undefined; renderShell(); if(state.route === 'settings') navigate('settings'); }
+      if(await saveSettings(ch, 'Branding saved', `${d.business_name} · theme ${d.theme === 'CUSTOM' ? 'custom colours' : 'Cavite City Coffee Club'}`)){ pendingLogo = undefined; renderShell(); if(state.route === 'settings') navigate('settings'); }
     });
     $('cz-reset-all').onclick = async () => {
       const ok = await confirmDialog('Reset the app name, logo, colours and font to the defaults? (The shop name stays.)', 'Reset');

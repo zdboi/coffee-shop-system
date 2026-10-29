@@ -11,13 +11,8 @@
 
 const cloud = Cloud.createClient({storageKey: 'cccc.admin.session'});
 
-// Web fonts: index.html loads them as media="print" (not blocking the first screen); use them once loaded.
-(function useWebFontsWhenLoaded(){
-  const l = document.getElementById('web-fonts');
-  if(!l || l.media === 'all') return;
-  const on = () => { l.media = 'all'; };
-  if(l.sheet) on(); else l.addEventListener('load', on, {once: true});
-})();
+// Fonts: the brand fonts come from ../shared/brand/tokens.css (Brunson) and each device's own
+// system font; nothing is downloaded from outside (release 1.2).
 
 const BO = {
   isOwner: false, rank: 0,
@@ -46,7 +41,11 @@ const BO = {
     NAME_REQUIRED: 'Enter a name.',
   };
   Object.keys(extra).forEach(k => { if(!ERROR_TEXT[k]) ERROR_TEXT[k] = extra[k]; });
+  // review reason added by 008 (a sale dated more than an hour in the future), if the shared list lacks it
+  if(typeof REVIEW_REASON_TEXT !== 'undefined' && !REVIEW_REASON_TEXT.FUTURE_DATE) REVIEW_REASON_TEXT.FUTURE_DATE = 'Date is in the future';
 })();
+// "Loyalty rewards" (stamp card, release 1.2): the shared word, or the same words if it is missing
+function loyaltyLineLabel(){ return typeof LOYALTY_SALES_LABEL !== 'undefined' ? LOYALTY_SALES_LABEL : 'Loyalty rewards'; }
 
 /* ================= small helpers ================= */
 function esc(s){ return escapeHtml(s); }
@@ -143,6 +142,10 @@ function applyBoBootstrap(d){
   state.waste = d.waste || [];
   setStockFromServer(d.stock);
   state.tables = d.tables || [];
+  // release 1.2 (008): floor plan shapes, ingredient brands and stock per brand (first in, first out)
+  state.floorShapes = Array.isArray(d.floor_shapes) ? d.floor_shapes : [];
+  state.ingredientBrands = Array.isArray(d.ingredient_brands) ? d.ingredient_brands : [];
+  state.brandStock = Array.isArray(d.brand_stock) ? d.brand_stock : [];
   state.devices = d.devices || [];
   state.stores = d.stores || [];
   state.ingredientTxns = {};
@@ -422,7 +425,7 @@ function showAuth(view, msg, isError){
   const wrap = document.getElementById('auth-screen');
   wrap.style.display = 'flex';
   wrap.innerHTML = `<div class="auth-card form-card">
-      <div class="pin-logo">☕</div>
+      <div class="pin-logo">${boAuthLogo()}</div>
       ${(AUTH_VIEWS[view] || AUTH_VIEWS.login)(msg)}
       <div id="auth-msg" class="auth-msg${isError ? ' err' : ''}" role="status" aria-live="polite">${view === 'conflict' ? '' : esc(msg || '')}</div>
       <a href="../front/" class="auth-link">Staff: go to the counter (Front Office) →</a>
@@ -517,7 +520,7 @@ function showNotOwner(reason){
   wrap.style.display = 'flex';
   const who = (cloud.user() && cloud.user().email) || (cloud.isAnonymous() ? 'a counter or customer login' : 'this login');
   wrap.innerHTML = `<div class="auth-card form-card">
-      <div class="pin-logo">🔒</div>
+      <div class="pin-logo pin-logo-icon">${icon('lock', {size: 40})}</div>
       <h2>This page is for the shop owner's login</h2>
       <p class="auth-sub" style="margin-bottom:12px;">${esc(reason || 'You are signed in as ' + who + ', which is not the owner of a shop.')}</p>
       <p class="hint" style="margin-bottom:16px;">Staff use the counter (Front Office) with their PIN. If you are the owner, sign out and sign in with the email you used to create the shop.</p>
@@ -605,30 +608,35 @@ async function ensureStarterData(){
 }
 
 /* ================= shell & navigation ================= */
+// ic = a line icon from icon() in ../shared/ui.js (never emoji)
 const BO_NAV = [
   {group: 'Overview'},
-  {id: 'dashboard', label: 'Dashboard', ic: '◈'},
-  {id: 'calendar', label: 'Sales calendar', ic: '📅'},
-  {id: 'transactions', label: 'Transactions', ic: '🧾', badge: 'needs_review'},
-  {id: 'qrOrders', label: 'QR orders', ic: '📱', badge: 'open_qr_orders'},
-  {id: 'customers', label: 'Customers', ic: '⭐'},
+  {id: 'dashboard', label: 'Dashboard', ic: 'home'},
+  {id: 'calendar', label: 'Sales calendar', ic: 'clock'},
+  {id: 'transactions', label: 'Transactions', ic: 'receipt', badge: 'needs_review'},
+  {id: 'qrOrders', label: 'QR orders', ic: 'qr', badge: 'open_qr_orders'},
+  {id: 'customers', label: 'Customers', ic: 'users'},
   {group: 'Kitchen & stock'},
-  {id: 'ingredients', label: 'Ingredients', ic: '🌿'},
-  {id: 'purchases', label: 'Purchases', ic: '🛒'},
-  {id: 'production', label: 'Production', ic: '🏭'},
-  {id: 'recipes', label: 'Recipes & menu', ic: '📖'},
-  {id: 'inventory', label: 'Inventory', ic: '📦'},
-  {id: 'costing', label: 'Costing', ic: '💰'},
-  {id: 'suppliers', label: 'Suppliers', ic: '🚚'},
-  {id: 'reports', label: 'Reports', ic: '📊'},
+  {id: 'ingredients', label: 'Ingredients', ic: 'box'},
+  {id: 'purchases', label: 'Purchases', ic: 'inbox'},
+  {id: 'production', label: 'Production', ic: 'refresh'},
+  {id: 'recipes', label: 'Recipes & menu', ic: 'cup'},
+  {id: 'inventory', label: 'Inventory', ic: 'grid'},
+  {id: 'costing', label: 'Costing', ic: 'cash'},
+  {id: 'suppliers', label: 'Suppliers', ic: 'download'},
+  {id: 'reports', label: 'Reports', ic: 'chart'},
   {group: 'Setup'},
-  {id: 'tables', label: 'Tables & QR codes', ic: '🔳'},
-  {id: 'staff', label: 'Staff & PINs', ic: '👥'},
-  {id: 'devices', label: 'Devices', ic: '💻'},
-  {id: 'auditLog', label: 'Audit log', ic: '📋'},
-  {id: 'settings', label: 'Settings', ic: '⚙'},
-  {id: 'backup', label: 'Backup & import', ic: '💾'},
+  {id: 'tables', label: 'Tables & QR codes', ic: 'map'},
+  {id: 'staff', label: 'Staff & PINs', ic: 'user'},
+  {id: 'devices', label: 'Devices', ic: 'phone'},
+  {id: 'auditLog', label: 'Audit log', ic: 'search'},
+  {id: 'settings', label: 'Settings', ic: 'settings'},
+  {id: 'backup', label: 'Backup & import', ic: 'upload'},
 ];
+// The three-line menu button (no such icon in ui.js yet; same drawing style as icon()).
+const BO_MENU_ICON = '<svg class="cc-icon" aria-hidden="true" focusable="false" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
+// Sign-in cards: the brand tile (or the shop's own logo with the Custom theme).
+function boAuthLogo(){ return brandLogoHtml('mark', {className: 'brand-mark', alt: ''}); }
 // route -> {title, render}. Renderers live in the other bo-*.js files.
 const BO_ROUTES = {
   dashboard: {title: 'Dashboard', render: () => renderDashboard()},
@@ -655,22 +663,28 @@ const BO_ROUTES = {
 };
 
 function renderShell(){
-  const s = state.settings;
-  const logo = s.logo_url ? `<img src="${esc(s.logo_url)}" alt="" style="width:26px;height:26px;object-fit:contain;border-radius:6px;vertical-align:middle;margin-right:2px;">` : '☕';
+  // The shop name is never typed in the display font: the CCCC theme shows the wordmark image,
+  // the Custom theme the shop's own name as plain text (brandWordmarkHtml). Another shop on the
+  // CCCC look also sees its own name in small text, so nobody mixes up two shops.
+  const shop = businessName() || '';
+  const own = shop && brandTheme() === 'CCCC' && shop.trim().toLowerCase() !== BRAND_NAME.toLowerCase();
   document.getElementById('sidebar').innerHTML = `
-    <div class="brand">${logo} <span>${esc(businessName() || appDisplayName())}</span><small>Back Office</small></div>
+    <div class="brand">${brandLogoHtml('mark', {className: 'brand-mark', alt: ''})}
+      <div class="brand-text">${brandWordmarkHtml('dark', {className: 'brand-wordmark'})}<small>Back Office${own ? ' · <span class="brand-shop">' + esc(shop) + '</span>' : ''}</small></div></div>
     <nav id="nav" aria-label="Back Office menu">${BO_NAV.map(n => n.group
       ? `<div class="nav-group">${esc(n.group)}</div>`
-      : `<div class="nav-item" data-route="${n.id}" tabindex="0" role="link" title="${esc(n.label)}"><span class="ic">${n.ic}</span><span class="label">${esc(n.label)}</span>${n.badge ? `<span class="nav-badge" data-badge="${n.badge}" style="display:none;">0</span>` : ''}</div>`).join('')}</nav>
+      : `<div class="nav-item" data-route="${n.id}" tabindex="0" role="link" title="${esc(n.label)}"><span class="ic">${icon(n.ic)}</span><span class="label">${esc(n.label)}</span>${n.badge ? `<span class="nav-badge" data-badge="${n.badge}" style="display:none;">0</span>` : ''}</div>`).join('')}</nav>
     <div id="sidebar-foot">
-      <div class="who" title="${esc(boActorName())}">👤 ${esc(boActorName())}</div>
+      <div class="who" title="${esc(boActorName())}">${icon('user', {size: 18})} <span>${esc(boActorName())}</span></div>
       <span id="offline-pill" class="online"><span class="dot"></span> Online</span>
-      <div class="foot-actions"><a class="foot-link" href="../front/" target="_blank" rel="noopener">Front Office ↗</a><button class="foot-link" id="btn-signout" type="button">Sign out</button></div>
+      <div class="foot-actions"><a class="foot-link" href="../front/" target="_blank" rel="noopener">Front Office</a><button class="foot-link" id="btn-signout" type="button">${icon('logout', {size: 16})} Sign out</button></div>
     </div>`;
   const nav = document.getElementById('nav');
   nav.addEventListener('click', (e) => { const it = e.target.closest('.nav-item'); if(it){ closeNavDrawer(); navigate(it.dataset.route); } });
   nav.addEventListener('keydown', (e) => { if(e.key === 'Enter' || e.key === ' '){ const it = e.target.closest('.nav-item'); if(it){ e.preventDefault(); closeNavDrawer(); navigate(it.dataset.route); } } });
   document.getElementById('btn-signout').onclick = signOutBackOffice;
+  const tog = document.getElementById('nav-toggle');
+  if(tog && !tog.querySelector('svg')) tog.innerHTML = BO_MENU_ICON;
   document.getElementById('nav-toggle').onclick = () => document.body.classList.toggle('nav-open');
   document.getElementById('nav-scrim').onclick = closeNavDrawer;
   document.title = 'Back Office — ' + (businessName() || appDisplayName());
@@ -710,6 +724,15 @@ async function signOutBackOffice(){
 function navigate(route, param){
   const def = BO_ROUTES[route] || BO_ROUTES.dashboard;
   route = BO_ROUTES[route] ? route : 'dashboard';
+  // Floor plan with unsaved changes (bo-floor.js): ask before leaving the Tables screen.
+  if(state.route === 'tables' && route !== 'tables' && typeof fpHasUnsaved === 'function' && fpHasUnsaved()){
+    confirmDialog('The floor plan has changes that are not saved. Leave without saving them?', 'Leave without saving').then(ok => {
+      if(!ok) return;
+      fpForget();
+      navigate(route, param);
+    });
+    return;
+  }
   if(state.route === 'settings' && route !== 'settings') applyCustomTheme();   // drop an unsaved colour preview
   BO.salesCache.clear();      // opening a screen always shows fresh sales; the cache only serves filter changes on it
   state.route = route; state.routeParam = param == null ? null : param;
@@ -733,7 +756,7 @@ function navigate(route, param){
 // Buttons on the right of the top bar (+ always a Refresh button).
 function setTopbarActions(html){
   const wrap = document.getElementById('topbar-actions');
-  wrap.innerHTML = (html || '') + ` <button class="btn btn-ghost btn-sm" id="btn-refresh" title="Load the latest data">↻ Refresh</button>`;
+  wrap.innerHTML = (html || '') + ` <button class="btn btn-ghost btn-sm" id="btn-refresh" title="Load the latest data">${icon('refresh', {size: 18})} Refresh</button>`;
   wrap.querySelector('#btn-refresh').onclick = (e) => boRefresh(true, e.currentTarget);
   return wrap;
 }
@@ -749,7 +772,9 @@ async function boRefresh(manual, btn){
     BO.salesCache.clear();
     await refreshReviewCount();
     const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
-    if(!document.getElementById('active-modal-overlay') && (manual || !typing)){ renderShell(); rerender(); }
+    // a floor plan being edited is kept (its draft survives a re-draw), but never re-drawn under a drag
+    const dragging = typeof FP !== 'undefined' && FP.drag;
+    if(!document.getElementById('active-modal-overlay') && !dragging && (manual || !typing)){ renderShell(); rerender(); }
     if(manual) toast('Up to date');
   }catch(e){
     if(manual) toast(friendlyError(e), 'error');
@@ -847,12 +872,12 @@ function renderDashboard(){
       ${statCard('Highest cost recipe', highestCost ? esc(highestCost.recipe.name) : '—', highestCost ? fmtMoney(highestCost.cost) : '')}
     </div>
     ${(lowStockProduced.length || outStockProduced.length) ? `
-      <div class="section-title">⚠ Produced items running low</div>
+      <div class="section-title">${icon('alert')} Produced items running low</div>
       <div class="grid grid-3">${[...outStockProduced, ...lowStockProduced].map(i => `
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><b>${esc(i.name)}</b> ${statusBadge(st(i))}</div>
           <div class="text-light" style="font-size:13px;margin-top:6px;">Current: ${fmtNum(ingredientStock(i.id), 2)} ${esc(i.base_unit)} · Reorder at ${fmtNum(i.reorder_level, 1)} ${esc(i.base_unit)}</div>
-          <button class="btn btn-sm btn-amber" style="margin-top:10px;" data-produce="${esc(i.id)}">+ Produce another batch</button>
+          <button class="btn btn-sm btn-amber" style="margin-top:10px;" data-produce="${esc(i.id)}">${icon('plus', {size: 18})} Produce another batch</button>
         </div>`).join('')}</div>` : ''}
     ${(lowStockRaw.length || outStockRaw.length) ? `
       <div class="section-title">Ingredients to reorder</div>

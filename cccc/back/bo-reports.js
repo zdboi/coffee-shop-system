@@ -28,6 +28,7 @@ const REPORTS = [
   {id: 'shifts', group: 'sales', name: 'Shifts & cash'},
   {id: 'refunds', group: 'sales', name: 'Refunds & voids'},
   {id: 'discounts', group: 'sales', name: 'Discounts'},
+  {id: 'loyaltyRewards', group: 'sales', name: 'Loyalty rewards'},
 ];
 const repState = {active: 'priceChanges', preset: '7d', from: '', to: ''};
 const M = (v) => ({money: num(v)});
@@ -102,12 +103,12 @@ function salesReport(id, ds){
   switch(id){
     case 'salesByDay': {
       const by = {};
-      const row = (k) => (by[k] = by[k] || {n: 0, gross: 0, ref: 0, disc: 0, tax: 0, svc: 0});
-      sales.forEach(s => { const r = row(dayKeyOf(s.transaction_date)); r.n++; r.gross += num(s.grand_total); r.disc += num(s.discount_amount); r.tax += num(s.tax_amount); r.svc += num(s.service_charge_amount); });
+      const row = (k) => (by[k] = by[k] || {n: 0, gross: 0, ref: 0, disc: 0, loy: 0, tax: 0, svc: 0});
+      sales.forEach(s => { const r = row(dayKeyOf(s.transaction_date)); r.n++; r.gross += num(s.grand_total); r.disc += num(s.discount_amount); r.loy += num(s.loyalty_discount); r.tax += num(s.tax_amount); r.svc += num(s.service_charge_amount); });
       refunds.forEach(x => { row(dayKeyOf(x.date)).ref += num(x.amount); });
-      const rows = Object.keys(by).sort().map(k => { const r = by[k]; return [k, r.n, M(r.gross), M(r.ref), M(r.gross - r.ref), M(r.disc), M(r.tax + r.svc)]; });
-      return {headers: ['Date', 'Transactions', SALES_LABELS.sales, SALES_LABELS.refunds, SALES_LABELS.netSales, SALES_LABELS.discounts, SALES_LABELS.taxAndService], rows,
-        total: ['Total', sum.count, M(sum.gross), M(sum.refunds), M(sum.net), M(sum.discounts), M(sales.reduce((s, x) => s + num(x.tax_amount) + num(x.service_charge_amount), 0))]};
+      const rows = Object.keys(by).sort().map(k => { const r = by[k]; return [k, r.n, M(r.gross), M(r.ref), M(r.gross - r.ref), M(r.disc), M(r.loy), M(r.tax + r.svc)]; });
+      return {headers: ['Date', 'Transactions', SALES_LABELS.sales, SALES_LABELS.refunds, SALES_LABELS.netSales, SALES_LABELS.discounts, loyaltyLineLabel(), SALES_LABELS.taxAndService], rows,
+        total: ['Total', sum.count, M(sum.gross), M(sum.refunds), M(sum.net), M(sum.discounts), M(sum.loyalty), M(sales.reduce((s, x) => s + num(x.tax_amount) + num(x.service_charge_amount), 0))]};
     }
     case 'salesByItem': {
       const by = new Map();
@@ -170,6 +171,12 @@ function salesReport(id, ds){
       return {headers: ['Date', 'Receipt #', 'Cashier', 'Discount', 'Amount', 'Approved by', 'Sale total'], rows: sales.filter(s => num(s.discount_amount) > 0).map(s => [fmtShopDateTime(s.transaction_date), s.transaction_number || '', s.cashier_name || '',
         s.discount_type === 'percent' ? fmtNum(s.discount_value, 0) + '%' : 'fixed', M(s.discount_amount), s.discount_approved_by_name || '', M(s.grand_total)]),
         total: ['Total', '', '', '', M(sum.discounts), '', '']};
+    case 'loyaltyRewards':
+      // stamp card rewards used on sales (sales.loyalty_discount, set by the server)
+      return {headers: ['Date', 'Receipt #', 'Cashier', loyaltyLineLabel(), 'Sale total'], rows: sales.filter(s => num(s.loyalty_discount) > 0).map(s => [fmtShopDateTime(s.transaction_date), s.transaction_number || '', s.cashier_name || '',
+          M(s.loyalty_discount), M(s.grand_total)]),
+        total: ['Total', plural(sum.loyaltyCount, 'reward'), '', M(sum.loyalty), ''],
+        note: 'Rewards from the stamp card, taken off after any manager discount. Voided sales are left out (their reward can be used again).'};
   }
   return {headers: [], rows: []};
 }
@@ -188,7 +195,7 @@ async function renderReports(){
     </div>
     <div class="toolbar">
       <div class="toolbar-left"><b style="font-size:16px;">${esc(def.name)}</b>${def.group === 'sales' ? rangePickerHtml(repState, 'rep') : ''}</div>
-      <div class="field-inline"><button class="btn btn-outline btn-sm" id="print-report">🖨 Print / PDF</button><button class="btn btn-outline btn-sm" id="export-report-csv">Export CSV</button></div>
+      <div class="field-inline"><button class="btn btn-outline btn-sm" id="print-report">${icon('printer', {size: 18})} Print / PDF</button><button class="btn btn-outline btn-sm" id="export-report-csv">Export CSV</button></div>
     </div>
     <div id="report-body"><div class="loading-line">Working it out…</div></div>`;
   content.querySelectorAll('[data-report]').forEach(b => b.onclick = () => { repState.active = b.dataset.report; renderReports(); });
