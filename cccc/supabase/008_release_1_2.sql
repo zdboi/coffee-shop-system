@@ -39,6 +39,29 @@
 begin;
 
 -- =============================================================================
+-- 0. Small helpers
+-- =============================================================================
+-- A number from text, or null when it isn't one (never raises an error).
+-- Same as 004, except that any number of decimals is now read: a counter may
+-- send 2.7191125000000005, which 004 read as "not a number" (and so as ₱0).
+-- Still at most 15 digits before the point, an optional exponent, and text
+-- of at most 200 characters.
+create or replace function public._to_num(p text) returns numeric
+language sql immutable as $$
+  select case when length(btrim(p)) <= 200
+               and btrim(p) ~ '^-?(\d{1,15}(\.\d*)?|\.\d+)([eE][-+]?\d{1,3})?$' then btrim(p)::numeric end
+$$;
+
+-- A time from text, or null when it isn't one (never raises an error).
+create or replace function public._to_ts(p text) returns timestamptz
+language plpgsql stable as $$
+begin
+  return p::timestamptz;
+exception when others then
+  return null;
+end $$;
+
+-- =============================================================================
 -- A. FLOOR PLAN
 -- =============================================================================
 
@@ -186,6 +209,9 @@ update public.settings set theme = 'CCCC' where theme is null or theme not in ('
 -- The real numbers are always worked out from the sales; these copies are for
 -- the Back Office lists. stamps = all stamps ever earned (drink + food).
 alter table public.customers add column if not exists drink_stamps integer not null default 0;
+-- When the SERVER received a finished counter sale (set only by fo_sync, the
+-- counter can't choose it). Bounds the stamp day (see _customer_loyalty).
+alter table public.sales add column if not exists received_at timestamptz;
 alter table public.customers add column if not exists food_stamps integer not null default 0;
 
 -- =============================================================================
@@ -407,13 +433,13 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- Back Office: brand stock now (for one ingredient, or all with null).
--- Only logins that may read purchases (the owner's email login) get it.
+-- Only the owner's email login (rank 3) gets it.
 create or replace function public.ingredient_brand_stock(p_ingredient_id uuid default null) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare v_biz uuid := public.current_business_id();
 begin
   if v_biz is null then raise exception 'NOT_A_MEMBER'; end if;
-  if public.app_rank() < 1 then raise exception 'NOT_ALLOWED'; end if;
+  if public.app_rank() < 3 then raise exception 'NOT_ALLOWED'; end if;
   return public._brand_stock_json(v_biz, p_ingredient_id);
 end $$;
 
@@ -430,19 +456,28 @@ language sql stable security definer set search_path = public as $$
   where o.sale_id = p_sale_id and it->>'sale_item_id' = p_item_id::text
 $$;
 
--- One customer's loyalty numbers, from their sales (owner decision 2026-10-29):
+-- One customer's loyalty numbers, from their sales (owner decision 2026-10-29,
+-- security review 2026-10-29 M1):
 --   * a sale counts when it is finished and not voided / fully refunded
---     (status COMPLETED or PARTIALLY_REFUNDED). QR orders count once they are
---     paid at the counter (they are sales then).
---   * a day = a calendar day in the shop's time zone (Asia/Manila).
+--     (status COMPLETED or PARTIALLY_REFUNDED), its total is above ₱0, and it
+--     is not waiting for the owner's check because of a price below the menu
+--     (needs_review with PRICE_BELOW_MENU / NOT_ON_MENU; once the owner clears
+--     needs_review it counts). QR orders count once they are paid at the counter.
+--   * a line counts when its unit price is above ₱0, its quantity is at least 1
+--     and not all of it was given back.
+--   * a day = a calendar day in the shop's time zone (Asia/Manila), taken from
+--     the sale's time, but never trusted from the counter alone: for counter
+--     sales the server notes when it RECEIVED the sale (sales.received_at), and
+--     the day used is kept between 7 days before that and that day itself (the
+--     offline allowance). Sales without received_at (before 008, Back Office
+--     entries, imports) use their own time.
 --   visits       = number of days with at least one such sale
---   drink_stamps = number of days with at least one DRINK item (recipe type
---                  DRINKS) that was not given back
+--   drink_stamps = number of days with at least one such DRINK line (recipe type DRINKS)
 --   food_stamps  = same for food (recipe types PASTRY and FOOD)
 --   So a drink and a pastry on one day = 1 drink + 1 food stamp; two drinks on
 --   one day = 1 drink stamp. A partial refund takes a day's stamp away only
 --   when EVERY drink (or every food) line of that day was given back.
---   last_visit_at = the time of their latest such sale.
+--   last_visit_at = the (bounded) time of their latest such sale.
 --   All stamps go on ONE card (drink + food together, at most 2 per day):
 --   total stamps = drink_stamps + food_stamps.
 -- p_exclude_sale: leave this one sale out (used to check a reward "before
@@ -455,19 +490,26 @@ language sql stable security definer set search_path = public as $$
   with tz as (
     select coalesce((select nullif(btrim(timezone), '') from public.settings where business_id = p_biz), 'Asia/Manila') as zone
   ),
-  s as (
-    select x.id, coalesce(x.transaction_date, x.created_at) as at,
-           (coalesce(x.transaction_date, x.created_at) at time zone (select zone from tz))::date as day
+  s0 as (
+    select x.id, coalesce(x.transaction_date, x.received_at, x.created_at) as t, x.received_at
     from public.sales x
     where x.business_id = p_biz and x.customer_id = p_customer and x.status in ('COMPLETED', 'PARTIALLY_REFUNDED')
+      and coalesce(x.grand_total, 0) > 0
+      and not (coalesce(x.needs_review, false) and coalesce(x.review_reason, '') ~ '(PRICE_BELOW_MENU|NOT_ON_MENU)')
       and (p_exclude_sale is null or x.id <> p_exclude_sale)
+  ),
+  s as (
+    select s0.id, b.at, (b.at at time zone (select zone from tz))::date as day
+    from s0, lateral (select case when s0.received_at is null then s0.t
+                                  else least(greatest(s0.t, s0.received_at - interval '7 days'), s0.received_at) end as at) b
   ),
   lines as (
     select s.day, r.recipe_type
     from s
     join public.sale_items si on si.sale_id = s.id and si.business_id = p_biz
     join public.recipes r on r.id = si.recipe_id and r.business_id = p_biz
-    where coalesce(si.quantity, 0) - public._sale_item_refunded_qty(s.id, si.id) > 0.0001
+    where coalesce(si.unit_price, 0) > 0 and coalesce(si.quantity, 0) >= 1
+      and coalesce(si.quantity, 0) - public._sale_item_refunded_qty(s.id, si.id) > 0.0001
   )
   select (select count(distinct day) from s)::int,
          (select count(distinct day) from lines where recipe_type = 'DRINKS')::int,
@@ -495,46 +537,87 @@ exception when others then
   raise warning 'loyalty refresh for % failed: %', p_customer, sqlerrm;
 end $$;
 
--- Keeps the copies right: whenever a sale, a sale line or a refund changes,
--- the customer's numbers are worked out again when the save ENDS (after
--- everything of that save is in, so e.g. the counter's own "+1 visit" is
--- replaced by the real number). Waits until the end ("initially deferred"):
--- fo_sync and apply_changes do not change this timing.
-create or replace function public._loyalty_trigger() returns trigger
+-- Keeps the copies right (security review M4: each customer once per save).
+--   1. After every statement that changes sales, sale lines or refunds, the
+--      customers concerned are noted ONCE in loyalty_pending (statement-level
+--      triggers with the changed rows; "on conflict do nothing").
+--   2. When the save ENDS, a deferred trigger on loyalty_pending works each
+--      noted customer out again (after everything of that save is in, so e.g.
+--      the counter's own "+1 visit" is replaced by the real number) and
+--      removes the note. fo_sync and apply_changes do not change this timing.
+-- A counter upload that fails is undone with its notes.
+create table if not exists public.loyalty_pending (customer_id uuid primary key);
+alter table public.loyalty_pending enable row level security;   -- no rules: only these functions use it
+
+-- (Earlier test copies had per-row triggers: removed.)
+drop trigger if exists sales_loyalty on public.sales;
+drop trigger if exists sale_items_loyalty on public.sale_items;
+drop trigger if exists refunds_loyalty on public.refunds;
+drop function if exists public._loyalty_trigger();
+
+create or replace function public._loyalty_note() returns trigger
 language plpgsql security definer set search_path = public as $$
-declare v_ids uuid[] := '{}'; v_id uuid;
 begin
   begin
     if tg_table_name = 'sales' then
-      if tg_op in ('UPDATE', 'DELETE') then v_ids := v_ids || old.customer_id; end if;
-      if tg_op in ('INSERT', 'UPDATE') then v_ids := v_ids || new.customer_id; end if;
+      if tg_op in ('INSERT', 'UPDATE') then
+        insert into public.loyalty_pending(customer_id) select distinct customer_id from new_rows where customer_id is not null
+          on conflict do nothing;
+      end if;
+      if tg_op in ('UPDATE', 'DELETE') then
+        insert into public.loyalty_pending(customer_id) select distinct customer_id from old_rows where customer_id is not null
+          on conflict do nothing;
+      end if;
     else
       -- sale_items / refunds: the customer of their sale
-      if tg_op in ('UPDATE', 'DELETE') then
-        v_ids := v_ids || (select customer_id from public.sales where id = old.sale_id);
-      end if;
       if tg_op in ('INSERT', 'UPDATE') then
-        v_ids := v_ids || (select customer_id from public.sales where id = new.sale_id);
+        insert into public.loyalty_pending(customer_id)
+          select distinct s.customer_id from public.sales s where s.customer_id is not null
+            and s.id in (select sale_id from new_rows)
+          on conflict do nothing;
+      end if;
+      if tg_op in ('UPDATE', 'DELETE') then
+        insert into public.loyalty_pending(customer_id)
+          select distinct s.customer_id from public.sales s where s.customer_id is not null
+            and s.id in (select sale_id from old_rows)
+          on conflict do nothing;
       end if;
     end if;
-    for v_id in select distinct x from unnest(v_ids) x where x is not null loop
-      perform public._refresh_customer_loyalty(v_id);
-    end loop;
   exception when others then
-    raise warning 'loyalty trigger failed: %', sqlerrm;   -- never blocks a save
+    raise warning 'loyalty note failed: %', sqlerrm;   -- never blocks a save
   end;
   return null;
 end $$;
 
-drop trigger if exists sales_loyalty on public.sales;
-create constraint trigger sales_loyalty after insert or update or delete on public.sales
-  deferrable initially deferred for each row execute function public._loyalty_trigger();
-drop trigger if exists sale_items_loyalty on public.sale_items;
-create constraint trigger sale_items_loyalty after insert or update or delete on public.sale_items
-  deferrable initially deferred for each row execute function public._loyalty_trigger();
-drop trigger if exists refunds_loyalty on public.refunds;
-create constraint trigger refunds_loyalty after insert or update or delete on public.refunds
-  deferrable initially deferred for each row execute function public._loyalty_trigger();
+do $$
+declare t text; ev text;
+begin
+  foreach t in array array['sales', 'sale_items', 'refunds'] loop
+    foreach ev in array array['insert', 'update', 'delete'] loop
+      execute format('drop trigger if exists %I on public.%I', t || '_loyalty_' || ev, t);
+      execute format('create trigger %I after %s on public.%I referencing %s for each statement execute function public._loyalty_note()',
+                     t || '_loyalty_' || ev, ev, t,
+                     case ev when 'insert' then 'new table as new_rows'
+                             when 'delete' then 'old table as old_rows'
+                             else 'old table as old_rows new table as new_rows' end);
+    end loop;
+  end loop;
+end $$;
+
+create or replace function public._loyalty_pending_run() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  begin
+    perform public._refresh_customer_loyalty(new.customer_id);
+  exception when others then
+    raise warning 'loyalty refresh failed: %', sqlerrm;
+  end;
+  delete from public.loyalty_pending where customer_id = new.customer_id;
+  return null;
+end $$;
+drop trigger if exists loyalty_pending_run on public.loyalty_pending;
+create constraint trigger loyalty_pending_run after insert on public.loyalty_pending
+  deferrable initially deferred for each row execute function public._loyalty_pending_run();
 
 
 -- =============================================================================
@@ -627,7 +710,7 @@ begin
       'milestones', (select coalesce(jsonb_agg(jsonb_build_object('stamp', (r->>'stamp')::int, 'type', r->>'type',
                          'amount', r->'amount', 'label', r->>'label',
                          'status', case when exists (select 1 from public.loyalty_redemptions x
-                                                     where x.customer_id = p_customer and x.card_no = v_card
+                                                     where x.business_id = p_biz and x.customer_id = p_customer and x.card_no = v_card
                                                        and x.milestone = (r->>'stamp')::int
                                                        and x.released_at is null and x.merged_from is null) then 'redeemed'
                                         when v_total >= (v_card - 1) * v_size + (r->>'stamp')::int then 'ready'
@@ -638,7 +721,7 @@ begin
                       from generate_series(1, v_card) c, jsonb_array_elements(v_cfg->'rewards') r
                       where v_total >= (c - 1) * v_size + (r->>'stamp')::int
                         and not exists (select 1 from public.loyalty_redemptions x
-                                        where x.customer_id = p_customer and x.card_no = c and x.milestone = (r->>'stamp')::int
+                                        where x.business_id = p_biz and x.customer_id = p_customer and x.card_no = c and x.milestone = (r->>'stamp')::int
                                           and x.released_at is null and x.merged_from is null)));
 end $$;
 
@@ -655,8 +738,9 @@ end $$;
 --   AMOUNT_OFF -> the reward's amount (₱10 / ₱50);
 --   FREE_ITEM  -> the price of ONE of the chosen item: its menu price now
 --                 (recipe price + the options chosen on that line), but not
---                 more than that line's own unit price; if the item is on
---                 several lines, the dearest one.
+--                 more than that line's own unit price nor its line total.
+--                 Only lines with a whole quantity of 1 or more count; if the
+--                 item is on several such lines, the dearest one.
 --   Then never more than what is left after the manager discount:
 --   least(amount, subtotal - discount_amount), rounded to centavos.
 -- Locks the customer row, so two sales using the same reward at the same
@@ -682,7 +766,8 @@ begin
   select coalesce(drink_stamps, 0) + coalesce(food_stamps, 0) into v_total from public._customer_loyalty(p_biz, v_cust, p_sale_id);
   if v_total < (v_card - 1) * v_size + v_ms then raise exception 'REWARD_NOT_AVAILABLE'; end if;
   if exists (select 1 from public.loyalty_redemptions x
-             where (x.customer_id = v_cust and x.card_no = v_card and x.milestone = v_ms or x.sale_id = p_sale_id)
+             where x.business_id = p_biz
+               and (x.customer_id = v_cust and x.card_no = v_card and x.milestone = v_ms or x.sale_id = p_sale_id)
                and x.released_at is null and x.merged_from is null) then
     raise exception 'REWARD_NOT_AVAILABLE';
   end if;
@@ -693,10 +778,13 @@ begin
     select * into v_rec from public.recipes where id = v_rid and business_id = p_biz and recipe_type in ('DRINKS', 'PASTRY', 'FOOD');
     if not found then raise exception 'REWARD_NOT_AVAILABLE'; end if;
     select max(least(public._menu_unit_price(v_rec.selling_price, v_rec.modifier_groups, it->'modifiers'),
-                     greatest(coalesce(public._to_num(it->>'unit_price'), 0), 0)))
+                     greatest(coalesce(public._to_num(it->>'unit_price'), 0), 0),
+                     greatest(coalesce(public._to_num(it->>'line_total'), 0), 0)))
       into v_amt
       from jsonb_array_elements(case when jsonb_typeof(p_items) = 'array' then p_items else '[]'::jsonb end) it
-      where it->>'recipe_id' = v_rid::text and coalesce(public._to_num(it->>'quantity'), 0) > 0;
+      where it->>'recipe_id' = v_rid::text
+        and public._to_num(it->>'quantity') >= 1
+        and public._to_num(it->>'quantity') = trunc(public._to_num(it->>'quantity'));
     if v_amt is null then raise exception 'REWARD_NOT_AVAILABLE'; end if;
   end if;
   return round(least(greatest(v_amt, 0),
@@ -707,7 +795,8 @@ end $$;
 create or replace function public._release_reward_trigger() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  update public.loyalty_redemptions set released_at = now() where sale_id = new.id and released_at is null;
+  update public.loyalty_redemptions set released_at = now()
+    where sale_id = new.id and business_id = new.business_id and released_at is null;
   return null;
 end $$;
 drop trigger if exists sales_release_reward on public.sales;
@@ -722,12 +811,12 @@ create or replace function public._merge_rewards_trigger() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
   update public.loyalty_redemptions r set merged_from = r.customer_id, customer_id = new.merged_into
-    where r.customer_id = new.id
+    where r.customer_id = new.id and r.business_id = new.business_id
       and (r.released_at is not null or r.merged_from is not null
            or exists (select 1 from public.loyalty_redemptions k
-                      where k.customer_id = new.merged_into and k.card_no = r.card_no and k.milestone = r.milestone
+                      where k.business_id = new.business_id and k.customer_id = new.merged_into and k.card_no = r.card_no and k.milestone = r.milestone
                         and k.released_at is null and k.merged_from is null));
-  update public.loyalty_redemptions set customer_id = new.merged_into where customer_id = new.id;
+  update public.loyalty_redemptions set customer_id = new.merged_into where customer_id = new.id and business_id = new.business_id;
   return null;
 end $$;
 drop trigger if exists customers_merge_rewards on public.customers;
@@ -974,6 +1063,10 @@ begin
       v_rw := null;
     end if;
     v_sale := v_sale || jsonb_build_object('loyalty_discount', v_loy);
+    -- 008 (M1): the server notes when it received a finished sale; the counter
+    -- can't set it. A HELD sale gets none yet.
+    v_sale := (v_sale - 'received_at') || case when v_status = 'COMPLETED'
+                                                then jsonb_build_object('received_at', now()) else '{}'::jsonb end;
     -- A finished sale must add up (else SALE_TOTALS_MISMATCH). It is FLAGGED for
     -- review (not refused) when: sold below the menu (PRICE_BELOW_MENU /
     -- NOT_ON_MENU), tax / service charge differ from the settings (TAX_MISMATCH),
@@ -985,6 +1078,8 @@ begin
       v_reason := nullif(concat_ws(', ',
         public._sale_review_reason(p_biz, p_d->'items'),
         public._sale_money_review(p_biz, v_sale, p_d->'payment'),
+        -- 008 (M1): a sale dated more than 1 hour in the future is flagged
+        case when public._to_ts(v_sale->>'transaction_date') > now() + interval '1 hour' then 'FUTURE_DATE' end,
         case when v_signed is null or v_signed is distinct from nullif(v_sale->>'cashier_id', '')::uuid
              then 'STAFF_MISMATCH' end), '');
     end if;
@@ -1152,7 +1247,7 @@ end $$;
 -- =============================================================================
 --   floor_shapes:      everyone of the shop reads (counters show the plan);
 --                      only the owner's email login changes (through apply_changes).
---   ingredient_brands: office data, like purchases: only the owner's login
+--   ingredient_brands: office data: only the owner's email login (rank 3)
 --                      reads; a paired counter reads nothing. Owner changes.
 --   loyalty_redemptions: customer data, like customers: only the owner's
 --                      login reads directly (counters get reward status from
@@ -1167,7 +1262,7 @@ begin
       execute format('drop policy %I on public.%I', p.policyname, t);
     end loop;
     if t = 'ingredient_brands' then
-      execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 1)', t || '_read', t);
+      execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3)', t || '_read', t);
     elsif t = 'loyalty_redemptions' then
       execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3)', t || '_read', t);
     else
@@ -1181,14 +1276,14 @@ end $$;
 
 -- Counters can't read table QR codes (lead decision 2026-10-29). A table's QR
 -- code (qr_token) lets anyone order as that table, so only the owner's email
--- login reads dining_tables directly (Back Office, bo_bootstrap). A paired
+-- login (rank 3) reads dining_tables directly (Back Office, bo_bootstrap). A paired
 -- counter (DEVICE login, rank 0) gets the tables WITHOUT qr_token from
 -- fo_floor_plan() / fo_bootstrap(). The QR page finds its table by token
 -- inside its own functions (_qr_table), which this rule doesn't affect.
 -- Writing stays owner-only (004's rules are kept).
 drop policy if exists dining_tables_read on public.dining_tables;
 create policy dining_tables_read on public.dining_tables for select to authenticated
-  using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 1);
+  using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3);
 
 -- Tables the Back Office may write through apply_changes: same as 004, plus
 -- ingredient_brands, floor_shapes and loyalty_redemptions (backup / import).
@@ -1309,7 +1404,7 @@ begin
     'ingredients', coalesce((select jsonb_agg(to_jsonb(x)) from public.ingredients x where x.business_id = v_biz), '[]'::jsonb),
     'ingredient_brands', coalesce((select jsonb_agg(to_jsonb(x) order by x.ingredient_id, x.sort_order, x.name)
                                    from public.ingredient_brands x where x.business_id = v_biz), '[]'::jsonb),
-    'brand_stock', case when public.app_rank() >= 1 then public.ingredient_brand_stock(null) else '[]'::jsonb end,
+    'brand_stock', case when public.app_rank() >= 3 then public.ingredient_brand_stock(null) else '[]'::jsonb end,
     'recipes', coalesce((select jsonb_agg(to_jsonb(x)) from public.recipes x where x.business_id = v_biz), '[]'::jsonb),
     'recipe_ingredients', coalesce((select jsonb_agg(to_jsonb(x)) from public.recipe_ingredients x where x.business_id = v_biz), '[]'::jsonb),
     'purchases', coalesce((select jsonb_agg(to_jsonb(x)) from public.purchases x where x.business_id = v_biz), '[]'::jsonb),
@@ -1323,6 +1418,54 @@ begin
     'stores', coalesce((select jsonb_agg(to_jsonb(x)) from public.stores x where x.business_id = v_biz), '[]'::jsonb),
     'open_qr_orders', (select count(*) from public.qr_orders where business_id = v_biz and status in ('PENDING','PREPARING','READY')),
     'customer_count', (select count(*) from public.customers where business_id = v_biz and merged_into is null)
+  );
+end $$;
+
+-- Everything needed for sales reports / the calendar, for a time range.
+-- Same as 004, plus 'totals' (008; see below). The sales rows also carry the
+-- new loyalty_discount and received_at columns.
+create or replace function public.sales_report(p_from timestamptz, p_to timestamptz) returns jsonb
+language plpgsql stable security invoker set search_path = public as $$
+declare v_biz uuid := public.current_business_id(); v_sale_ids uuid[];
+begin
+  if v_biz is null then raise exception 'NOT_A_MEMBER'; end if;
+  select coalesce(array_agg(id), '{}') into v_sale_ids from public.sales
+    where business_id = v_biz and transaction_date >= p_from and transaction_date < p_to and status <> 'HELD';
+  return jsonb_build_object(
+    'sales', coalesce((select jsonb_agg(to_jsonb(x) order by x.transaction_date) from public.sales x where x.id = any(v_sale_ids)), '[]'::jsonb),
+    'sale_items', coalesce((select jsonb_agg(to_jsonb(x)) from public.sale_items x where x.sale_id = any(v_sale_ids)), '[]'::jsonb),
+    'payments', coalesce((select jsonb_agg(to_jsonb(x)) from public.payments x where x.sale_id = any(v_sale_ids)), '[]'::jsonb),
+    'refunds', coalesce((select jsonb_agg(to_jsonb(x)) from public.refunds x
+                         where x.business_id = v_biz and (x.sale_id = any(v_sale_ids) or (x.date >= p_from and x.date < p_to))), '[]'::jsonb),
+    'shifts', coalesce((select jsonb_agg(to_jsonb(x) order by x.opened_at) from public.shifts x
+                        where x.business_id = v_biz and x.opened_at < p_to and coalesce(x.closed_at, now()) >= p_from), '[]'::jsonb),
+    'cash_movements', coalesce((select jsonb_agg(to_jsonb(x)) from public.cash_movements x
+                                where x.business_id = v_biz and x.at >= p_from and x.at < p_to), '[]'::jsonb),
+    'qr_orders', coalesce((select jsonb_agg(to_jsonb(x) order by x.created_at) from public.qr_orders x
+                           where x.business_id = v_biz and x.created_at >= p_from and x.created_at < p_to), '[]'::jsonb),
+    -- 008: money totals of the range, worked out here so every report adds up the same way.
+    -- Counted: the range's sales except HELD and VOIDED (a void's reward is given back,
+    -- so it counts nowhere). For these sales:
+    --   item_sales - discounts - loyalty_rewards + tax + service_charge = sales
+    -- (each to the centavo; sums of the sales' own saved amounts). refunds = what the
+    -- non-voided refunds of these sales gave back; net_sales = sales - refunds.
+    'totals', (select jsonb_build_object(
+                 'sale_count', count(*),
+                 'item_sales', round(coalesce(sum(x.subtotal), 0), 2),
+                 'discounts', round(coalesce(sum(x.discount_amount), 0), 2),
+                 'loyalty_rewards', round(coalesce(sum(x.loyalty_discount), 0), 2),
+                 'loyalty_reward_count', count(*) filter (where coalesce(x.loyalty_discount, 0) > 0),
+                 'tax', round(coalesce(sum(x.tax_amount), 0), 2),
+                 'service_charge', round(coalesce(sum(x.service_charge_amount), 0), 2),
+                 'sales', round(coalesce(sum(x.grand_total), 0), 2),
+                 'refunds', round(coalesce((select sum(greatest(r.amount, 0)) from public.refunds r
+                                            where r.business_id = v_biz and r.type <> 'VOID'
+                                              and r.sale_id = any(array_agg(x.id))), 0), 2),
+                 'net_sales', round(coalesce(sum(x.grand_total), 0)
+                                    - coalesce((select sum(greatest(r.amount, 0)) from public.refunds r
+                                                where r.business_id = v_biz and r.type <> 'VOID'
+                                                  and r.sale_id = any(array_agg(x.id))), 0), 2))
+               from public.sales x where x.id = any(v_sale_ids) and x.status <> 'VOIDED')
   );
 end $$;
 
@@ -1400,31 +1543,32 @@ language sql stable security definer set search_path = public as $$
      and exists (select 1 from public.devices d where d.auth_user_id = auth.uid() and d.business_id = p_biz and d.active)
 $$;
 
--- May this counter show MONEY (totals spent, order totals)? Only with a
--- token from staff_pin_login of an active MANAGER / ADMIN of this shop, made on
--- THIS counter login, still valid now (not expired, not ended, at most 24 hours
--- old) — the same checks as approvals (_use_approval). Both kinds work:
---   LOGIN    (the manager signed in on this counter): reusable, not used up;
---   OVERRIDE (the manager typed their PIN for this): must be unused; viewing
---            does NOT use it up (it is not an approval).
+-- May this counter show MONEY (totals spent, order totals)? Only with the
+-- LOGIN token (staff_pin_login 'LOGIN') of the staff member CURRENTLY signed in
+-- on this counter login (its latest sign-in, not ended, not expired, at most
+-- 24 hours old), and that person must be an active MANAGER / ADMIN of this
+-- shop (security review M2). OVERRIDE approval tokens are NOT accepted, so
+-- viewing never involves an approval token. Nothing is used up.
 -- A manager / admin whose PIN is shorter than 6 digits gets no money view
 -- (security decision 8). Returns 'OK', or why not: null (no token sent),
 -- 'APPROVAL_INVALID', 'ROLE_TOO_LOW' or 'PIN_UPDATE_NEEDED'.
 create or replace function public._money_view_check(p_biz uuid, p_token text) returns text
 language plpgsql stable security definer set search_path = public, extensions as $$
-declare v_sess public.staff_sessions%rowtype; v_s public.staff%rowtype;
+declare v_sess public.staff_sessions%rowtype; v_s public.staff%rowtype; v_latest uuid;
 begin
   if coalesce(btrim(p_token), '') = '' then return null; end if;
   select * into v_sess from public.staff_sessions
     where token_hash = encode(extensions.digest(p_token, 'sha256'), 'hex');
-  if not found
+  select id into v_latest from public.staff_sessions
+    where device_user_id = auth.uid() and purpose = 'LOGIN' order by created_at desc limit 1;
+  if v_sess.id is null
+     or v_sess.purpose <> 'LOGIN'
+     or v_sess.id is distinct from v_latest
      or v_sess.business_id <> p_biz
      or v_sess.device_user_id is distinct from auth.uid()
      or v_sess.revoked_at is not null
      or v_sess.expires_at <= now()
-     or v_sess.created_at < now() - interval '24 hours'
-     or v_sess.purpose not in ('LOGIN', 'OVERRIDE')
-     or (v_sess.purpose = 'OVERRIDE' and v_sess.used_at is not null) then
+     or v_sess.created_at < now() - interval '24 hours' then
     return 'APPROVAL_INVALID';
   end if;
   select * into v_s from public.staff where id = v_sess.staff_id and business_id = p_biz;
@@ -1436,14 +1580,14 @@ begin
   return 'OK';
 end $$;
 
--- Each customers-tab call is counted: at most 600 per hour per counter login
+-- Each customers-tab call is counted: at most 120 per hour per counter login
 -- (so nobody can copy the whole customer list quickly). Returns true when the
 -- call is allowed (and records it).
 create or replace function public._customer_view_allowed(p_subject uuid) returns boolean
 language plpgsql volatile security definer set search_path = public as $$
 begin
   if (select count(*) from public.auth_attempts
-      where subject = p_subject and kind = 'CUSTOMER_VIEW' and at > now() - interval '1 hour') >= 600 then
+      where subject = p_subject and kind = 'CUSTOMER_VIEW' and at > now() - interval '1 hour') >= 120 then
     return false;
   end if;
   insert into public.auth_attempts(subject, kind, success) values (p_subject, 'CUSTOMER_VIEW', true);
@@ -1478,7 +1622,7 @@ end $$;
 -- Counter: list customers, newest visit first, optionally only nicknames
 -- containing p_search (NOT phone numbers: that could tell whether a number is
 -- registered, security decision 7). p_limit 1..50 (default 30).
--- p_staff_token: a manager / admin token (see _money_view_check) to also get
+-- p_staff_token: the signed-in manager / admin's LOGIN token (see _money_view_check) to also get
 -- total_spent. Returns
 --   {customers:[{id, nickname, phone (masked), phone_masked, visits, last_visit_at, first_seen_at,
 --                total_stamps, drink_stamps_earned, food_stamps_earned, card, ready_rewards
@@ -1601,10 +1745,10 @@ declare f record;
     '_loyalty_summary','_loyalty_reward_amount','_release_reward_trigger','_merge_rewards_trigger','_check_sale_totals',
     '_sale_money_review','_lock_finished_sale','_fo_error_code','_fo_apply','_settings_check','_brand_line_check','_brand_in_use_check',
     '_brand_lots','_brand_stock_json','ingredient_brand_stock','_sale_item_refunded_qty','_customer_loyalty',
-    '_refresh_customer_loyalty','_loyalty_trigger','_writable_tables','fo_floor_plan','fo_bootstrap',
+    '_refresh_customer_loyalty','_loyalty_note','_loyalty_pending_run','_to_num','_to_ts','sales_report','_writable_tables','fo_floor_plan','fo_bootstrap',
     'bo_bootstrap','_qr_customer_json','get_qr_menu','_is_active_counter','_money_view_check','_customer_view_allowed',
     '_counter_customer_json','fo_customer_list','fo_customer_detail'];
-  member_fns text[] := array['fo_floor_plan','ingredient_brand_stock','fo_customer_list','fo_customer_detail','fo_bootstrap','bo_bootstrap'];
+  member_fns text[] := array['sales_report','fo_floor_plan','ingredient_brand_stock','fo_customer_list','fo_customer_detail','fo_bootstrap','bo_bootstrap'];
   public_fns text[] := array['get_qr_menu'];
 begin
   for f in
