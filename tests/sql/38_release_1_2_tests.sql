@@ -282,7 +282,7 @@ select test.chk(:'d'::jsonb->>'show_money' = 'true' and (:'d'::jsonb->'customer'
 select test.chk((public.fo_customer_list('', 5, :'mgr_token')->>'show_money')::boolean
             and (public.fo_customer_list('', 5, :'mgr_token')->>'show_money')::boolean, 'E: LOGIN token reusable');
 select (public.staff_pin_login('222222', 'OVERRIDE', 'MANAGER')) ->> 'token' as ovr_token \gset
-select test.chk((public.fo_customer_list('', 5, :'ovr_token')->>'show_money')::boolean, 'E: OVERRIDE token also works');
+select test.chk(public.fo_customer_list('', 5, :'ovr_token')->>'money_refused' = 'APPROVAL_INVALID' and not (public.fo_customer_list('', 5, :'ovr_token')->>'show_money')::boolean, 'E: an OVERRIDE token is NOT accepted for the money view (only the current LOGIN)');
 reset role;
 select test.chk((select used_at is null from staff_sessions where token_hash = encode(extensions.digest(:'ovr_token', 'sha256'), 'hex')), 'E: viewing does not use up the OVERRIDE token');
 -- short PIN manager: no money
@@ -439,9 +439,9 @@ select test.chk((select count(*) from loyalty_redemptions where customer_id = 'c
 set role authenticated;
 reset role;
 -- rate limit
-insert into auth_attempts(subject, kind, success) select '00000000-0000-0000-0000-0000000000d1', 'CUSTOMER_VIEW', true from generate_series(1, 600);
+insert into auth_attempts(subject, kind, success) select '00000000-0000-0000-0000-0000000000d1', 'CUSTOMER_VIEW', true from generate_series(1, 120);
 select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
-select test.chk(public.fo_customer_list()->>'error' = 'TOO_MANY_ATTEMPTS', 'E: 600 calls per hour per counter, then TOO_MANY_ATTEMPTS');
+select test.chk(public.fo_customer_list()->>'error' = 'TOO_MANY_ATTEMPTS', 'E: 120 calls per hour per counter, then TOO_MANY_ATTEMPTS');
 reset role;
 -- grants
 select test.chk(not has_function_privilege('authenticated', 'public._customer_loyalty(uuid,uuid,uuid)', 'execute')
@@ -450,3 +450,70 @@ select test.chk(not has_function_privilege('authenticated', 'public._customer_lo
             and not has_function_privilege('anon', 'public.fo_customer_detail(uuid,text)', 'execute')
             and has_function_privilege('anon', 'public.get_qr_menu(text)', 'execute')
             and has_function_privilege('authenticated', 'public.fo_floor_plan()', 'execute'), 'grants: helpers internal, member fns for logins, QR menu public');
+
+-- ======================= S. security review fixes (M1, M3, _to_num, sales_report) =======================
+select id as zed from customers where nickname = 'Zed' and business_id = :'biz' \gset
+create or replace function test.zed_op(p_op text, p_sale text, p_at timestamptz, p_unit numeric, p_grand numeric, p_cust uuid) returns jsonb language sql as $$
+  select jsonb_build_array(jsonb_build_object('op_id', p_op, 'type', 'sale', 'data', jsonb_build_object(
+    'sale', jsonb_build_object('id', p_sale, 'transaction_number', 'POS-A-2026-' || right(p_sale, 6), 'transaction_date', p_at, 'status', 'COMPLETED',
+       'cashier_id', '66666666-0000-0000-0000-000000000001', 'cashier_name', 'Cathy', 'shift_id', '88888888-0000-0000-0000-0000000008a0',
+       'subtotal', p_unit, 'discount_amount', 0, 'tax_amount', 0, 'service_charge_amount', round(p_unit * 0.10, 2), 'grand_total', p_grand,
+       'customer_id', p_cust, 'received_at', '2020-01-01T00:00:00Z'),
+    'items', jsonb_build_array(jsonb_build_object('recipe_id', '33333333-0000-0000-0000-000000000001', 'name', 'Iced Latte', 'quantity', 1, 'unit_price', p_unit, 'line_total', p_unit)),
+    'payment', jsonb_build_object('id', gen_random_uuid(), 'method', 'CASH', 'amount', p_grand),
+    'inventory', '[]'::jsonb)))
+$$;
+grant execute on all functions in schema test to anon, authenticated;
+select visits as v0, drink_stamps as d0 from public._customer_loyalty(:'biz', :'zed') \gset
+select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
+-- two sales dated 30 and 20 days ago: the server bounds both to (received - 7 days) -> ONE day
+select public.fo_sync('device-key-0001-abcdef', test.zed_op('a0000000-0000-0000-0000-000000000ab1', '99999999-0000-0000-0000-000000000ab1', now() - interval '30 days', 150, 165, :'zed')) as r1 \gset
+select public.fo_sync('device-key-0001-abcdef', test.zed_op('a0000000-0000-0000-0000-000000000ab2', '99999999-0000-0000-0000-000000000ab2', now() - interval '20 days', 150, 165, :'zed')) as r2 \gset
+-- a ₱0 sale 3 days ago: no stamp
+select public.fo_sync('device-key-0001-abcdef', test.zed_op('a0000000-0000-0000-0000-000000000ab3', '99999999-0000-0000-0000-000000000ab3', now() - interval '3 days', 0, 0, :'zed')) as r3 \gset
+-- sold below the menu 2 days ago: flagged, no stamp until the owner clears the flag
+select public.fo_sync('device-key-0001-abcdef', test.zed_op('a0000000-0000-0000-0000-000000000ab4', '99999999-0000-0000-0000-000000000ab4', now() - interval '2 days', 100, 110, :'zed')) as r4 \gset
+-- dated 2 days in the future: flagged FUTURE_DATE, stamp day bounded to today
+select public.fo_sync('device-key-0001-abcdef', test.zed_op('a0000000-0000-0000-0000-000000000ab5', '99999999-0000-0000-0000-000000000ab5', now() + interval '2 days', 150, 165, :'zed')) as r5 \gset
+reset role;
+select test.chk(:'r1'::jsonb->0->>'status' = 'ok' and :'r2'::jsonb->0->>'status' = 'ok' and :'r3'::jsonb->0->>'status' = 'ok' and :'r4'::jsonb->0->>'status' = 'ok' and :'r5'::jsonb->0->>'status' = 'ok', 'S: five test sales uploaded');
+select test.chk((select bool_and(received_at > now() - interval '5 minutes') from sales where id in ('99999999-0000-0000-0000-000000000ab1','99999999-0000-0000-0000-000000000ab5')), 'S/M1: received_at set by the server (the counter''s value is ignored)');
+select test.chk((select visits = :v0 + 1 and drink_stamps = :d0 + 1 from public._customer_loyalty(:'biz', :'zed')), 'S/M1: back-dated (30 + 20 days) sales count as ONE day (received - 7 days); ₱0, below-menu and future-dated sales add nothing',
+  (select format('%s visits / %s drink (was %s / %s)', visits, drink_stamps, :v0, :d0) from public._customer_loyalty(:'biz', :'zed')));
+select test.chk((select review_reason like '%FUTURE_DATE%' and needs_review from sales where id = '99999999-0000-0000-0000-000000000ab5')
+            and (select review_reason like '%PRICE_BELOW_MENU%' from sales where id = '99999999-0000-0000-0000-000000000ab4'), 'S/M1: future date flagged FUTURE_DATE; below-menu flagged');
+update sales set needs_review = false where id = '99999999-0000-0000-0000-000000000ab4';
+select test.chk((select visits = :v0 + 2 and drink_stamps = :d0 + 2 from public._customer_loyalty(:'biz', :'zed')), 'S/M1: owner clears the below-menu flag -> that day counts');
+select test.chk((select visit_count = :v0 + 2 from customers where id = :'zed'), 'S/M4: stored copy follows (pending-customer trigger)');
+select test.chk((select count(*) from loyalty_pending) = 0, 'S/M4: nothing left pending after the save');
+-- M3: free item needs a whole quantity >= 1, capped at unit price and line total
+insert into customers(id, business_id, nickname, source) values ('c5000000-0000-0000-0000-0000000000f1', :'biz', 'Freebie', 'COUNTER');
+do $$ declare i int; begin
+  for i in 1..15 loop
+    perform test.mk_sale(format('5d000000-0000-0000-0000-%s', lpad(i::text, 12, '0')), 'c5000000-0000-0000-0000-0000000000f1',
+                         ('2026-06-01 10:00+08'::timestamptz + make_interval(days => i)), 'COMPLETED', 1, 0);
+  end loop; end $$;
+select test.chk(test.err(format($q$select public._loyalty_reward_amount(%L, gen_random_uuid(), %L::jsonb, '[{"recipe_id":"33333333-0000-0000-0000-000000000001","quantity":0.5,"unit_price":150,"line_total":75}]', %L::jsonb)$q$,
+   :'biz', jsonb_build_object('customer_id', 'c5000000-0000-0000-0000-0000000000f1', 'subtotal', 75, 'discount_amount', 0), jsonb_build_object('customer_id', 'c5000000-0000-0000-0000-0000000000f1', 'card_no', 1, 'milestone', 15, 'recipe_id', '33333333-0000-0000-0000-000000000001'))) = 'REWARD_NOT_AVAILABLE',
+  'S/M3: free item on a half-quantity line refused');
+select test.chk(public._loyalty_reward_amount(:'biz', gen_random_uuid(), jsonb_build_object('customer_id', 'c5000000-0000-0000-0000-0000000000f1', 'subtotal', 300, 'discount_amount', 0),
+   '[{"recipe_id":"33333333-0000-0000-0000-000000000001","quantity":0.5,"unit_price":150,"line_total":75},{"recipe_id":"33333333-0000-0000-0000-000000000001","quantity":2,"unit_price":112.5,"line_total":225}]',
+   jsonb_build_object('customer_id', 'c5000000-0000-0000-0000-0000000000f1', 'card_no', 1, 'milestone', 15, 'recipe_id', '33333333-0000-0000-0000-000000000001')) = 112.5,
+  'S/M3: only whole-quantity lines count; one unit capped at that line''s unit price');
+-- _to_num reads long decimals: no false TAX_MISMATCH
+select test.chk(public._sale_money_review(:'biz', '{"subtotal":27.191125000000005,"discount_amount":0,"tax_amount":0,"service_charge_amount":2.7191125000000005,"grand_total":29.91}'::jsonb,
+   '{"method":"CASH","amount":29.91}'::jsonb) is null and public._to_num('2.7191125000000005') = 2.7191125000000005 and public._to_num('1234567890123456') is null,
+  'S: _to_num reads any number of decimals (no false TAX_MISMATCH), still max 15 digits before the point');
+-- sales_report totals
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select public.sales_report(now() - interval '2 years', now() + interval '1 year')->'totals' as tot \gset
+reset role;
+select test.chk(abs((:'tot'::jsonb->>'item_sales')::numeric - (:'tot'::jsonb->>'discounts')::numeric - (:'tot'::jsonb->>'loyalty_rewards')::numeric
+                    + (:'tot'::jsonb->>'tax')::numeric + (:'tot'::jsonb->>'service_charge')::numeric - (:'tot'::jsonb->>'sales')::numeric) < 0.01
+            and (:'tot'::jsonb->>'loyalty_rewards')::numeric = (select sum(loyalty_discount) from sales where business_id = :'biz' and status not in ('HELD','VOIDED'))
+            and (:'tot'::jsonb->>'loyalty_rewards')::numeric > 0,
+  'S: sales_report totals: item_sales - discounts - loyalty_rewards + tax + service_charge = sales', :'tot');
+-- L3: counters and other rank-0 logins read no brands / tables; owner still does
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.chk((select count(*) from dining_tables) > 0 and (select count(*) from ingredient_brands) > 0, 'S/L3: owner still reads tables and brands');
+reset role;
