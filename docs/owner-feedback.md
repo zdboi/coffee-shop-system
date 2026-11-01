@@ -39,3 +39,12 @@ Reason: a photo of a table QR code lets people order from far away. Already in p
 
 ## Later (planning first, don't build): RPG loyalty
 Owner (2026-10-29): remake the stamp card as RPG-style mechanics: levels, perks, different rewards, tied to future promotional items (e.g. +1 stamp for a promo item). Owner will expand on it; plan together before any work. The 1.2 15-stamp card stays until then.
+
+## Release 1.3: thermal receipt printing (owner request 2026-11-02)
+Today: the counter opens an 80 mm receipt in a print window and the browser's normal print dialog (works only if the printer has a driver and is picked every time; no detection, no 58 mm, no auto cut, no cash drawer).
+Owner's setup: counters on **iPad/iPhone, Android, Windows and MacBook**; printers on **Bluetooth and network (LAN/Wi-Fi)**. Build in 1.3.
+
+| # | Item | Notes for planning |
+|---|---|---|
+| P1 | Find/pair the shop's receipt printers from the counter and remember them per counter; print receipts (58/80 mm), cut paper, open the cash drawer; optional kitchen/bar ticket. | Browser limits: iPad/iPhone allow no Bluetooth/USB access at all, and no browser can open a raw network printer port. So the plan must use one of: (a) **network printers with a built-in web print service** (Epson TM with ePOS-Print, Star with WebPRNT/CloudPRNT): work from every device incl. iPad, the best fit; (b) Web Bluetooth (Chrome on Android/Windows/Mac only, BLE printers only, not iPad); (c) a small print-helper app on one shop PC/Android box. Ask the owner for the exact printer brand/model before building. Keep the print-dialog version as the fallback. |
+| P2 | Manager-only "Retry without the reward" for a sale refused with REWARD_NOT_AVAILABLE / REWARD_AMOUNT_MISMATCH (records full price with the real payment; the server flags it for review). | Found by front-office-dev in 1.2. |
