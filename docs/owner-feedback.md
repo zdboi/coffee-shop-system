@@ -23,3 +23,19 @@ New items after this go into the next batch.
 |---|---|---|---|
 | T3 | 2026-10-25 | Security review (low): before 007, a counter could save a pay-in/out with no amount or "NaN" (live rule `amount > 0` lets both through). 007 blocks new ones. At release, the owner runs a read-only check for old bad rows; then a later script (008+) adds `not null` + no-NaN rules on `cash_movements.amount` (after fixing any rows found). | db-security-engineer |
 | T4 | 2026-10-25 | Optional: flag very large pay-ins for review too (today only pay-outs above the limit are flagged). Ask the owner. | db-security-engineer |
+
+## Release 1.3: QR ordering security (owner request 2026-10-29, decisions 2026-11-02; build AFTER 1.2 ships)
+Reason: a photo of a table QR code lets people order from far away. Already in place (live): sign-in before ordering, one customer account per phone (server), every QR order waits for payment at the counter and can be declined, QR orders don't hold stock (stock drops only when paid), limits (3 unpaid per person, 10/hour per person, 10 waiting per table, 60 per shop per 10 min). The 1.2 counter Customers tab covers "I forgot my phone, put it under my name".
+
+| # | Item | Owner decision |
+|---|---|---|
+| Q1 | **Guest or registered** sign-in on the QR page. Guests: no stamp card. Registered: stamp card + a **unique username** (two people can share a name). | Build. |
+| Q2 | **Usernames for existing customers:** auto-made from the nickname, **coffee-themed**, e.g. "Mika the Coffee Devourer"; the customer can change it later. Must stay unique. | Decided 2026-11-02. |
+| Q3 | **Max 4 open (unpaid) tickets per table QR** (today 10). | Build. |
+| Q4 | **Only 1 guest at a time per table QR.** | Build. |
+| Q5 | **One phone per account; account switching:** signing out and into another account on the same phone asks "You still have unpaid orders. Do you still want to proceed? Yes / No"; Yes removes that phone's unpaid orders. Honest limit: a web page can't read a hardware ID; each phone gets its own sign-in key tied to one account, so private browsing / clearing data looks like a new phone (per-table limits + pay-at-counter still cap it). | Build. |
+| Q6 | **Stock check when paying:** if an item ran out after the order was placed, the counter is warned and **must remove the out-of-stock items** before payment goes through. Same rule for ordinary counter sales: no more "Add anyway?" for sold-out / out-of-stock items. | Decided 2026-11-02: must remove. |
+| Q7 | Counter rejects/removes rogue orders (exists: Decline). Keep, restyled in 1.2. | Exists. |
+
+## Later (planning first, don't build): RPG loyalty
+Owner (2026-10-29): remake the stamp card as RPG-style mechanics: levels, perks, different rewards, tied to future promotional items (e.g. +1 stamp for a promo item). Owner will expand on it; plan together before any work. The 1.2 15-stamp card stays until then.
