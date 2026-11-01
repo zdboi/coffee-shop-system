@@ -605,6 +605,12 @@ function lockSession(){
   try{ sessionStorage.removeItem(STAFF_SESSION_STORAGE); }catch(e){}
   posState.currentUser = null; posState.loginExpiresAt = null;
   posState.cart = []; posState.discount = null; posState.customer = null; posState.qrOrder = null; posState.resumingHeldSaleId = null; posState.reward = null;
+  // Customers screen: forget what was shown (a manager's money view must not stay after locking);
+  // answers still on their way are thrown away.
+  custView.list = null; custView.detail = null; custView.selected = null; custView.q = '';
+  custView.listSeq += 1; custView.detailSeq += 1;
+  const content = document.getElementById('content'); if(content){ content.innerHTML = ''; content.className = ''; }
+  document.getElementById('topbar-actions').innerHTML = '';
   show('app', false);
   showPinGate('login');
   if(token) endStaffLogin(token, tokenEnds).catch(e=>console.warn('could not end the staff login', e));
@@ -1531,7 +1537,7 @@ function loyaltyOn(){ return !!(state.settings && state.settings.loyalty_enabled
 function usedRewardKey(customerId, r){ return customerId + ':' + rewardKey(r); }
 function usableRewards(){
   const c = posState.customer;
-  if(!c || !c.summary || !loyaltyOn()) return [];
+  if(!c || !c.summary || !loyaltyOn() || savedCardTooOldForRewards(c)) return [];
   return readyRewards(c.summary).filter(r => !posState.usedRewardKeys.has(usedRewardKey(c.id, r)));
 }
 // Cart lines a free-item reward can go on: a drink / pastry / food line with a whole quantity of 1 or more.
@@ -1595,7 +1601,31 @@ function applyReward(key){
 /* ---- The customer on this order (and their stamp card) ---- */
 const CUSTOMER_CARDS_KEY = 'fo.customerCards';
 const CUSTOMER_CARDS_MAX = 300;
-async function loadCustomerCards(){ try{ const m = await LocalDB.get(CUSTOMER_CARDS_KEY); return (m && typeof m === 'object' && !Array.isArray(m)) ? m : {}; }catch(e){ return {}; } }
+const CUSTOMER_CARD_KEEP_MS = 30*24*3600*1000;      // saved copies older than 30 days are deleted
+const CUSTOMER_CARD_REWARD_MS = 48*3600*1000;       // offline, rewards only from copies saved in the last 48 hours
+// Saved stamp cards (for offline use). Copies older than 30 days are removed whenever the list is read.
+async function loadCustomerCards(){
+  let m;
+  try{ m = await LocalDB.get(CUSTOMER_CARDS_KEY); }catch(e){ return {}; }
+  if(!m || typeof m !== 'object' || Array.isArray(m)) return {};
+  const cutoff = Date.now() - CUSTOMER_CARD_KEEP_MS;
+  let changed = false;
+  Object.keys(m).forEach(id => { const t = m[id] && m[id].at ? new Date(m[id].at).getTime() : NaN; if(!(t >= cutoff)){ delete m[id]; changed = true; } });
+  if(changed){ try{ await LocalDB.set(CUSTOMER_CARDS_KEY, m); }catch(e){} }
+  return m;
+}
+// The customer was erased or merged on the server (NOT_FOUND): nothing of them stays on this counter.
+async function forgetCustomerCard(id){
+  try{
+    const m = await loadCustomerCards();
+    if(m[id]){ delete m[id]; await LocalDB.set(CUSTOMER_CARDS_KEY, m); }
+  }catch(e){}
+}
+function savedCardTooOldForRewards(c){
+  if(!c || !c.summaryOffline) return false;
+  const t = c.summaryAt ? new Date(c.summaryAt).getTime() : NaN;
+  return !(Date.now() - t <= CUSTOMER_CARD_REWARD_MS);
+}
 // Only what the counter needs offline: name, masked phone, visits and the stamp card. Never money.
 function customerCardCopy(c){
   return {id: c.id, nickname: c.nickname, phone: c.phone || null, visits: c.visits, last_visit_at: c.last_visit_at || null,
@@ -1651,6 +1681,8 @@ async function refreshCustomerCard(id){
   if(!id || customerCardRuns[id]) return;
   customerCardRuns[id] = true;
   try{
+    // The saved copy is used ONLY when the server can't be reached. Any server answer wins:
+    // NOT_FOUND (erased / merged) deletes the saved copy; other refusals just show no stamp card.
     if(isOnline()){
       try{
         const r = await cloud.rpc('fo_customer_detail', {p_customer_id: id, p_staff_token: null}, {timeout: 8000});
@@ -1660,7 +1692,11 @@ async function refreshCustomerCard(id){
           renderCartPanel();
           return;
         }
-      }catch(e){ if(!e.offline) console.warn('could not load the stamp card', e.message); }
+        if(r && r.error === 'NOT_FOUND') await forgetCustomerCard(id);
+        return;
+      }catch(e){
+        if(!e.offline){ console.warn('could not load the stamp card', e.message); return; }
+      }
     }
     const saved = (await loadCustomerCards())[id];
     if(saved && saved.c && posState.customer && posState.customer.id === id && !posState.customer.summary){
@@ -1686,7 +1722,8 @@ function cartCustomerHtml(){
     }).join('')}</div>`;
   }
   let note = '';
-  if(view && c.summaryOffline) note = `<div class="cart-cust-note">${icon('wifi-off', {size: 16})}<span>Stamp card saved ${escapeHtml(timeAgo(c.summaryAt))}. Rewards will be checked when online.</span></div>`;
+  if(view && c.summaryOffline && savedCardTooOldForRewards(c)) note = `<div class="cart-cust-note">${icon('wifi-off', {size: 16})}<span>The stamp card saved on this counter is more than 2 days old, so rewards can be used only when the counter is online. Stamps still count when the sale uploads.</span></div>`;
+  else if(view && c.summaryOffline) note = `<div class="cart-cust-note">${icon('wifi-off', {size: 16})}<span>Stamp card saved ${escapeHtml(timeAgo(c.summaryAt))}. Rewards will be checked when online.</span></div>`;
   else if(!c.summary && loyaltyOn() && !isOnline()) note = `<div class="cart-cust-note">${icon('wifi-off', {size: 16})}<span>No saved stamp card for this customer on this counter. Stamps still count when the sale uploads.</span></div>`;
   return `<div class="customer-chip cart-cust">
       <span class="cust-av" aria-hidden="true">${escapeHtml(initialOf(c.nickname))}</span>
@@ -2023,11 +2060,13 @@ function openCheckout(){
 
 // Nothing to pay (the stamp reward covers the whole order): confirm and finish, no payment step.
 function openFreeCheckout(totals){
-  const a = posState.reward;
+  // Only a reward that actually takes something off "covers" the order; any other ₱0 total
+  // (e.g. a 100% approved discount) gets neutral words.
+  const a = posState.reward && totals.loyaltyDiscount > 0 ? posState.reward : null;
   openModal({title: 'Nothing to pay', body: `
     <div class="checkout-due"><div class="lbl">Total due</div><div class="val">${fmtMoney(0)}</div>
       ${a?`<div class="checkout-reward">${icon('gift', {size: 16})} Stamp reward: -${fmtMoney(totals.loyaltyDiscount)} (${escapeHtml(rewardLineName(a))})</div>`:''}</div>
-    <p>The stamp reward covers this whole order, so the customer pays nothing.${a && a.offline ? ' The reward will be checked when the counter is online.' : ''}</p>`,
+    <p>${a ? `The stamp reward covers this whole order, so the customer pays nothing.${a.offline ? ' The reward will be checked when the counter is online.' : ''}` : 'The total is ₱0.00, so the customer pays nothing.'}</p>`,
     foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary btn-big" id="complete-sale-btn">Complete sale</button>`,
     onMount: (root)=>{
       root.querySelector('[data-cancel]').onclick = closeModal;
@@ -2039,7 +2078,7 @@ function openFreeCheckout(totals){
           await showQrAlreadyPaid(paidOrder);
           return;
         }
-        const done = await completeSale({method: 'OTHER', amount: 0, tendered: null, change: null, reference: 'Stamp reward (nothing to pay)'});
+        const done = await completeSale({method: 'OTHER', amount: 0, tendered: null, change: null, reference: a ? 'Stamp reward (nothing to pay)' : 'Nothing to pay'});
         closeModal();
         if(done) showReceipt(done.sale.id, {autoPrint:false, customerName: done.customerName});
       };
@@ -2601,6 +2640,7 @@ async function loadCustomerDetail(id, scroll){
     const r = await cloud.rpc('fo_customer_detail', {p_customer_id: id, p_staff_token: customerMoneyToken()}, {timeout: 10000});
     if(seq !== custView.detailSeq || posState.route !== 'customers') return;
     if(r && r.error){
+      if(r.error === 'NOT_FOUND') forgetCustomerCard(id);
       box.innerHTML = `<div class="card"><p>${escapeHtml(r.error === 'NOT_FOUND' ? 'This customer is no longer on the list (they may have been merged or removed).' : friendlyError(r))}</p></div>`;
       return;
     }
