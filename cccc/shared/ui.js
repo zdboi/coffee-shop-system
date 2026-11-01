@@ -1,14 +1,53 @@
 /* ================= Shared UI primitives (Front Office + Back Office) ================= */
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+// Short messages in the corner (release 1.2 polish, busy counter):
+//  - at most TOAST_MAX on screen; when another arrives the oldest goes first;
+//  - success / info go after ~2 s, warnings ~4 s, errors ~6 s; an error (or any toast) closes on a tap;
+//  - the same message + type as the newest toast is merged ("×2" badge, timer restarts) instead of stacking.
+// The toast's text (textContent) is exactly msg: the ×2 badge and the close mark are drawn by CSS
+// from data-count / the error class, so tests and screen readers read the message only.
+const TOAST_MAX = 2;
+const TOAST_MS = {success: 2000, info: 2000, warn: 4000, error: 6000};
+function _toastRemove(node){
+  if(!node || node._gone) return;
+  node._gone = true;
+  clearTimeout(node._timer);
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if(reduce){ node.remove(); return; }
+  node.style.transition = 'opacity .25s'; node.style.opacity = '0';
+  setTimeout(() => node.remove(), 250);
+}
+function _toastArm(node){
+  clearTimeout(node._timer);
+  node._timer = setTimeout(() => _toastRemove(node), TOAST_MS[node._type] || TOAST_MS.success);
+}
 function toast(msg, type='success'){
   const wrap = document.getElementById('toast-wrap');
   if(!wrap) return;
+  type = type || 'success';
+  const text = String(msg == null ? '' : msg);
+  const live = [...wrap.querySelectorAll('.toast')].filter(n => !n._gone);
+  const last = live[live.length - 1];
+  if(last && last._type === type && last.textContent === text){
+    const n = (Number(last.dataset.count) || 1) + 1;
+    last.dataset.count = String(n);
+    last.setAttribute('aria-label', text + ' (' + n + ' times)');
+    _toastArm(last);
+    return last;
+  }
+  // make room: the oldest toasts go first
+  live.slice(0, Math.max(0, live.length - (TOAST_MAX - 1))).forEach(n => { n._gone = true; clearTimeout(n._timer); n.remove(); });
   const node = document.createElement('div');
-  node.className = 'toast '+type;
-  node.textContent = msg;
+  node.className = 'toast ' + type;
+  node._type = type;
+  node.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  node.title = 'Tap to close';
+  node.textContent = text;
+  node.addEventListener('click', () => _toastRemove(node));
   wrap.appendChild(node);
-  setTimeout(()=>{ node.style.opacity='0'; node.style.transition='opacity .3s'; setTimeout(()=>node.remove(),300); }, type==='error' ? 5200 : 3200);
+  _toastArm(node);
+  return node;
 }
 
 function openModal({title, body, foot, wide, onMount, onClose}){
