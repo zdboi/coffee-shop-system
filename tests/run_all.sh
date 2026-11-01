@@ -107,8 +107,10 @@ run_node unit/logic_refund_check "$DIR/unit/logic_refund_check.js" "$REPO"
 run_node unit/email_link_check "$DIR/unit/email_link_check.js" "$REPO"
 run_node unit/captcha_check "$DIR/unit/captcha_check.js" "$REPO"
 run_node unit/units_check "$DIR/unit/units_check.js" "$REPO"
+run_node unit/shift_reward_check "$DIR/unit/shift_reward_check.js" "$REPO"        # 1.2: shift summary with stamp rewards
 "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1          # parity check needs a shop (runs inside a rolled-back transaction)
 run_node unit/refund_parity_check "$DIR/unit/refund_parity_check.js" "$REPO" "$DB" 500
+run_node unit/loyalty_totals_check "$DIR/unit/loyalty_totals_check.js" "$REPO" "$DB" 1500   # 1.2: reward totals vs the 008 server (rolled back)
 
 if [ "$BROWSER" = 1 ]; then
   "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1
@@ -121,7 +123,9 @@ if [ "$BROWSER" = 1 ]; then
              "bo.e2e@1280:bo.e2e.js:1280x900" "bo.e2e@768:bo.e2e.js:768x1024" "bo_calendar_tips.e2e:bo_calendar_tips.e2e.js:" "money.e2e:money.e2e.js:" \
              "fo_round3.e2e:fo_round3.e2e.js:" "bo_round3.e2e:bo_round3.e2e.js:" "order_limits.e2e:order_limits.e2e.js:" \
              "captcha.e2e:captcha.e2e.js:" \
-             "fo_batch1.e2e:fo_batch1.e2e.js:" "bo_batch1.e2e:bo_batch1.e2e.js:" "bo_excel.e2e:bo_excel.e2e.js:"; do
+             "fo_batch1.e2e:fo_batch1.e2e.js:" "bo_batch1.e2e:bo_batch1.e2e.js:" "bo_excel.e2e:bo_excel.e2e.js:" \
+             "fo_release12.e2e:fo_release12.e2e.js:" "bo_release12.e2e:bo_release12.e2e.js:" "order_release12.e2e:order_release12.e2e.js:" \
+             "money12.e2e:money12.e2e.js:"; do
       IFS=: read -r name file vp <<<"$t"
       "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1      # every browser suite starts from a fresh seed
       BO_VIEWPORT="${vp:-1280x900}" run_node "e2e/$name#$run" "$DIR/e2e/$file"

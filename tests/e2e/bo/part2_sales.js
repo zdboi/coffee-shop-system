@@ -174,10 +174,12 @@ async function statValue(p, label){ return p.$$eval('.stat-card', (cards, label)
   await go(page, 'settings');
   await page.click('[data-tab="branding"]');
   await page.fill('#cz-business', 'CCCC Test Shop');
+  await page.check('#cz-theme-custom');                              // 1.2: presets only with Custom colours
   await page.click('[data-preset="Forest"]');
   await page.click('#cz-save'); await page.waitForTimeout(1500);
   ok(sql(`select name from businesses where id='${biz}'`) === 'CCCC Test Shop' && sql(`select business_name || ' ' || secondary_color from settings where business_id='${biz}'`) === 'CCCC Test Shop #33513f', 'shop name saved in settings AND businesses; colours saved');
   await page.screenshot({path: SHOTS + 'f-settings-branding.png', fullPage: true});
+  await page.click('[data-tab="branding"]'); await page.check('#cz-theme-cccc'); await page.click('#cz-save'); await page.waitForTimeout(1500);   // back to CCCC
   await page.click('[data-tab="qr"]');
   await page.click('label:has(#qr-on) .slider-tog');
   await page.fill('#qr-welcome', 'Mabuhay! Order here.');
@@ -192,8 +194,8 @@ async function statValue(p, label){ return p.$$eval('.stat-card', (cards, label)
   await sr.waitForLoadState(); ok((await sr.content()).includes('Tax'), 'sample receipt shows tax'); await sr.close();
   await page.fill('#set-tax', '0'); await page.click('#save-receipt'); await page.waitForTimeout(1000);
   await page.click('[data-tab="loyalty"]');
-  await page.click('label:has(#ly-on) .slider-tog'); await page.fill('#ly-stamps', '8'); await page.click('#ly-save'); await page.waitForTimeout(1000);
-  ok(sql(`select loyalty_enabled::text || '/' || stamps_per_reward from settings where business_id='${biz}'`) === 'true/8', 'loyalty on, 8 stamps per reward');
+  await page.click('label:has(#ly-on) .slider-tog'); await page.click('#ly-save'); await page.waitForTimeout(1500);
+  ok(sql(`select loyalty_enabled::text from settings where business_id='${biz}'`) === 'true', 'loyalty on (1.2 stamp card)');
 
   // reports
   await go(page, 'reports');

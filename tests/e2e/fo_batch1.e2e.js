@@ -1,5 +1,5 @@
 // Counter (Front Office) batch 1 checks, on a fresh e2e seed:
-//   * Back Office link: last item of the side menu, well below "Shift & Cash", ADMIN only
+//   * Back Office link: last item of the side menu, well below "Shift & cash", ADMIN only
 //     (absent for a cashier and a manager); role badge tooltip; lock button label
 //   * pay-in / pay-out form refuses ₱0, -₱5 and ₱0.004 (rounds to ₱0): nothing queued, nothing on the server
 //   * a pay-in the server refuses with AMOUNT_NOT_POSITIVE (007) shows in "Uploads that need attention"
@@ -41,9 +41,9 @@ const SHOT = (p, n) => H.shot(p, 'fo-batch1-' + n);
       order: kids.filter(k => k.classList.contains('nav-item')).map(k => k.dataset.route || 'back-office')};
   });
   ok(nav.count === 1 && nav.isLast, 'ADMIN: one Back Office link, the last item of the side menu', nav);
-  ok(JSON.stringify(nav.order) === JSON.stringify(['pos', 'qr', 'sales', 'shift', 'back-office']), 'menu order: Sell, QR Orders, Sales, Shift & Cash, then Back Office', nav.order);
+  ok(JSON.stringify(nav.order) === JSON.stringify(['pos', 'qr', 'customers', 'sales', 'shift', 'back-office']), 'menu order (1.2): Orders, QR Orders, Customers, Sales, Shift & cash, then Back Office', nav.order);
   ok(nav.href === '../back/' && /Back Office/.test(nav.text) && nav.label === 'Back Office', 'Back Office link goes to ../back/ and is labelled "Back Office"', nav);
-  ok(nav.boTop - nav.shiftBottom >= 120, `Back Office link sits well below "Shift & Cash" (gap ${Math.round(nav.boTop - nav.shiftBottom)} px at 1280x860)`, nav);
+  ok(nav.boTop - nav.shiftBottom >= 120, `Back Office link sits well below "Shift & cash" (gap ${Math.round(nav.boTop - nav.shiftBottom)} px at 1280x860)`, nav);
   ok(nav.footTop - nav.boBottom >= 0 && nav.footTop - nav.boBottom < 60, 'Back Office link sits at the bottom of the menu, just above the footer (not overlapping it)', nav);
   const badge = await page.getAttribute('#sidebar-foot .role-badge', 'title');
   ok(/·\s*ADMIN/.test(badge || ''), 'role badge has a tooltip with the full name and role', badge);
