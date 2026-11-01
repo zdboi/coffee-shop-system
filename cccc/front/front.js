@@ -33,7 +33,7 @@ const posState = {
   lastBootstrapAt: 0,
   qrSince: null, qrSeen: new Set(),
   reward: null,          // stamp reward on this order: {reward:{card_no, stamp, type, amount, label}, customer_id, recipe_id, offline}
-  usedRewardKeys: new Set(),   // "customer:card:stamp" of rewards used in sales on this counter (not offered again)
+  usedRewardKeys: new Set(),   // "customer:card:stamp" of rewards used in sales still waiting to upload (or refused and not dismissed): not offered meanwhile
   qrView: null,          // 'plan' | 'list' (QR orders board)
   todaySales: null,
   shiftCheckOk: null,    // did the last server check of the open shift succeed? (null = not asked yet)
@@ -148,6 +148,7 @@ async function applyBootstrap(d){
   // Operations still waiting to upload are re-applied so they don't vanish from the screen.
   const pending = await LocalDB.outboxAll();
   pending.forEach(op => applyOpLocally(op, true));
+  await rebuildUsedRewardKeys();
   await prunePinVerifiers();
 }
 
@@ -808,6 +809,11 @@ function applyOpLocally(op, replay){
       break;
     case 'refund': {
       noteTouchedSale(d.refund.sale_id);
+      // A void / full refund gives the sale's stamp reward back (the server sets released_at).
+      if(d.refund.type === 'VOID' || d.refund.type === 'FULL_REFUND'){
+        const rs = state.sales.find(x=>x.id===d.refund.sale_id);
+        if(rs && rs.loyalty_reward && rs.loyalty_reward.customer_id) posState.usedRewardKeys.delete(usedRewardKey(rs.loyalty_reward.customer_id, rs.loyalty_reward));
+      }
       if(state.refunds.some(r=>r.id===d.refund.id)) break;
       state.refunds.push(d.refund);
       applyStockDeltas((d.inventory||[]).map(t=>Object.assign({transaction_type:'SALE_REVERSAL'}, t)));
@@ -830,6 +836,7 @@ const Sync = {
     const op = {op_id: uid(), type, data};
     applyOpLocally(op, false);
     await LocalDB.outboxAdd(op);
+    if(type === 'sale' || type === 'refund') rebuildUsedRewardKeys();
     this.pending += 1;
     updateSyncPill();
     updateApprovalBanner();
@@ -885,7 +892,8 @@ const Sync = {
     }finally{
       this.busy = false;
       await this.refreshCounts();
-      saveSnapshotSoon(uploaded ? 0 : undefined);     // uploaded ops left the queue: keep them in the saved copy now
+      saveSnapshotSoon(uploaded ? 0 : undefined);
+      if(uploaded) rebuildUsedRewardKeys();     // uploaded ops left the queue: keep them in the saved copy now
       finishPendingLogouts();          // staff logins that were waiting for these uploads
     }
   },
@@ -1028,6 +1036,7 @@ async function showFailedOps(){
         const ok = await confirmDialog('Dismiss this item? It will not be uploaded. (Download the details first if you need them.)', 'Dismiss');
         if(!ok){ showFailedOps(); return; }
         await LocalDB.failedRemove(Number(b.dataset.drop));
+        await rebuildUsedRewardKeys();
         await Sync.refreshCounts(); showFailedOps();
       });
     }});
@@ -1535,6 +1544,23 @@ function clearCart(){
    is not offered again on this counter (posState.usedRewardKeys). */
 function loyaltyOn(){ return !!(state.settings && state.settings.loyalty_enabled); }
 function usedRewardKey(customerId, r){ return customerId + ':' + rewardKey(r); }
+// Rebuilds the blocked rewards from what is still on this counter: finished sales with a reward that are
+// waiting to upload, or were refused and not dismissed yet, unless a void / full refund of that sale is
+// queued too. Everything else follows the server's answer (a released reward is offered again).
+async function rebuildUsedRewardKeys(){
+  try{
+    const ops = (await LocalDB.outboxAll()).concat(await LocalDB.failedAll());
+    const released = new Set(ops.filter(o => o.type === 'refund' && o.data && o.data.refund && (o.data.refund.type === 'VOID' || o.data.refund.type === 'FULL_REFUND')).map(o => o.data.refund.sale_id));
+    const keys = new Set();
+    ops.forEach(o => {
+      const sale = o.type === 'sale' && o.data && o.data.sale;
+      const lr = sale && sale.status === 'COMPLETED' && sale.loyalty_reward;
+      if(lr && lr.customer_id && !released.has(sale.id)) keys.add(usedRewardKey(lr.customer_id, lr));
+    });
+    posState.usedRewardKeys = keys;
+    if(posState.route === 'pos') renderCartPanel();
+  }catch(e){}
+}
 function usableRewards(){
   const c = posState.customer;
   if(!c || !c.summary || !loyaltyOn() || savedCardTooOldForRewards(c)) return [];
