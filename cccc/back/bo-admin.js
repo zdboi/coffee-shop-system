@@ -651,7 +651,7 @@ function renderSettings(){
       </div>
       <div class="form-row"><label>Logo</label></div>
       <div class="field-inline" style="margin-bottom:16px;">
-        <div class="logo-preview" id="cz-logo-preview">${s.logo_url ? `<img src="${esc(s.logo_url)}" alt="">` : brandLogoHtml('mark', {className: 'brand-mark', alt: ''})}</div>
+        <div class="logo-preview" id="cz-logo-preview">${brandLogoHtml('mark', {className: 'brand-mark', alt: '', settings: Object.assign({}, s, {theme: 'CUSTOM'})})}</div>
         <button class="btn btn-outline btn-sm" id="cz-logo-upload">Upload a logo</button>
         <button class="btn btn-ghost btn-sm" id="cz-logo-remove" ${!s.logo_url ? 'disabled' : ''}>Remove logo</button>
         <input type="file" id="cz-logo-input" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" style="display:none;">

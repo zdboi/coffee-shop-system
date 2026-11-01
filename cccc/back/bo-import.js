@@ -45,7 +45,7 @@ async function buildCloudBackup(onProgress){
   data.devices = (data.devices || []).map(d => { const x = Object.assign({}, d); delete x.device_key; delete x.auth_user_id; return x; });
   const srow = await cloud.select('settings', {limit: 1});
   data.settings = (srow && srow[0]) || null;
-  return {app: 'CCCC Back Office', format: 'cccc-backup', version: 6,   // 6 = release 1.2 (brands, floor plan shapes, rewards used) exported_at: nowISO(),
+  return {app: 'CCCC Back Office', format: 'cccc-backup', version: 6, exported_at: nowISO(),   // version 6 = release 1.2 (brands, floor plan shapes, rewards used)
     business: state.business ? {id: state.business.id, name: state.business.name} : null, data};
 }
 async function exportBackup(silent, tag){
