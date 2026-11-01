@@ -158,6 +158,45 @@ function applyBoBootstrap(d){
   BO.pinLockouts = (Array.isArray(d.pin_lockouts) ? d.pin_lockouts : []).filter(x => x && typeof x === 'object');
   BO.ownerStaff = state.staff.find(s => s.profile_id && s.profile_id === cloud.userId()) || null;
   BO.lastLoadAt = Date.now();
+  BO.stockAt = BO.lastLoadAt;
+}
+
+/* ---- stock freshness (QA D2) ----
+   Counters sell all day, so the stock screens re-read ONLY the stock numbers (v_ingredient_stock) and the
+   stock per brand (ingredient_brand_stock) each time they open, instead of the whole start-up data.
+   The screen is drawn again only when a number changed (and never under an open window or while typing). */
+const STOCK_ROUTES = ['dashboard', 'ingredients', 'ingredientDetail', 'inventory'];
+BO.stockAt = 0;
+let boStockBusy = null;
+async function boRefreshStock(){
+  if(boStockBusy) return boStockBusy;
+  boStockBusy = (async () => {
+    const [rows, brands] = await Promise.all([
+      cloud.selectAll('v_ingredient_stock', {select: 'ingredient_id,stock'}),
+      cloud.rpc('ingredient_brand_stock', {p_ingredient_id: null}).catch(() => null),   // older database: keep what we have
+    ]);
+    const before = JSON.stringify([state.stock, state.brandStock]);
+    setStockFromServer(rows || []);
+    if(Array.isArray(brands)) state.brandStock = brands;
+    BO.stockAt = Date.now();
+    return before !== JSON.stringify([state.stock, state.brandStock]);
+  })();
+  try{ return await boStockBusy; } finally{ boStockBusy = null; }
+}
+function stockFreshHtml(){
+  return `<span class="stock-fresh" id="stock-fresh">${BO.stockAt ? 'Stock updated ' + esc(fmtShopTime(new Date(BO.stockAt))) : 'Checking the latest stock…'}</span>`;
+}
+function updateStockFresh(){
+  const n = document.getElementById('stock-fresh');
+  if(n) n.textContent = BO.stockAt ? 'Stock updated ' + fmtShopTime(new Date(BO.stockAt)) : 'Checking the latest stock…';
+}
+// Called after a stock screen is drawn: fetch the latest numbers, then redraw if they changed.
+function refreshStockFor(route, param){
+  boRefreshStock().then(changed => {
+    if(state.route !== route || state.routeParam !== (param == null ? null : param)) return;
+    const busyHere = document.getElementById('active-modal-overlay') || (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
+    if(changed && !busyHere) rerender(); else updateStockFresh();
+  }).catch(e => { console.warn('stock refresh failed', e); const n = document.getElementById('stock-fresh'); if(n) n.textContent = 'Stock could not be updated — press Refresh'; });
 }
 
 // Inventory history of one ingredient (loaded when needed, cached until the next reload).
@@ -747,6 +786,12 @@ function navigate(route, param){
   if(!def.param && history.replaceState){ try{ history.replaceState(null, '', '#' + route); }catch(e){} }
   try{
     const r = def.render(param);
+    if(STOCK_ROUTES.includes(route)){
+      const bar = document.getElementById('topbar-actions');
+      if(bar && !bar.querySelector('#stock-fresh')) bar.insertAdjacentHTML('afterbegin', stockFreshHtml());
+      // (a redraw caused by the refresh itself comes within 2 s, so it doesn't fetch again)
+      if(Date.now() - BO.stockAt > 2000) refreshStockFor(route, param);
+    }
     if(r && typeof r.catch === 'function') r.catch(err => { console.error(err); c.innerHTML = emptyBlock(esc(friendlyError(err))); });
   }catch(err){
     console.error(err);

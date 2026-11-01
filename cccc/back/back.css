@@ -43,6 +43,7 @@
 #topbar{gap:10px;}
 #topbar h1{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-top:4px;}
 #topbar .actions{flex-wrap:wrap;justify-content:flex-end;}
+.stock-fresh{font-size:12.5px;color:var(--cc-muted);font-weight:600;margin-right:4px;}
 
 /* ---- common bits ---- */
 .big-code{font-family:var(--cc-font-num);font-size:40px;font-weight:600;letter-spacing:6px;text-align:center;padding:14px;margin:12px 0;background:var(--cc-cream);border:1px solid var(--cc-line);border-radius:var(--cc-radius);color:var(--cc-ink);user-select:all;}

@@ -29,6 +29,7 @@ Older working versions stay in the table below, so you can go back further if ne
 | 7 | **Live** | 2026-10-20 | New apps live on your site; database scripts 004–006 run; counter tested and uploading. |
 | 8 | **Release 1.1 ready** | 2026-10-26 | Batch 1 (your feedback #1–#6): units everywhere, category manager, Excel import/export, tick-and-remove recipes, counter menu. 3,716 tests pass; security review ready. Waiting for you to publish. |
 | 9 | **Release 1.1 live** | 2026-10-29 | You merged pull request #2 and ran `007_batch1.sql` ("it works"). This is now the last working version. |
+| 10 | **Release 1.2 ready** | 2026-11-02 | Full redesign (your logo colours, Brunson, wordmark); counter Orders + Customers + stamp rewards + QR floor plan; Back Office floor plan editor, tile colours, ingredient brands (oldest stock first), loyalty settings; QR stamp card. 69/71 test suites (4,295 checks; the one defect since fixed); money/stock/cash reconciliation matches; security reviews passed. Waiting for you to publish (`docs/RELEASE_1.2.md`). |
 
 ## Look at or download a checkpoint
 

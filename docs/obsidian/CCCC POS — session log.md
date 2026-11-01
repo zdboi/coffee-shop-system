@@ -1,8 +1,8 @@
 ---
 tags: [cccc, pos, session-log]
 project: Cavite City Coffee Club POS
-updated: 2026-10-26
-checkpoint: 8
+updated: 2026-11-02
+checkpoint: 10
 repo: zdboi/coffee-shop-system (branch wip/cccc-online-qr)
 ---
 
@@ -14,7 +14,33 @@ It has three apps on one Supabase database:
 - **Back Office:** the owner's email login only.
 - **QR order page:** customers order from their phones and pay at the counter.
 
-## Where things stand (Oct 26): release 1.1 ready for me
+## Where things stand (Nov 2): release 1.2 ready for me
+- **1.1 is live** (I ran 007 on Oct 29). It's saved as the **last working version**.
+- **Release 1.2 is built, tested (4,295 checks, twice) and security-reviewed.** To publish it, I follow `docs/RELEASE_1.2.md` (about 20 min):
+  1. counters show "all saved";
+  2. download a backup;
+  3. run database script 008;
+  4. merge the pull request;
+  5. reload every device;
+  6. set up loyalty, floor plan, tile colours and brands.
+- **What's in it:**
+  - **New look** in all three apps: my logo colours, Brunson titles, the wordmark, line icons.
+  - **Counter:**
+    - Sell → **Orders**, grouped by sub-category, with coloured tiles;
+    - **Customers** tab (money for managers only);
+    - stamp rewards at checkout;
+    - **floor plan** on QR orders.
+  - **Back Office:**
+    - **floor plan editor**;
+    - sub-category colours;
+    - **ingredient brands** (Laciate/Arla, Bunge/Monna Lisa, Bensdorp/JB15): oldest stock first, cost follows the brand in use;
+    - stamp card settings;
+    - loyalty rewards in reports.
+  - **QR page:** new look and the 15-stamp card.
+  - **Stamp card:** 15 stamps; 1 for a drink + 1 for food per day (max 2). Rewards: ₱10 off at 5, ₱50 off at 10, a free drink or food at 15. Only real paid sales count.
+- **Next (1.3):** QR ordering security, thermal receipt printing, retry-without-reward. **Later:** RPG loyalty (plan first).
+
+## Earlier (Oct 26): release 1.1 ready for me
 - **Batch 1 is built, tested (3,716 checks) and security-reviewed.** To publish it, I follow `docs/RELEASE_1.1.md` (about 15 min):
   1. download a backup;
   2. run a quick read-only check;
@@ -61,6 +87,14 @@ It has three apps on one Supabase database:
 | Oct 25 | Always save the last working version before an update; use savepoints for debugging/A-B only when necessary |
 | Oct 25 | Units: use any unit, the system converts; category manager yes; Excel import/export buttons yes; tick-and-remove recipes yes |
 | Oct 26 | (C) Imported recipes start hidden until I switch them on; a typed number keeps its value when I change the unit |
+| Oct 29 | New look from my logo prototype; **Brunson** for titles and the stamp card (Braton tried, set aside) |
+| Oct 29 | Brands: track **stock per brand, oldest first (FIFO)**; cost follows the brand in use |
+| Oct 29 | Counter Customers tab: staff see nickname, orders, favourites; **total spent for managers only** |
+| Oct 29 | Stamp card: **one card of 15**, drink + food mixed, max 2 a day; ₱10 off at 5, ₱50 off at 10, free drink/food at 15 |
+| Oct 29 | Floor plan also on the counter's QR orders board; tile colours from a **brand-safe** set |
+| Nov 2 | QR security and thermal printing go in **1.3**, after 1.2 ships |
+| Nov 2 | Out of stock at payment: staff **must remove** the item (counter sales too) |
+| Nov 2 | Existing QR customers get an auto **coffee-themed username** (e.g. "Mika the Coffee Devourer"), changeable later |
 
 ## What got built and fixed
 - **Counter:**
