@@ -1,4 +1,4 @@
-# Resume here (save point: 2026-11-02, checkpoint 12, release 1.3 Wave 1 READY)
+# Resume here (save point: 2026-11-02, checkpoint 13, release 1.3 LIVE)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
@@ -20,7 +20,9 @@ Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"
 - **QA:** `tests/run_all.sh --runs 2` passes 69/71 suites (4,295 checks). The 2 failures were one counter defect (D1), since fixed and re-tested. The money, stock, cash and brand-FIFO reconciliation (`tests/e2e/money12.e2e.js`) matches to the centavo. **Final run on the finished code (2026-11-02, `run_all.sh --runs 1`): 47 suites, 3,007 checks, 0 failing.**
 - **Security:** 008 passed two review rounds (all findings fixed). The 1.2 screens review found 4 low items, all fixed.
 
-## Now: release 1.3 (Wave 1 of `docs/PLAN_1.3.md`) is READY, waiting for the owner to publish
+## Now: release 1.3 is LIVE (owner ran 009 + merged PR #4, 2026-11-02 23:00; commit abcff5b = last working version, checkpoint 13). Next: Wave 2 = release 1.4 (owner said go, 2026-11-02); next DB script 010.
+
+### Release 1.3 (done)
 - **Owner steps:** `docs/RELEASE_1.3.md` (backup → run `009_release_1_3.sql` → merge the PR → reload → set up → Start fresh before Nov 8).
 - **Built:**
   - P1 printing (`cccc/shared/printer.js`, counter printer screen);

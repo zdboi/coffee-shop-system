@@ -28,7 +28,7 @@ plain-language, step-by-step instructions.
   It is now **frozen**: every database change goes in a new numbered script, per golden rule 6.
 - The owner also ran **`005_live_fixes.sql`** and **`006_live_fix_sync_operations.sql`** on live (2026-10-20); both
   are frozen too. **`007_batch1.sql`** (release 1.1, run 2026-10-29) and **`008_release_1_2.sql`** (release 1.2, run 2026-11-02)
-  are frozen. The next script is **`009_…sql`** (release 1.3); it may be edited until the owner runs it. The live database has older CHECK rules than our reconstruction:
+  and **`009_release_1_3.sql`** (release 1.3, run 2026-11-02) are frozen. The next script is **`010_…sql`** (release 1.4); it may be edited until the owner runs it. The live database has older CHECK rules than our reconstruction:
   any new value written to a live column must be checked against the live rule list first.
 
 ## Golden rules (everyone)
