@@ -133,7 +133,8 @@ if [ "$BROWSER" = 1 ]; then
              "fo_batch1.e2e:fo_batch1.e2e.js:" "bo_batch1.e2e:bo_batch1.e2e.js:" "bo_excel.e2e:bo_excel.e2e.js:" \
              "fo_release12.e2e:fo_release12.e2e.js:" "bo_release12.e2e:bo_release12.e2e.js:" "order_release12.e2e:order_release12.e2e.js:" \
              "money12.e2e:money12.e2e.js:" \
-             "fo_release13.e2e:fo_release13.e2e.js:" "bo_release13.e2e:bo_release13.e2e.js:" "order_release13.e2e:order_release13.e2e.js:"; do
+             "fo_release13.e2e:fo_release13.e2e.js:" "bo_release13.e2e:bo_release13.e2e.js:" "order_release13.e2e:order_release13.e2e.js:" \
+             "bo_modal_race.e2e:bo_modal_race.e2e.js:"; do
       IFS=: read -r name file vp <<<"$t"
       "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1      # every browser suite starts from a fresh seed
       BO_VIEWPORT="${vp:-1280x900}" run_node "e2e/$name#$run" "$DIR/e2e/$file"
