@@ -466,6 +466,9 @@ const REVIEW_CHECK_HINT = {
   PAYMENT_MISMATCH: 'compare the payments with the total',
   STAFF_MISMATCH: 'check who was signed in at the counter (shown above)',
   FUTURE_DATE: 'check the sale\'s date and time, and the clock of that counter',
+  // release 1.3 (009)
+  OUT_OF_STOCK: 'count the ingredients this sale used (Inventory) and record the missing stock, a purchase or a stock count',
+  BEFORE_START_FRESH: 'this sale is dated before you started fresh; it was uploaded late by a counter. If it was a test sale, refund or void it',
 };
 function reviewHint(reason){
   const h = reviewCodes(reason).map(c => REVIEW_CHECK_HINT[c]).filter(Boolean);

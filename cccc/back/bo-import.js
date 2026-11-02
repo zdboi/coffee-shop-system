@@ -636,8 +636,10 @@ async function renderBackup(){
         <button class="btn btn-outline btn-sm" id="btn-gdrive-restore" ${!(s.gdriveConnected && gdriveAccessToken) ? 'disabled' : ''}>Import from Google Drive</button>
       </div>
     </div>
+    ${BO.isOwner ? startFreshCardHtml() : ''}
   </div>`;
   const $ = (id) => content.querySelector('#' + id);
+  if($('btn-open-fresh')) $('btn-open-fresh').onclick = () => navigate('startFresh');
   getSavedBackupFolderHandle().then(h => { const l = document.getElementById('backup-folder-label'); if(l && h) l.textContent = h.name + ' (chosen folder)'; });
   $('btn-backup').onclick = (e) => busy(e.currentTarget, async () => {
     try{ await exportBackup(false); applyChanges([Ops.audit('Backup made', 'Downloaded / saved a backup file')]).catch(() => {}); renderBackup(); }

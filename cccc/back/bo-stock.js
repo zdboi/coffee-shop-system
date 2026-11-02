@@ -85,6 +85,7 @@ function recipesUsingAsOption(ingredientId){
 
 /* ================= Ingredients ================= */
 const ingFilter = {search: '', category: '', status: '', type: '', inactive: false};
+const ingPicked = new Set();          // ingredients ticked on the list (for "Remove selected", 1.3 A13)
 
 function renderIngredients(){
   const bar = setTopbarActions(`<button class="btn btn-outline" id="btn-manage-categories">Manage categories</button> <button class="btn btn-primary" id="btn-new-ingredient">+ Add ingredient</button>`);
@@ -112,8 +113,18 @@ function renderIngredients(){
       </div>
       <div class="text-light" style="font-size:13px;">${state.ingredients.filter(i => i.active !== false).length} active ingredients</div>
     </div>
+    <div class="rec-pick-bar" id="ing-pick-bar">
+      <label class="chk"><input type="checkbox" id="ing-pick-all"> Select all shown</label>
+      <button class="btn btn-sm btn-danger" id="ing-remove-picked" type="button" disabled>Remove selected (0)</button>
+    </div>
     <div id="ing-table-wrap"></div>`;
   const q = (id) => document.getElementById(id);
+  q('ing-pick-all').onchange = (e) => {
+    ingShownList().forEach(i => { if(e.target.checked) ingPicked.add(i.id); else ingPicked.delete(i.id); });
+    renderIngredientsTable();
+  };
+  const rm = q('ing-remove-picked');
+  rm.onclick = () => busy(rm, () => removePickedIngredients(), 'Checking…');
   q('ing-search').oninput = (e) => { ingFilter.search = e.target.value; renderIngredientsTable(); };
   q('ing-type-filter').onchange = (e) => { ingFilter.type = e.target.value; renderIngredientsTable(); };
   q('ing-cat-filter').onchange = (e) => { ingFilter.category = e.target.value; renderIngredientsTable(); };
@@ -121,26 +132,39 @@ function renderIngredients(){
   q('ing-inactive').onchange = (e) => { ingFilter.inactive = e.target.checked; renderIngredientsTable(); };
   renderIngredientsTable();
 }
-function renderIngredientsTable(){
-  const wrap = document.getElementById('ing-table-wrap');
-  if(!wrap) return;
+function ingShownList(){
   let list = state.ingredients.filter(i => ingFilter.inactive || i.active !== false);
   if(ingFilter.search) list = list.filter(i => i.name.toLowerCase().includes(ingFilter.search.toLowerCase()));
   if(ingFilter.type === 'RAW') list = list.filter(i => !isProducedItem(i));
   if(ingFilter.type === 'PRODUCED') list = list.filter(i => isProducedItem(i));
   if(ingFilter.category) list = list.filter(i => i.category_id === ingFilter.category);
   if(ingFilter.status) list = list.filter(i => stockStatus(ingredientStock(i.id), i.reorder_level) === ingFilter.status);
-  list.sort(byName);
+  return list.sort(byName);
+}
+// Ticks only count for ingredients that are shown; the bar shows how many are ticked.
+function refreshIngPickBar(){
+  const shown = new Set(ingShownList().map(i => i.id));
+  [...ingPicked].forEach(id => { if(!shown.has(id)) ingPicked.delete(id); });
+  const rm = document.getElementById('ing-remove-picked'), all = document.getElementById('ing-pick-all');
+  if(rm && !rm.dataset.busy){ rm.textContent = `Remove selected (${ingPicked.size})`; rm.disabled = ingPicked.size === 0; }
+  if(all){ all.checked = shown.size > 0 && ingPicked.size === shown.size; all.indeterminate = ingPicked.size > 0 && ingPicked.size < shown.size; all.disabled = shown.size === 0; }
+}
+function renderIngredientsTable(){
+  const wrap = document.getElementById('ing-table-wrap');
+  if(!wrap) return;
+  const list = ingShownList();
+  refreshIngPickBar();
   if(!list.length){
     wrap.innerHTML = `<div class="table-wrap"><div class="empty-state"><div class="big">${icon('box', {size: 40})}</div>No ingredients found.<br><br><button class="btn btn-primary" id="empty-add-ing">+ Add ingredient</button></div></div>`;
     wrap.querySelector('#empty-add-ing').onclick = () => openIngredientForm();
     return;
   }
   wrap.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Ingredient</th><th>Type</th><th>Category</th><th class="num">Stock</th><th>Unit</th><th class="num">Current cost</th><th class="num">Reorder level</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th class="ing-tick-col"><span class="sr-only">Select</span></th><th>Ingredient</th><th>Type</th><th>Category</th><th class="num">Stock</th><th>Unit</th><th class="num">Current cost</th><th class="num">Reorder level</th><th>Status</th><th></th></tr></thead>
     <tbody>${list.map(i => {
       const stock = ingredientStock(i.id), costing = ingredientCosting(i.id);
-      return `<tr class="clickable ${i.active === false ? 'muted-row' : ''}" data-id="${esc(i.id)}">
+      return `<tr class="clickable ${i.active === false ? 'muted-row' : ''} ${ingPicked.has(i.id) ? 'picked-row' : ''}" data-id="${esc(i.id)}">
+        <td class="ing-tick-col"><label class="rec-tick" title="Select for removing"><input type="checkbox" data-ing-pick="${esc(i.id)}" ${ingPicked.has(i.id) ? 'checked' : ''} aria-label="Select ${esc(i.name)}"></label></td>
         <td><b>${esc(i.name)}</b>${i.active === false ? ' <span class="badge badge-gray">Inactive</span>' : ''}</td>
         <td>${isProducedItem(i) ? '<span class="badge badge-gray">Produced</span>' : '<span class="badge badge-gray" style="opacity:.6;">Raw</span>'}</td>
         <td>${esc(catName(i.category_id))}</td>
@@ -151,8 +175,125 @@ function renderIngredientsTable(){
         <td><button class="btn btn-sm btn-ghost" data-edit="${esc(i.id)}">Edit</button></td>
       </tr>`;
     }).join('')}</tbody></table></div>`;
-  wrap.querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = (e) => { if(e.target.closest('[data-edit]')) return; navigate('ingredientDetail', tr.dataset.id); });
+  wrap.querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = (e) => { if(e.target.closest('[data-edit]') || e.target.closest('.rec-tick')) return; navigate('ingredientDetail', tr.dataset.id); });
+  wrap.querySelectorAll('[data-ing-pick]').forEach(box => {
+    box.onclick = (e) => e.stopPropagation();
+    box.onchange = () => {
+      if(box.checked) ingPicked.add(box.dataset.ingPick); else ingPicked.delete(box.dataset.ingPick);
+      box.closest('tr').classList.toggle('picked-row', box.checked);
+      refreshIngPickBar();
+    };
+  });
   wrap.querySelectorAll('[data-edit]').forEach(b => b.onclick = (e) => { e.stopPropagation(); openIngredientForm(b.dataset.edit); });
+}
+
+/* ---- remove several ingredients at once (release 1.3, owner item A13) ----
+   Same safety rules as removing recipes (1.1):
+   - still USED by an active recipe, an option extra or a production recipe: listed first, with
+     where it is used; the owner leaves them (to fix the recipes first) or makes them inactive anyway;
+   - has HISTORY (purchases, stock movements, production, waste), is a produced item, or is still
+     on an inactive recipe: made inactive instead of deleted (its records stay);
+   - the rest are deleted, with their brands.
+   One confirmation, then ONE all-or-nothing apply_changes call with one audit entry. */
+async function ingredientRemovalPlan(ids){
+  const history = {}, used = {};
+  const add = (map, id, why) => { (map[id] = map[id] || []).includes(why) || map[id].push(why); };
+  const recipe = (rid) => state.recipes.find(r => r.id === rid);
+  ids.forEach(id => {
+    const ing = ingredientById(id);
+    state.recipeIngredients.filter(ri => ri.ingredient_id === id).forEach(ri => {
+      const r = recipe(ri.recipe_id);
+      if(!r) return;
+      if(r.active !== false) add(used, id, r.name + (isProductionRecipe(r) ? ' (production recipe)' : ''));
+      else add(history, id, 'on an inactive recipe');
+    });
+    recipesUsingAsOption(id).forEach(r => { if(r.active !== false) add(used, id, r.name + ' (option extra)'); });
+    if(ing && (isProducedItem(ing) || ing.source_recipe_id || state.recipes.some(r => r.produced_ingredient_id === id))) add(history, id, 'made by a production recipe');
+    if(purchasesFor(id).length) add(history, id, 'has purchases');
+    if(productionBatchesFor(id).length) add(history, id, 'has production history');
+    if((state.waste || []).some(w => w.ingredient_id === id)) add(history, id, 'has waste records');
+    if(num(ingredientStock(id)) !== 0) add(history, id, 'has stock');
+  });
+  // one small question per ingredient ("is there at least one stock line?"), a few at a time
+  const ask = async (id) => {
+    const [t, w] = await Promise.all([
+      cloud.select('inventory_transactions', {select: 'id', eq: {ingredient_id: id}, limit: 1}),
+      cloud.select('waste', {select: 'id', eq: {ingredient_id: id}, limit: 1}),
+    ]);
+    if((t || []).length) add(history, id, 'has stock movements');
+    if((w || []).length) add(history, id, 'has waste records');
+  };
+  for(let i = 0; i < ids.length; i += 8) await Promise.all(ids.slice(i, i + 8).map(ask));
+  return {history, used};
+}
+function pickedIngredientsDialog(useList, hide, del){
+  return new Promise(resolve => {
+    let answered = false;
+    const li = (x, text) => `<li><b>${esc(x.i.name)}</b>${text ? ` <span class="text-light">— ${esc(text)}</span>` : ''}</li>`;
+    const brandsNote = (x) => { const n = brandsFor(x.i.id, true).length; return n ? ` (and its ${plural(n, 'brand')})` : ''; };
+    openModal({
+      title: 'Remove ingredients',
+      body: `${useList.length ? `<div class="notice warn ing-rm-used"><b>${plural(useList.length, 'ingredient is', 'ingredients are')} still used</b>, so removing ${useList.length === 1 ? 'it' : 'them'} changes what those recipes take from stock:
+          <ul class="rec-rm-list">${useList.map(x => `<li><b>${esc(x.i.name)}</b> <span>— Used in: ${esc(x.where.join(', '))}</span></li>`).join('')}</ul>
+          <fieldset class="ing-rm-choice"><legend class="sr-only">What to do with the used ingredients</legend>
+            <label class="chk"><input type="radio" name="ing-rm-used" value="keep" checked> Leave ${useList.length === 1 ? 'it' : 'them'} as ${useList.length === 1 ? 'it is' : 'they are'} (fix the recipes first)</label>
+            <label class="chk"><input type="radio" name="ing-rm-used" value="hide"> Make ${useList.length === 1 ? 'it' : 'them'} inactive anyway (the recipes keep the line until you change them)</label>
+          </fieldset></div>` : ''}
+        ${del.length ? `<p><b>${plural(del.length, 'ingredient')} will be deleted</b> (this can't be undone):</p><ul class="rec-rm-list">${del.map(x => li(x, brandsNote(x).trim().replace(/^\(|\)$/g, ''))).join('')}</ul>` : ''}
+        ${hide.length ? `<p style="margin-top:12px;"><b>${plural(hide.length, 'ingredient')} will be made inactive instead</b> (hidden from lists and forms; their records stay). Deleting would break your records. Show them again with "Show inactive".</p>
+          <ul class="rec-rm-list">${hide.map(x => li(x, x.why.join(', '))).join('')}</ul>` : ''}
+        ${!del.length && !hide.length ? '<p class="hint" id="ing-rm-nothing">Only used ingredients are ticked. Choose "Make them inactive anyway" to remove them, or cancel.</p>' : ''}`,
+      foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-danger" data-ok>Remove</button>`,
+      onClose: () => { if(!answered) resolve(null); },
+      onMount: (root) => {
+        const ok = root.querySelector('[data-ok]');
+        const label = () => {
+          const hideUsed = !!root.querySelector('input[name="ing-rm-used"][value="hide"]:checked');
+          const n = del.length + hide.length + (hideUsed ? useList.length : 0);
+          ok.textContent = n ? `Remove ${plural(n, 'ingredient')}` : 'Remove';
+          ok.disabled = n === 0;
+        };
+        root.querySelectorAll('input[name="ing-rm-used"]').forEach(r => r.onchange = label);
+        label();
+        root.querySelector('[data-cancel]').onclick = () => { answered = true; closeModal(); resolve(null); };
+        ok.onclick = () => {
+          answered = true;
+          const hideUsed = !!root.querySelector('input[name="ing-rm-used"][value="hide"]:checked');
+          closeModal(); resolve({hideUsed});
+        };
+      },
+    });
+  });
+}
+async function removePickedIngredients(){
+  const picked = [...ingPicked].map(id => ingredientById(id)).filter(Boolean);
+  if(!picked.length) return;
+  let plan;
+  try{ plan = await ingredientRemovalPlan(picked.map(i => i.id)); }
+  catch(err){ toast('Could not check the ingredients\' history: ' + friendlyError(err), 'error'); return; }
+  const useList = [], hide = [], del = [];
+  picked.forEach(i => {
+    if(plan.used[i.id]) useList.push({i, where: plan.used[i.id]});
+    else if(plan.history[i.id] || i.active === false) hide.push({i, why: plan.history[i.id] || ['already inactive']});
+    else del.push({i});
+  });
+  // an already-inactive ingredient with no history can still be deleted
+  hide.slice().forEach(x => { if(x.why.length === 1 && x.why[0] === 'already inactive'){ hide.splice(hide.indexOf(x), 1); del.push({i: x.i}); } });
+  const answer = await pickedIngredientsDialog(useList, hide, del);
+  if(!answer) return;
+  const now = nowISO(), ops = [];
+  const toHide = hide.map(x => x.i).concat(answer.hideUsed ? useList.map(x => x.i) : []).filter(i => i.active !== false);
+  del.forEach(({i}) => { ops.push(Ops.delWhere('ingredient_brands', {ingredient_id: i.id})); ops.push(Ops.del('ingredients', i.id)); });
+  toHide.forEach(i => ops.push(Ops.update('ingredients', {id: i.id, active: false, updated_at: now})));
+  if(!ops.length){ toast('Nothing to change: those ingredients are already inactive'); return; }
+  const details = [del.length ? 'Deleted: ' + del.map(x => x.i.name).join(', ') : '',
+    toHide.length ? 'Made inactive: ' + toHide.map(i => i.name + (answer.hideUsed && useList.some(u => u.i === i) ? ' (still in recipes)' : '')).join(', ') : ''].filter(Boolean).join(' · ');
+  ops.push(Ops.audit('Ingredients removed', details, null));
+  const msg = [del.length ? plural(del.length, 'ingredient') + ' deleted' : '', toHide.length ? plural(toHide.length, 'ingredient') + ' made inactive' : ''].filter(Boolean).join(', ');
+  if(await boSave(ops, {success: msg})){
+    ingPicked.clear();
+    if(state.route === 'ingredients') renderIngredients();
+  }
 }
 
 function openIngredientForm(id){
@@ -1023,7 +1164,7 @@ function renderInventoryTable(){
   list.sort(byName);
   if(!list.length){ wrap.innerHTML = emptyBlock('No inventory items match this filter.'); return; }
   wrap.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Ingredient</th><th>Type</th><th class="num">Current stock</th><th>Unit</th><th class="num">Current unit cost</th><th class="num">Inventory value</th><th class="num">Reorder level</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th class="ing-tick-col"><span class="sr-only">Select</span></th><th>Ingredient</th><th>Type</th><th class="num">Current stock</th><th>Unit</th><th class="num">Current unit cost</th><th class="num">Inventory value</th><th class="num">Reorder level</th><th>Status</th><th></th></tr></thead>
     <tbody>${list.map(i => {
       const stock = ingredientStock(i.id), cost = ingredientCosting(i.id).current || 0, produced = isProducedItem(i);
       return `<tr class="clickable" data-id="${esc(i.id)}">
