@@ -28,6 +28,7 @@ function ok(cond, msg, got){
   console.log((cond ? 'ok      ' : 'FAILED  ') + msg + (!cond && got !== undefined ? '   [got: ' + String(got).slice(0, 300) + ']' : ''));
 }
 async function until(fn, ms){ const end = Date.now() + (ms || 15000); while(Date.now() < end){ try{ if(await fn()) return true; }catch(e){} await new Promise(r => setTimeout(r, 250)); } return false; }
+require('./lib/h').openShopForQr();   // 1.3: QR ordering needs an open shift (see lib/h.js)
 const isFont = (u) => /fonts\.(googleapis|gstatic)\.com/.test(u || '');
 
 (async () => {

@@ -344,6 +344,9 @@ select test.ok(test.qr_sale(:'key1', '99999999-0000-0000-0000-0000000000a4', :'q
 reset role;
 select test.ok((select sale_id from qr_orders where id = :'qid') = '99999999-0000-0000-0000-0000000000a4', '1: order now points at the new sale');
 -- another shop's QR order is not linked
+-- 1.3 (009): QR ordering needs an open shift in that shop (else SHOP_CLOSED), so shop 2 opens one
+insert into shifts(id, business_id, cashier_name, opened_at, status, opening_cash)
+  values ('88888888-0000-0000-0000-0000000000b2', :'biz2', 'Other shop cashier', now(), 'ACTIVE', 0);
 select test.login('00000000-0000-0000-0000-0000000000c1'); set role authenticated;
 select (public.qr_register(:'tok2', 'Pia B', null, true)->'customer'->>'id') as qcust2 \gset
 select public.qr_place_order(:'tok2', '[{"recipe_id":"33333333-0000-0000-0000-0000000000b2","quantity":1}]')->'order'->>'id' as qid2 \gset

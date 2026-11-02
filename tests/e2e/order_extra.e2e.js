@@ -16,6 +16,7 @@ const TAKEN = '0917 123 4567';
 const ok = H.ok;
 async function sql(q){ const r = await fetch(BASE + '/__sql', {method: 'POST', body: `select to_jsonb((${q}))`}); const t = await r.text(); if(!r.ok) throw new Error(t); return JSON.parse(t); }
 async function until(fn, ms){ const end = Date.now() + (ms || 10000); while(Date.now() < end){ try{ if(await fn()) return true; }catch(e){} await new Promise(r => setTimeout(r, 150)); } return false; }
+H.openShopForQr();   // 1.3: QR ordering needs an open shift (see lib/h.js)
 const errors = [];
 let browser;
 

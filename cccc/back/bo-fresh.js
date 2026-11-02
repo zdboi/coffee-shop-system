@@ -166,7 +166,7 @@ function freshConfirmHtml(p){
       <button class="btn btn-outline" id="fresh-recheck" type="button">${icon('refresh', {size: 18})} Check again</button>`;
   }
   return `<div class="notice warn"><b>Last check.</b> This removes the records counted in step 2, for good. Counters show the change the next time they load.</div>
-    <div class="form-row" style="max-width:360px;"><label for="fresh-type">Type <b class="mono">${FRESH_CONFIRM}</b> to confirm</label>
+    <div class="form-row" style="max-width:360px;"><label for="fresh-type" class="fresh-type-label">Type <b>${FRESH_CONFIRM}</b> to confirm</label>
       <input id="fresh-type" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="${FRESH_CONFIRM}"></div>
     <div class="hint" id="fresh-type-msg"></div>
     <button class="btn btn-danger fresh-go" id="fresh-go" type="button" disabled>${icon('trash', {size: 18})} Start fresh now</button>`;

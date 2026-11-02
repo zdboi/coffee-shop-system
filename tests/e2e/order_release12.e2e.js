@@ -30,6 +30,7 @@ function addStamps(k){   // each stamp = one sale on its own (day, kind): drink 
           insert into sale_items(sale_id, business_id, recipe_id, quantity, unit_price) select id, ${BIZ}, '${rid}', 1, 100 from s`);
   }
 }
+H.openShopForQr();   // 1.3: QR ordering needs an open shift (see lib/h.js)
 (async () => {
   psql(`update settings set loyalty_enabled = true, theme = 'CCCC'`);
   const browser = await chromium.launch();

@@ -18,7 +18,7 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 
 | Suite | What | Size |
 |---|---|---|
-| 004..008 install (x2) | the live order `004_cccc_online_qr.sql` → `005_live_fixes.sql` → `006_live_fix_sync_operations.sql` → `007_batch1.sql`, then `008_release_1_2.sql` (release 1.2, not yet on live), installs on the live-schema copy (`sql/01`, incl. the live CHECK rules) and again on top of itself | — |
+| 004..009 install (x2) | the live order `004_cccc_online_qr.sql` → `005_live_fixes.sql` → `006_live_fix_sync_operations.sql` → `007_batch1.sql` → `008_release_1_2.sql`, then `009_release_1_3.sql` (release 1.3, not yet on live), installs on the live-schema copy (`sql/01`, incl. the live CHECK rules) and again on top of itself | — |
 | `sql/36_live_rules_tests.sql` | after the install: every CHECK rule matches the owner's live list (one rule per column; 005 replaced the stand-in device_type rule, 006 the sync_operations rule; `cash_movements.amount > 0` kept) (17) | — |
 | `sql/10_behaviour_tests.sql` | sign-up trigger, menu via `apply_changes`, pairing, PIN logins (no rank from a PIN), lockout, `fo_sync` sale / duplicate / discount refusal / void with approval token | — |
 | `sql/11_qr_tests.sql` | QR menu, register / relink / forget, server-side prices, counter accept → pay → ready → complete, customers, `sales_report`, merge, legacy PIN, device removal | — |
@@ -29,6 +29,7 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 | `sql/34_live_fixes_tests.sql` | 005 (own fresh database): re-creates the live `devices_device_type_check`, pairing fails, 005 x2 fixes it (13) | — |
 | `sql/35_live_fix_sync_ops_tests.sql` | 006 (own fresh database): re-creates the live `sync_operations_operation_type_check`, uploads fail, 006 x2 fixes them (16) | — |
 | `sql/37_batch1_tests.sql` | 007 + batch 1 (own fresh database; adopted from the database engineer): pay-in / pay-out of ₱0 or less → `AMOUNT_NOT_POSITIVE`, nothing saved, next ops still run; categories add / rename / move + delete in one call; several recipes deleted in one call, in-use ones refused (all-or-nothing); a big Excel-import call; starting-price purchases add no stock (43) | — |
+| `sql/39_release_1_3_tests.sql` | 009 / release 1.3 wave 1 (fresh database → 10 → 11 → 39, like 38): `settings.subcategory_order` checks; QR menu `is_open` (shop open = any ACTIVE shift; closed → no items, `qr_place_order` → `SHOP_CLOSED`, stamp card still works, `ORDERING_OFF` first), colours / order / `recipe_type`; counter customers sort; `OUT_OF_STOCK` review flag; `start_fresh_preview` / `start_fresh` (85) | — |
 | `conc_checks.sh` | two sessions at the same moment (on the data 32 leaves): two owner refunds of one sale, two counters paying one QR order -> only one passes | — |
 | `unit/core_check.js` | `friendlyError` / `ERROR_TEXT`, `parseAuthRedirect`, `sessionFromUrl`, `updatePassword`, `resetPassword` (node, mocked fetch) | — |
 | `unit/error_codes_check.js` | every error code the database can send to an app has a plain-language text in that app | — |
@@ -44,6 +45,7 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 | `e2e/fo_offline_manager.e2e.js` | counter offline: a signed-in manager approves their own discount + refund, uploaded later and accepted once | 1280 |
 | `e2e/fo_offline_pin.e2e.js` | counter offline PINs: shared PIN refused, 5 wrong tries lock 5 min then 15, survives reload | 1280 |
 | `e2e/fo_qr_paid_once.e2e.js` | two counters, one QR order: online "already paid" before charging; offline second payment refused by the server with a banner | 1280 |
+| (QR browser suites) | since 1.3 the QR page only takes orders while a shift is open. The browser seed has none (counter tests start their own), so every `order*.e2e.js` first calls `H.openShopForQr()` (`e2e/lib/h.js`): a separate never-paired test counter "QA QR counter" with one ACTIVE shift | — |
 | `e2e/order_ticket_states.e2e.js` | QR ticket wording per state (open/paid/ready/completed/cancelled/rejected) on the 5-second refresh, without a reload | 390×844 |
 | `e2e/order.e2e.js` | QR page: first visit, register, welcome back, size required, server price, ticket, READY shown | 390×844 |
 | `e2e/order_extra.e2e.js` | QR page: toasts never over buttons, PHONE_TAKEN → relink, limits, NOT_SIGNED_IN, typed values kept, escaping | 390×844 (+360) |

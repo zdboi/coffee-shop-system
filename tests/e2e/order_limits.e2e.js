@@ -16,6 +16,7 @@ const TABLE = '77777777-0000-0000-0000-000000000005';
 const SIGNUPS_TEXT = 'Lots of people are joining right now. Please wait a few minutes, or order at the counter.';
 const ORDERS_TEXT = "We're getting a lot of orders right now. Please wait a few minutes or order at the counter.";
 
+H.openShopForQr();   // 1.3: QR ordering needs an open shift (see lib/h.js)
 (async () => {
   const browser = await chromium.launch();
   const errors = [];

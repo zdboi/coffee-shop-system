@@ -14,22 +14,22 @@
 const recFilter = {search: '', category: '', type: '', hidden: false};
 const recPicked = new Set();          // recipes ticked on the list (for "Remove selected")
 function renderRecipes(){
-  const bar = setTopbarActions(`<button class="btn btn-outline" id="btn-excel-import" type="button">Import from Excel</button>
-    <button class="btn btn-outline" id="btn-excel-export" type="button">Export to Excel</button>
-    <button class="btn btn-outline" id="btn-subcat-colors" type="button">Sub-category colours</button>
-    <button class="btn btn-outline" id="btn-subcat-order" type="button">Arrange sub-categories</button>
-    <button class="btn btn-primary" id="btn-new-recipe">+ New recipe</button>`);
+  // Only "+ New recipe" sits in the top bar (so the page title stays visible); the menu tools are
+  // in a row at the top of the page (same button ids as before).
+  const bar = setTopbarActions(`<button class="btn btn-primary" id="btn-new-recipe">+ New recipe</button>`);
   bar.querySelector('#btn-new-recipe').onclick = () => openRecipeForm();
-  bar.querySelector('#btn-subcat-colors').onclick = () => openSubcategoryColors();
-  bar.querySelector('#btn-subcat-order').onclick = () => openSubcategoryOrder();
-  const imp = bar.querySelector('#btn-excel-import'), exp = bar.querySelector('#btn-excel-export');
-  imp.onclick = () => busy(imp, () => startExcelImport(), 'Opening…');
-  exp.onclick = () => busy(exp, () => exportRecipesToExcel(), 'Preparing…');
   const content = document.getElementById('content');
   const cats = sortSubcategories([...new Set(state.recipes.map(r => r.category).filter(Boolean))]);
   const activeRecipes = state.recipes.filter(r => r.active !== false);
   const typeTabs = [{id: '', label: 'All'}, ...RECIPE_TYPES];
   content.innerHTML = `
+    <div class="rec-tools" role="group" aria-label="Menu tools">
+      <button class="btn btn-sm btn-outline" id="btn-subcat-order" type="button">Arrange sub-categories</button>
+      <button class="btn btn-sm btn-outline" id="btn-subcat-colors" type="button">Sub-category colours</button>
+      <span class="rec-tools-gap" aria-hidden="true"></span>
+      <button class="btn btn-sm btn-ghost" id="btn-excel-import" type="button">${icon('upload', {size: 16})} Import from Excel</button>
+      <button class="btn btn-sm btn-ghost" id="btn-excel-export" type="button">${icon('download', {size: 16})} Export to Excel</button>
+    </div>
     <div class="toolbar-left" style="margin-bottom:14px;flex-wrap:wrap;">
       ${typeTabs.map(t => {
         const count = t.id ? activeRecipes.filter(r => recipeTypeOf(r) === t.id).length : activeRecipes.length;
@@ -49,6 +49,11 @@ function renderRecipes(){
       <button class="btn btn-sm btn-danger" id="rec-remove-picked" type="button" disabled>Remove selected (0)</button>
     </div>
     <div id="rec-grid-wrap"></div>`;
+  content.querySelector('#btn-subcat-colors').onclick = () => openSubcategoryColors();
+  content.querySelector('#btn-subcat-order').onclick = () => openSubcategoryOrder();
+  const imp = content.querySelector('#btn-excel-import'), exp = content.querySelector('#btn-excel-export');
+  imp.onclick = () => busy(imp, () => startExcelImport(), 'Opening…');
+  exp.onclick = () => busy(exp, () => exportRecipesToExcel(), 'Preparing…');
   document.getElementById('rec-pick-all').onchange = (e) => {
     recShownIds().forEach(id => { if(e.target.checked) recPicked.add(id); else recPicked.delete(id); });
     renderRecipesGrid();
