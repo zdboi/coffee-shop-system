@@ -56,7 +56,7 @@ execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U', 'postgres', '-d', H.DB,
   // ---- grouping + tile colours
   const groups = await page.$$eval('.pos-group', gs => gs.map(g => ({name: g.dataset.group, head: g.querySelector('.pos-group-title').textContent, count: g.querySelector('.pos-group-count').textContent,
     items: [...g.querySelectorAll('.pname')].map(x => x.textContent), bg: getComputedStyle(g.querySelector('.pos-product-card')).backgroundColor, font: getComputedStyle(g.querySelector('.pos-group-title')).fontFamily})));
-  ok(JSON.stringify(groups.map(g => g.name)) === JSON.stringify(['Add-ons', 'Hot', 'Iced', 'Non-coffee', 'Pastry', 'Rice meals']), 'All: groups A-Z by sub-category', groups.map(g => g.name));
+  ok(JSON.stringify(groups.map(g => g.name)) === JSON.stringify(['Hot', 'Iced', 'Non-coffee', 'Pastry', 'Rice meals', 'Add-ons']), 'All: groups by sub-category, drinks first, then pastry, food, the rest (1.3 A16, lead-approved 2026-11-02)', groups.map(g => g.name));
   const hot = groups.find(g => g.name === 'Hot');
   ok(JSON.stringify(hot.items) === JSON.stringify(['Americano', 'Cappuccino', 'Spanish Latte']) && hot.count === '3 items', 'Hot: sort_order then name, "3 items"', hot);
   ok(/Brunson/.test(hot.font), 'group headings in Brunson', hot.font);
