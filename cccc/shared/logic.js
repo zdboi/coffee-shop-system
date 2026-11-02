@@ -11,22 +11,58 @@ const WEIGHT_UNITS = {g:1, kg:1000};
 const VOLUME_UNITS = {ml:1, L:1000};
 const COUNT_UNITS = {pcs:1, box:null, pack:null}; // box/pack conversion is purchase-specific
 
+/* ---- ONE unit converter (release 1.4, A10) ----
+   Same rule as the database's _unit_family / _unit_factor / _to_base_qty (010):
+   - families: g / kg (weight), mL / L (volume); case and spaces ignored ("l" = "L");
+     anything else (pcs, box, pack...) is a count unit that only matches itself;
+   - same unit -> unchanged; same family -> x1000 / ÷1000;
+   - g <-> mL only through the item's "weighs" (gPerMl = grams one mL weighs):
+     mL = g ÷ w, g = mL × w; otherwise impossible (null = the server's BAD_UNIT);
+   - rounded to 6 decimals (_unitRound), except "same unit" which is returned as is.
+   Used by recipe lines, option extras, waste, purchases, stock and costing. */
+function _unitNorm(u){ return String(u == null ? '' : u).trim().toLowerCase(); }
 function unitFamily(unit){
-  if(unit in WEIGHT_UNITS) return 'weight';
-  if(unit in VOLUME_UNITS) return 'volume';
+  const k = _unitNorm(unit);
+  if(k === 'g' || k === 'kg') return 'weight';
+  if(k === 'ml' || k === 'l') return 'volume';
   return 'count';
+}
+// How many of the family's small unit one unit is (kg = 1000 g, L = 1000 mL); counts: 1.
+function unitFactor(unit){ const k = _unitNorm(unit); return (k === 'kg' || k === 'l') ? 1000 : 1; }
+function _unitRound(n){ return Math.round(n * 1e6) / 1e6; }
+// toBaseQty(qty, unit, baseUnit, gPerMl?) -> qty in baseUnit, or null when it can't be converted.
+// unit empty / missing = already in baseUnit. qty missing / not a number -> null.
+function toBaseQty(qty, unit, baseUnit, gPerMl){
+  if(qty === null || qty === undefined || qty === '') return null;
+  const q = Number(qty);
+  if(!isFinite(q)) return null;
+  const typed = (unit == null || String(unit).trim() === '') ? baseUnit : unit;
+  const u = _unitNorm(typed), b = _unitNorm(baseUnit);
+  if(u === b) return q;
+  const fu = unitFamily(u), fb = unitFamily(b);
+  if(fu === fb && fu !== 'count') return _unitRound(q * unitFactor(u) / unitFactor(b));
+  const w = Number(gPerMl);
+  if(isFinite(w) && w > 0){
+    if(fu === 'weight' && fb === 'volume') return _unitRound(q * unitFactor(u) / w / unitFactor(b));
+    if(fu === 'volume' && fb === 'weight') return _unitRound(q * unitFactor(u) * w / unitFactor(b));
+  }
+  return null;
+}
+// The same for an ingredient row (its base_unit and weight_g_per_ml).
+function ingredientQtyToBase(ingredient, qty, unit){
+  if(!ingredient) return null;
+  return toBaseQty(qty, unit, ingredient.base_unit, ingredient.weight_g_per_ml);
 }
 
 // Convert a purchase quantity+unit into base-unit quantity for the ingredient's base_unit.
-function toBaseQuantity(quantity, purchaseUnit, baseUnit, unitsPerPurchaseUnit){
+// g/kg and mL/L (and g <-> mL with gPerMl, the item's "weighs") go through toBaseQty;
+// a count unit that isn't the base unit (box, pack) uses unitsPerPurchaseUnit; else 1:1.
+function toBaseQuantity(quantity, purchaseUnit, baseUnit, unitsPerPurchaseUnit, gPerMl){
   quantity = Number(quantity)||0;
   if(purchaseUnit === baseUnit) return quantity;
-  const fam = unitFamily(baseUnit);
-  if(fam === 'weight' && purchaseUnit in WEIGHT_UNITS && baseUnit in WEIGHT_UNITS){
-    return quantity * (WEIGHT_UNITS[purchaseUnit] / WEIGHT_UNITS[baseUnit]);
-  }
-  if(fam === 'volume' && purchaseUnit in VOLUME_UNITS && baseUnit in VOLUME_UNITS){
-    return quantity * (VOLUME_UNITS[purchaseUnit] / VOLUME_UNITS[baseUnit]);
+  if(purchaseUnit){
+    const v = toBaseQty(quantity, purchaseUnit, baseUnit, gPerMl);
+    if(v !== null) return v;
   }
   if(unitsPerPurchaseUnit && Number(unitsPerPurchaseUnit) > 0){
     return quantity * Number(unitsPerPurchaseUnit);
@@ -37,45 +73,44 @@ function toBaseQuantity(quantity, purchaseUnit, baseUnit, unitsPerPurchaseUnit){
 /* ---- Unit conversion for typing/display (owner request #3, 2026-10-25) ----
    Every STORED quantity stays in the ingredient's base unit. These helpers only
    convert what the owner types (e.g. 150 mL for a base unit of L) and how a
-   base quantity is shown. They never touch money or stock formulas. */
-function _unitRound(n){ return Math.round(n * 1e6) / 1e6; }
-function _unitTable(unit){
-  if(unit in WEIGHT_UNITS) return WEIGHT_UNITS;
-  if(unit in VOLUME_UNITS) return VOLUME_UNITS;
-  return null;
-}
-// Units the owner may type for an ingredient with this base unit.
-function compatibleUnits(baseUnit){
-  if(baseUnit in WEIGHT_UNITS) return ['g','kg'];
-  if(baseUnit in VOLUME_UNITS) return ['ml','L'];
+   base quantity is shown. gPerMl (optional, release 1.4) = the item's "weighs":
+   with it, a house-made sauce counted in L can also be typed / shown in g or kg. */
+// Units the owner may type for an ingredient with this base unit (its own family first).
+function compatibleUnits(baseUnit, gPerMl){
+  const fam = unitFamily(baseUnit);
+  const w = Number(gPerMl) > 0;
+  if(fam === 'weight') return w ? ['g','kg','ml','L'] : ['g','kg'];
+  if(fam === 'volume') return w ? ['ml','L','g','kg'] : ['ml','L'];
   return baseUnit ? [baseUnit] : [];
 }
-// qty in fromUnit -> qty in toUnit; null when the units are not the same family.
-function convertQuantity(qty, fromUnit, toUnit){
+function unitsForIngredient(ingredient){
+  return ingredient ? compatibleUnits(ingredient.base_unit, ingredient.weight_g_per_ml) : [];
+}
+// qty in fromUnit -> qty in toUnit; null when the units don't convert (see toBaseQty).
+function convertQuantity(qty, fromUnit, toUnit, gPerMl){
   const q = Number(qty);
   if(!isFinite(q)) return null;
   if(fromUnit === toUnit) return q;
-  const t = _unitTable(fromUnit);
-  if(!t || !(toUnit in t)) return null;   // different family, or count units
-  return _unitRound(q * (t[fromUnit] / t[toUnit]));
+  if(_unitNorm(fromUnit) === '' || _unitNorm(toUnit) === '') return null;
+  return toBaseQty(q, fromUnit, toUnit, gPerMl);
 }
 // Typed qty+unit -> base-unit qty (unit missing = already base). null if incompatible.
-function toBaseUnit(qty, unit, baseUnit){
-  return convertQuantity(qty, unit || baseUnit, baseUnit);
+function toBaseUnit(qty, unit, baseUnit, gPerMl){
+  return convertQuantity(qty, unit || baseUnit, baseUnit, gPerMl);
 }
 // Base-unit qty -> {qty, unit} in displayUnit (falls back to baseUnit when missing/incompatible).
-function fromBaseUnit(qtyBase, baseUnit, displayUnit){
+function fromBaseUnit(qtyBase, baseUnit, displayUnit, gPerMl){
   const q = Number(qtyBase) || 0;
   if(displayUnit && displayUnit !== baseUnit){
-    const v = convertQuantity(q, baseUnit, displayUnit);
+    const v = convertQuantity(q, baseUnit, displayUnit, gPerMl);
     if(v != null) return {qty: v, unit: displayUnit};
   }
   return {qty: _unitRound(q), unit: baseUnit};
 }
 function unitLabel(unit){ return unit === 'ml' ? 'mL' : (unit == null ? '' : String(unit)); }
 // e.g. formatQuantity(0.15, 'L', 'ml') -> "150 mL"; formatQuantity(100, 'g', 'kg') -> "0.1 kg"
-function formatQuantity(qtyBase, baseUnit, displayUnit, dp=2){
-  const r = fromBaseUnit(qtyBase, baseUnit, displayUnit);
+function formatQuantity(qtyBase, baseUnit, displayUnit, dp=2, gPerMl){
+  const r = fromBaseUnit(qtyBase, baseUnit, displayUnit, gPerMl);
   const s = String(Number(Number(r.qty).toFixed(dp)));   // trims trailing zeros
   const lbl = unitLabel(r.unit);
   return lbl ? s + ' ' + lbl : s;
@@ -322,10 +357,13 @@ function ingredientCosting(ingredientId, visiting){
   const stats = computeCostingStats(purchasesFor(ingredientId));
   const method = costingMethod();
   let current = stats.count ? (method==='latest'?stats.latest:stats.weightedAvg) : 0;
+  let costSource = 'purchases', inUse = null;
+  // Release 1.4 (A8): no purchases yet -> the typed "price paid per piece" (standard_cost),
+  // like the server's _ingredient_unit_cost. Items without standard_cost: 0 as before.
+  if(!stats.count && _hasNum(ing.standard_cost)){ current = Number(ing.standard_cost); costSource = 'standard_cost'; }
   // Release 1.2 (owner: "cost follows what we're currently using"): an ingredient with
   // brands costs what the lot in use now cost (its purchase price per base unit).
   // No lot in use, or that lot has no price (e.g. starting stock) -> the method above.
-  let costSource = 'purchases', inUse = null;
   if(ingredientHasBrands(ingredientId)){
     inUse = inUseBrand(ingredientId);
     if(inUse && inUse.price_per_base_unit !== null){ current = inUse.price_per_base_unit; costSource = 'in_use_lot'; }
@@ -346,6 +384,22 @@ function setStockFromServer(rows){
   (rows||[]).forEach(r=>{ state.stock[r.ingredient_id] = Number(r.stock)||0; });
 }
 
+function _hasNum(v){ return v !== null && v !== undefined && v !== '' && isFinite(Number(v)); }
+
+// A recipe line's amount in the ingredient's stock unit (release 1.4, A10):
+// entered_quantity + unit (as typed, e.g. 25 g of a sauce counted in L) converted with
+// the ingredient's "weighs" -- the same number the database stores in quantity -- else
+// quantity as stored (1.3 lines, or a unit that doesn't convert).
+function recipeLineQty(ri){
+  if(!ri) return 0;
+  if(_hasNum(ri.entered_quantity)){
+    const v = ingredientQtyToBase(ingredientById(ri.ingredient_id), ri.entered_quantity, ri.unit);
+    if(v !== null) return v;
+  }
+  return Number(ri.quantity) || 0;
+}
+
+// Each line: {...recipe_ingredients row, quantity: in stock units (recipeLineQty), unitCost, lineCost, isProduced}
 function recipeCost(recipeId, visiting){
   visiting = visiting || new Set();
   if(visiting.has('recipe:'+recipeId)) return {lines:[], total:0, cyclic:true};
@@ -355,20 +409,74 @@ function recipeCost(recipeId, visiting){
   const lines = items.map(ri=>{
     const costing = ingredientCosting(ri.ingredient_id, visiting);
     const cost = costing.current || 0;
-    const lineCost = cost * Number(ri.quantity||0);
+    const qty = recipeLineQty(ri);
+    const lineCost = cost * qty;
     total += lineCost;
-    return {...ri, unitCost:cost, lineCost, isProduced: costing.isProduced};
+    return {...ri, quantity: qty, unitCost:cost, lineCost, isProduced: costing.isProduced};
   });
   return {lines, total};
 }
 
-function recipeMetrics(recipe){
+// recipeMetrics(recipe, modifiers?) -> {cost, lines, profit, foodCostPct, price}
+// Without modifiers: exactly as before (the recipe's own lines at the menu price).
+// With modifiers (release 1.4): cost of what one item with those options takes from stock
+// (recipeCostWithOptions: extras added, swaps taken off/put on) at menu price + the options' prices.
+function recipeMetrics(recipe, modifiers){
+  if(Array.isArray(modifiers) && modifiers.length){
+    const rc = recipeCostWithOptions(recipe.id, modifiers);
+    const price = menuUnitPrice(recipe, modifiers);
+    return {cost: rc.total, lines: rc.lines, profit: price - rc.total, foodCostPct: price>0 ? rc.total/price*100 : 0, price};
+  }
   const {total, lines} = recipeCost(recipe.id);
   const price = Number(recipe.selling_price)||0;
   const profit = price - total;
   const foodCostPct = price>0 ? (total/price*100) : 0;
-  return {cost:total, lines, profit, foodCostPct};
+  return {cost:total, lines, profit, foodCostPct, price};
 }
+
+// Cost of ONE item with these options (release 1.4): the stock lines a sale would take
+// (inventoryLinesForSaleLine, quantity 1) × each ingredient's current cost.
+// -> {lines: [{ingredient_id, quantity, kind, label, unitCost, lineCost}], total}
+function recipeCostWithOptions(recipeId, modifiers){
+  let total = 0;
+  const lines = inventoryLinesForSaleLine(recipeId, 1, modifiers || []).map(l => {
+    const unitCost = ingredientCosting(l.ingredient_id).current || 0;
+    const lineCost = unitCost * l.quantity;
+    total += lineCost;
+    return Object.assign({}, l, {unitCost, lineCost});
+  });
+  return {lines, total};
+}
+// How much choosing one option changes the cost of one item (₱; a swap to a dearer milk > 0).
+function optionCostDelta(recipeId, modifier){
+  return recipeCostWithOptions(recipeId, [modifier]).total - recipeCostWithOptions(recipeId, []).total;
+}
+
+// Menu price of one item with these options: selling_price + Σ price_delta
+// (the server's _menu_unit_price rule; library options and swaps included).
+function menuUnitPrice(recipe, modifiers){
+  return (Number(recipe && recipe.selling_price) || 0) + (modifiers || []).reduce((s, m) => s + (Number(m && m.price_delta) || 0), 0);
+}
+
+/* ---- Supplied items (release 1.4, A8): bought and resold per piece ---- */
+function isSuppliedRecipe(recipe){ return !!(recipe && recipe.supplied_ingredient_id); }
+// Same numbers save_supplied_item returns: cost = the latest purchase's price per piece,
+// else the typed cost (ingredients.standard_cost), else 0;
+// margin = price − cost (centavos), margin_pct = margin ÷ price × 100 (1 decimal; null at price 0).
+// -> {ingredient_id, cost_per_piece, selling_price, margin, margin_pct, cost_source: 'purchase'|'standard_cost'|'none'}
+function suppliedItemCosting(recipe){
+  const iid = recipe && recipe.supplied_ingredient_id;
+  const ing = iid ? ingredientById(iid) : null;
+  const latest = (iid ? purchasesFor(iid) : []).slice().sort((a, b) =>
+    String(b.purchase_date || '').localeCompare(String(a.purchase_date || '')) || String(b.created_at || '').localeCompare(String(a.created_at || '')))[0];
+  let cost = 0, source = 'none';
+  if(latest && _hasNum(latest.price_per_base_unit)){ cost = Number(latest.price_per_base_unit); source = 'purchase'; }
+  else if(ing && _hasNum(ing.standard_cost)){ cost = Number(ing.standard_cost); source = 'standard_cost'; }
+  const price = Number(recipe && recipe.selling_price) || 0;
+  return {ingredient_id: iid || null, cost_per_piece: Math.round(cost * 1e4) / 1e4, selling_price: price,
+    margin: roundMoney(price - cost), margin_pct: price > 0 ? _round1((price - cost) / price * 100) : null, cost_source: source};
+}
+function _round1(n){ const a = Math.round(Math.abs(n) * 10 + 1e-9) / 10; return n < 0 ? -a : a; }
 
 function recipeCostAsOf(recipeId, date, visiting){
   visiting = visiting || new Set();
@@ -390,9 +498,9 @@ function recipeCostAsOf(recipeId, date, visiting){
       }
     } else {
       const stats = computeCostingStats(purchasesFor(ri.ingredient_id), date);
-      cost = stats.count ? (method==='latest'?stats.latest:stats.weightedAvg) : 0;
+      cost = stats.count ? (method==='latest'?stats.latest:stats.weightedAvg) : ((ing && _hasNum(ing.standard_cost)) ? Number(ing.standard_cost) : 0);
     }
-    total += cost * Number(ri.quantity||0);
+    total += cost * recipeLineQty(ri);
   });
   return total;
 }
