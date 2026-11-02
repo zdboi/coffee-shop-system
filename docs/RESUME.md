@@ -39,6 +39,8 @@ Full list with decisions: `docs/owner-feedback.md` (sections "Release 1.3 …").
   - **Tick-and-remove ingredients (A13):** like recipes; history → inactive; used-in-recipe warning.
   - **Recipes grouped + coloured (A14)** by sub-category in the Back Office.
   - **Counter waste log (A15):** menu items or ingredients, with reasons (calibration, spillage, complimentary with manager approval…); stock deducted like a sale; Back Office waste report by reason. Stamp freebies already go through rewards.
+  - **Sub-category order (A16):** drag to arrange; drinks always first, then pastries/food; used on counter, QR page and recipes list.
+  - **Customers tab sorting (A17):** name A–Z, most recent, most frequent.
   - **P2:** manager "retry without the reward".
   - **Optional:** T3, T4, Senior/PWD, drop `profiles.pin_hash`.
 - **Menu photos (A1):** already exist; no change (owner).
