@@ -37,6 +37,8 @@ Full list with decisions: `docs/owner-feedback.md` (sections "Release 1.3 …").
   - **Expenses (A11):** an "Operating supplies" category counted as an expense (not stock), an Expenses log (rent, utilities, internet, wages…) and a monthly net income report.
   - **Merge ingredients (A12):** combine same-kind ingredients into one general ingredient with brands (Full Cream Milk, Non-dairy Milk, Non-Coffee Milk, Cocoa Powder, Coffee Beans, Butter, Cream); recipes and options repointed.
   - **Tick-and-remove ingredients (A13):** like recipes; history → inactive; used-in-recipe warning.
+  - **Recipes grouped + coloured (A14)** by sub-category in the Back Office.
+  - **Counter waste log (A15):** menu items or ingredients, with reasons (calibration, spillage, complimentary with manager approval…); stock deducted like a sale; Back Office waste report by reason. Stamp freebies already go through rewards.
   - **P2:** manager "retry without the reward".
   - **Optional:** T3, T4, Senior/PWD, drop `profiles.pin_hash`.
 - **Menu photos (A1):** already exist; no change (owner).
