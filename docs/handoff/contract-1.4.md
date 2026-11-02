@@ -51,6 +51,7 @@ From db-security-engineer's report, 2026-11-03 (net income tax change and securi
 - **QR page:** `get_qr_menu` options add `kind` (PLAIN/EXTRA/SWAP); never stock amounts. `qr_place_order` takes `{group_id, option_id}` as before (group ids `lib_…`).
   - The **stored** order (`qr_orders.items`, read by counters) keeps each option's `ingredient_id`, `ingredient_qty_delta`, `kind`, `extras`, `removes`, so paying it at the counter deducts the swap correctly.
   - **Answers to the phone** (`qr_place_order`, `qr_my_orders`, `qr_cancel_order`) give each option as `{group, label, price_delta, kind}` only (security review M1). The QR page must not rely on any other option field.
+  - **Customers can't read the `qr_orders` table directly any more** (004's policy `qr_orders_customer_read` is dropped, lead decision 2026-11-03). The QR page reads its orders only through those three functions.
 - Own (non-library) options can't carry `removes`; any sent is dropped (only library SWAPs have it).
 
 ## A8. Supplied items (owner only)

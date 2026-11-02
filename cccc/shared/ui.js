@@ -201,6 +201,7 @@ const ERROR_TEXT = {
   MERGE_ALREADY_MERGED: 'One of the picked ingredients was already merged into another one. Refresh and pick again.',
   MERGE_PRODUCED_NOT_ALLOWED: 'House-made items can\'t be merged. Leave them out and try again.',
   MERGE_SUPPLIED_NOT_ALLOWED: 'The stock item of a supplied menu item can\'t be merged. Leave it out and try again.',
+  MERGE_SWAP_CONFLICT: 'An option-library swap uses two of these ingredients (one taken off, one put on), so after the merge it would swap an ingredient for itself. Change or remove that swap first, then merge.',
   MERGE_UNIT_MISMATCH: 'These ingredients are counted in units that don\'t convert (for example grams and millilitres, or pieces and boxes). Merge only ingredients counted the same way.',
   // CAPTCHA (Cloudflare Turnstile) before an anonymous sign-in
   CAPTCHA_FAILED: 'We couldn\'t confirm you\'re a person. Check your internet and try again.',
@@ -233,6 +234,8 @@ const REVIEW_REASON_TEXT = {
   STAFF_MISMATCH: 'Recorded cashier differs from who was signed in',
   OUT_OF_STOCK: 'Sold when an ingredient had run out (stock went below zero)',
   BEFORE_START_FRESH: 'Dated before the shop started fresh (old test data uploaded late)',
+  FUTURE_DATE: 'Dated in the future',
+  OLD_DATE: 'Dated more than 7 days back',
 };
 // "PRICE_BELOW_MENU, TAX_MISMATCH" -> "Sold below the menu price; Tax or service charge doesn't match your settings".
 // Unknown codes become plain lower-case words; an empty reason gives 'Flagged by the server'.

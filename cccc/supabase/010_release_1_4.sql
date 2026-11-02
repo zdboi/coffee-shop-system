@@ -2236,6 +2236,13 @@ language sql stable security definer set search_path = public as $$
   end
 $$;
 
+-- Customers no longer read the qr_orders table directly (lead decision
+-- 2026-11-03): 004's rule "a customer reads their own orders" is removed, so
+-- the stored stock details are never readable from a phone. The QR page reads
+-- its orders only through qr_my_orders / qr_place_order / qr_cancel_order
+-- below (they run with the owner's rights). Shop logins keep qr_orders_read.
+drop policy if exists qr_orders_customer_read on public.qr_orders;
+
 -- Same as 004, but each order goes through _qr_order_public.
 create or replace function public.qr_my_orders(p_token text) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
