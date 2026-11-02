@@ -149,7 +149,14 @@ async function confirmOk(page){ await page.waitForSelector('#active-modal-overla
   const c2 = await countApply(q, async () => { await q.click('#sc-save'); });
   ok(c2 === 1 && sql(`select subcategory_colors::text from settings where business_id='${biz}'`) === '{"Hot": "olive", "Pastry": "butter"}', 'colours saved with one update on settings.subcategory_colors', sql(`select subcategory_colors::text from settings`));
   await q.waitForTimeout(500);
-  ok(await q.$('.rec-card .rec-sub-dot'), 'recipe cards show the colour dot');
+  // 1.3 (A14, lead-approved 2026-11-02): the colour dot became a card header in the sub-category's tile colour
+  const heads = await q.$$eval('.rec-card.tinted .rec-card-head', hs => hs.map(h => {
+    const probe = document.createElement('div'); probe.style.background = 'var(--tile-olive-bg)'; document.body.appendChild(probe);
+    const olive = getComputedStyle(probe).backgroundColor; probe.remove();
+    return {name: (h.querySelector('.rec-name') || {}).textContent, sub: (h.querySelector('.rec-sub') || {}).textContent || '', bg: getComputedStyle(h).backgroundColor, olive};
+  }));
+  const hotHead = heads.find(h => /· Hot\b/.test(h.sub));
+  ok(hotHead && hotHead.bg === hotHead.olive && hotHead.bg !== 'rgba(0, 0, 0, 0)', 'recipe cards: a "Hot" card header has the olive tile background (picked colour)', heads);
 
   // ---------- 3. brands ----------
   const milk = '22222222-0000-0000-0000-000000000002';

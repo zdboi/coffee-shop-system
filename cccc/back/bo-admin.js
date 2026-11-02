@@ -169,49 +169,121 @@ function openTableForm(t){
       }, '…');
     }});
 }
+/* ---- QR code printouts in the café's look (release 1.3, owner item A18) ----
+   Each card: the tile icon and the Brunson wordmark on terracotta, the table name big, the QR code,
+   "Scan to order" with a 3-step how-to, and "Bienvenido na Kapihan!". Cards keep the A6 shape and
+   print 1, 2 or 4 to an A4 page, with optional crop marks. The QR codes and their links are made
+   exactly as before (qrSvg + tableOrderUrl). With the Custom theme the shop's own logo, name and
+   main colour are used instead. */
+const QR_LAYOUTS = {
+  1: {label: '1 per page (poster)', page: 'A4 portrait', cols: 1, rows: 1, w: 180},
+  2: {label: '2 per page (A5 size)', page: 'A4 landscape', cols: 2, rows: 1, w: 132},
+  4: {label: '4 per page (A6 size, table tents)', page: 'A4 portrait', cols: 2, rows: 2, w: 94},
+};
+let QR_PRINT_PREFS = {per: 4, crop: true};
 function openPrintQrPicker(){
   const tables = sortedTables().filter(t => t.active);
   if(!tables.length){ toast('Turn on or add a table first', 'warn'); return; }
   openModal({title: 'Print QR codes', body: `
-    <p class="hint" style="margin-top:0;">Choose the codes to print. Each prints as a card with your logo, shop name and the table name — 4 per A4 page. Cut them out and put one on each table.</p>
-    <div class="chk-row" style="flex-direction:column;gap:6px;">${tables.map(t => `<label class="chk"><input type="checkbox" data-pt="${esc(t.id)}" checked> ${esc(t.label)}</label>`).join('')}</div>`,
+    <p class="hint" style="margin-top:0;">Choose the codes to print. Each prints as a card in the café's colours, with the table name, the QR code and how to order. Cut them out and put one on each table.</p>
+    <fieldset class="pq-layout"><legend>Cards per A4 page</legend>
+      ${Object.keys(QR_LAYOUTS).map(k => `<label class="chk"><input type="radio" name="pq-per" value="${k}" ${String(QR_PRINT_PREFS.per) === k ? 'checked' : ''}> ${esc(QR_LAYOUTS[k].label)}</label>`).join('')}
+    </fieldset>
+    <label class="chk" style="margin:6px 0 12px;"><input type="checkbox" id="pq-crop" ${QR_PRINT_PREFS.crop ? 'checked' : ''}> Crop marks (where to cut)</label>
+    <div class="field-inline" style="margin-bottom:6px;"><label class="chk"><input type="checkbox" id="pq-all" checked> All codes</label></div>
+    <div class="chk-row" style="flex-direction:column;gap:6px;">${tables.map(t => `<label class="chk"><input type="checkbox" data-pt="${esc(t.id)}" checked> ${esc(t.label)}${t.kind === 'TAKEAWAY' ? ' <span class="text-light">(takeaway)</span>' : ''}</label>`).join('')}</div>`,
     foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="pq-go">Print</button>`,
     onMount: (root) => {
       root.querySelector('[data-cancel]').onclick = closeModal;
+      const all = root.querySelector('#pq-all'), boxes = [...root.querySelectorAll('[data-pt]')];
+      all.onchange = () => boxes.forEach(b => { b.checked = all.checked; });
+      boxes.forEach(b => b.onchange = () => { all.checked = boxes.every(x => x.checked); all.indeterminate = !all.checked && boxes.some(x => x.checked); });
       root.querySelector('#pq-go').onclick = () => {
-        const ids = [...root.querySelectorAll('[data-pt]:checked')].map(i => i.dataset.pt);
+        const ids = boxes.filter(i => i.checked).map(i => i.dataset.pt);
         if(!ids.length){ toast('Choose at least one code', 'error'); return; }
+        const per = Number((root.querySelector('input[name="pq-per"]:checked') || {}).value) || 4;
+        QR_PRINT_PREFS = {per: QR_LAYOUTS[per] ? per : 4, crop: root.querySelector('#pq-crop').checked};
         closeModal();
-        printQrSheet(tables.filter(t => ids.includes(t.id)));
+        printQrSheet(tables.filter(t => ids.includes(t.id)), QR_PRINT_PREFS);
       };
     }});
 }
-function printQrSheet(tables){
+// A safe CSS colour from the settings (#rgb / #rrggbb only), else the fallback.
+function qrSafeColor(v, fallback){ return /^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(String(v || '').trim()) ? String(v).trim() : fallback; }
+function qrCardHtml(t, s){
+  const custom = brandTheme(s) === 'CUSTOM';
+  const takeaway = t.kind === 'TAKEAWAY';
+  return `<div class="card${takeaway ? ' takeaway' : ''}">
+    <div class="band">
+      ${brandLogoHtml('mark-large', {className: 'mark', alt: '', settings: s})}
+      ${brandWordmarkHtml(custom ? 'cream' : 'terracotta', {className: 'wm', settings: s})}
+    </div>
+    <div class="body">
+      <div class="table">${esc(t.label)}</div>
+      <div class="qr">${qrSvg(tableOrderUrl(t))}</div>
+      <div class="scan">${takeaway ? 'Scan to order ahead' : 'Scan to order'}</div>
+      <ol class="steps"><li><span class="n">1</span><span class="w">Scan</span></li><li><span class="n">2</span><span class="w">Order</span></li><li><span class="n">3</span><span class="w">Pay &amp; pick up at the counter</span></li></ol>
+    </div>
+    <div class="foot">Bienvenido na Kapihan!</div>
+    <i class="cm tl"></i><i class="cm tr"></i><i class="cm bl"></i><i class="cm br"></i>
+  </div>`;
+}
+function printQrSheet(tables, prefs){
+  prefs = prefs || QR_PRINT_PREFS;
+  const L = QR_LAYOUTS[prefs.per] || QR_LAYOUTS[4];
   const s = state.settings;
   const shop = businessName() || appDisplayName();
-  const win = openPrintWindow(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>QR codes — ${esc(shop)}</title>
+  const custom = brandTheme(s) === 'CUSTOM';
+  const main = custom ? qrSafeColor(s.primary_color, '#B5432B') : '#B5432B';
+  const tokens = new URL('tokens.css', BRAND_DIR).href;
+  const per = L.cols * L.rows;
+  const pages = [];
+  for(let i = 0; i < tables.length; i += per) pages.push(tables.slice(i, i + per));
+  // every size is in "u" = 1/105 of the card's width, so the same card prints at 1, 2 or 4 per page
+  const u = (L.w / 105).toFixed(4);
+  // the same card positions on every page (also a part-filled last page), so cutting lines up
+  const pageH = L.page.includes('landscape') ? 210 : 297;
+  const padTop = Math.max(0, (pageH - L.rows * L.w * 1.4142 - (L.rows - 1) * 10) / 2).toFixed(2);
+  const win = openPrintWindow(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>QR codes — ${esc(shop)}</title>
+    <link rel="stylesheet" href="${esc(tokens)}">
     <style>
-      body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;margin:0;padding:12mm;color:#1c110a;}
-      .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8mm;}
-      .card{border:1.5px solid #1c110a;border-radius:6mm;padding:7mm 6mm;text-align:center;page-break-inside:avoid;break-inside:avoid;}
-      .card img.logo{width:16mm;height:16mm;object-fit:contain;}
-      .shop{font-size:15pt;font-weight:700;margin-top:2mm;}
-      .scan{font-size:11pt;margin:2mm 0 3mm;}
-      .qr{width:56mm;height:56mm;margin:0 auto;} .qr svg{width:100%;height:100%;display:block;}
-      .label{font-size:20pt;font-weight:800;margin-top:2mm;}
-      .hint{font-size:8.5pt;color:#555;margin-top:1mm;}
-      .noprint{font-size:12px;margin-bottom:8mm;}
-      @media print{body{padding:8mm;} .noprint{display:none;}}
+      @page{size:${L.page};margin:0;}
+      *{box-sizing:border-box;}
+      html,body{margin:0;background:#e9e2d2;color:#1F1B19;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+      .noprint{position:sticky;top:0;z-index:5;background:#1F1B19;color:#FBF6EA;padding:10px 16px;font-size:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;}
+      .noprint button{font:inherit;font-weight:700;background:#B5432B;color:#fff;border:0;border-radius:8px;padding:8px 16px;cursor:pointer;}
+      .sheet{width:${L.page.includes('landscape') ? '297mm' : '210mm'};height:${L.page.includes('landscape') ? '210mm' : '297mm'};margin:10mm auto;background:#fff;display:grid;
+        grid-template-columns:repeat(${L.cols},${L.w}mm);grid-auto-rows:${(L.w * 1.4142).toFixed(2)}mm;gap:${per === 1 ? 0 : 10}mm;align-content:start;justify-content:center;padding-top:${padTop}mm;
+        page-break-after:always;break-after:page;overflow:hidden;}
+      .sheet:last-child{page-break-after:auto;break-after:auto;}
+      .card{--u:${u}mm;--main:${main};position:relative;width:${L.w}mm;height:${(L.w * 1.4142).toFixed(2)}mm;display:flex;flex-direction:column;background:#FBF6EA;
+        border-radius:calc(var(--u)*4);overflow:visible;${prefs.crop ? '' : 'outline:0.25mm dashed #c9bda5;outline-offset:0;'}page-break-inside:avoid;break-inside:avoid;}
+      .band{background:var(--main);border-radius:calc(var(--u)*4) calc(var(--u)*4) 0 0;padding:calc(var(--u)*5) calc(var(--u)*6) calc(var(--u)*4);display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*2.5);}
+      .band .mark{width:calc(var(--u)*20);height:calc(var(--u)*20);border-radius:calc(var(--u)*4);object-fit:contain;}
+      .band .wm{max-width:86%;height:calc(var(--u)*11);object-fit:contain;}
+      .band .brand-name-text{color:#fff;font-weight:800;font-size:calc(var(--u)*5.5);text-align:center;}
+      .body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:calc(var(--u)*3) calc(var(--u)*6);background:#F1E4B3;}
+      .table{font-family:var(--cc-font-display);text-transform:uppercase;color:#8E2F1C;font-size:calc(var(--u)*11);line-height:1;letter-spacing:.02em;text-align:center;margin-bottom:calc(var(--u)*3);overflow-wrap:anywhere;}
+      .qr{width:calc(var(--u)*46);height:calc(var(--u)*46);background:#fff;border-radius:calc(var(--u)*3);padding:calc(var(--u)*1);box-shadow:0 0 0 calc(var(--u)*.6) #1F1B19;}
+      .qr svg{width:100%;height:100%;display:block;}
+      .scan{font-family:var(--cc-font-display);text-transform:uppercase;color:#1F1B19;font-size:calc(var(--u)*6.4);margin-top:calc(var(--u)*3.5);letter-spacing:.03em;}
+      .steps{list-style:none;margin:calc(var(--u)*2.5) 0 0;padding:0;display:flex;gap:calc(var(--u)*2.5);justify-content:center;align-items:flex-start;}
+      .steps li{display:flex;flex-direction:column;align-items:center;text-align:center;max-width:calc(var(--u)*30);font-size:calc(var(--u)*3.3);font-weight:700;line-height:1.2;color:#1F1B19;}
+      .steps li:last-child{max-width:calc(var(--u)*34);}
+      .steps .n{width:calc(var(--u)*6);height:calc(var(--u)*6);border-radius:50%;background:var(--main);color:#fff;display:flex;align-items:center;justify-content:center;font-size:calc(var(--u)*3.4);margin-bottom:calc(var(--u)*1);}
+      .foot{background:var(--main);color:#F1E4B3;text-align:center;font-family:var(--cc-font-display);text-transform:uppercase;font-size:calc(var(--u)*5.2);letter-spacing:.04em;padding:calc(var(--u)*3.2) calc(var(--u)*4);border-radius:0 0 calc(var(--u)*4) calc(var(--u)*4);}
+      .cm{display:${prefs.crop ? 'block' : 'none'};position:absolute;width:3mm;height:3mm;border-color:#1F1B19;border-style:solid;border-width:0;}
+      .cm.tl{top:-4mm;left:-4mm;border-right-width:.2mm;border-bottom-width:.2mm;}
+      .cm.tr{top:-4mm;right:-4mm;border-left-width:.2mm;border-bottom-width:.2mm;}
+      .cm.bl{bottom:-4mm;left:-4mm;border-right-width:.2mm;border-top-width:.2mm;}
+      .cm.br{bottom:-4mm;right:-4mm;border-left-width:.2mm;border-top-width:.2mm;}
+      @media print{html,body{background:#fff;} .noprint{display:none;} .sheet{margin:0;}}
     </style></head><body>
-    <p class="noprint">Print on A4. Cut along the borders and put one on each table. <button onclick="print()">Print</button></p>
-    <div class="grid">${tables.map(t => `<div class="card">${s.logo_url ? `<img class="logo" src="${esc(s.logo_url)}" alt="">` : ''}
-      <div class="shop">${esc(shop)}</div>
-      <div class="scan">${t.kind === 'TAKEAWAY' ? 'Scan to order ahead for pickup' : 'Scan to order from your table'}</div>
-      <div class="qr">${qrSvg(tableOrderUrl(t))}</div>
-      <div class="label">${esc(t.label)}</div>
-      <div class="hint">${esc(s.qr_payment_note || 'Pay at the counter')}</div></div>`).join('')}</div>
+    <div class="noprint"><span>${esc(plural(tables.length, 'card'))} · ${esc(L.label)} · print on A4 (${esc(L.page.replace('A4 ', ''))}), "Background graphics" on, margins "Default" or "None".${prefs.crop ? ' Cut at the corner marks.' : ' Cut along the dashed lines.'}</span>
+      <button type="button" onclick="print()">Print</button></div>
+    ${pages.map(pg => `<div class="sheet">${pg.map(t => qrCardHtml(t, s)).join('')}</div>`).join('')}
     </body></html>`, false);
-  if(win) applyChanges([Ops.audit('QR codes printed', `${tables.length} code(s)`)]).catch(() => {});
+  if(win) applyChanges([Ops.audit('QR codes printed', `${tables.length} code(s), ${per} per page`)]).catch(() => {});
 }
 
 /* ================= Staff & PINs ================= */

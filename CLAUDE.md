@@ -27,8 +27,8 @@ plain-language, step-by-step instructions.
 - **The owner ran `cccc/supabase/004_cccc_online_qr.sql` on the live project on 2026-10-20** ("Success").
   It is now **frozen**: every database change goes in a new numbered script, per golden rule 6.
 - The owner also ran **`005_live_fixes.sql`** and **`006_live_fix_sync_operations.sql`** on live (2026-10-20); both
-  are frozen too. **`007_batch1.sql`** (release 1.1) was run on live on 2026-10-29 and is frozen. The next
-  script is **`008_release_1_2.sql`** (release 1.2); it may be edited until the owner runs it. The live database has older CHECK rules than our reconstruction:
+  are frozen too. **`007_batch1.sql`** (release 1.1, run 2026-10-29) and **`008_release_1_2.sql`** (release 1.2, run 2026-11-02)
+  are frozen. The next script is **`009_…sql`** (release 1.3); it may be edited until the owner runs it. The live database has older CHECK rules than our reconstruction:
   any new value written to a live column must be checked against the live rule list first.
 
 ## Golden rules (everyone)
@@ -141,7 +141,7 @@ The server answers per op: `ok | duplicate | skipped | error` (+ `message`).
 | Owner | Paths |
 |---|---|
 | `db-security-engineer` | `cccc/supabase/*.sql` |
-| `core-sync-engineer` | `cccc/shared/{cloud,local,logic,ui,config}.js`, `cccc/shared/styles.css`, `cccc/sw.js` |
+| `core-sync-engineer` | `cccc/shared/{cloud,local,logic,ui,config,printer}.js`, `cccc/shared/styles.css`, `cccc/sw.js` |
 | `front-office-dev` | `cccc/front/**` |
 | `back-office-dev` | `cccc/back/**` |
 | `customer-qr-dev` | `cccc/order/**` |

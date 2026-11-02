@@ -166,6 +166,12 @@ const ERROR_TEXT = {
   BRAND_NOT_ALLOWED: 'A brand can only be set on starting stock, a purchase or a stock increase.',
   // Sub-category tile colours (release 1.2, 008)
   BAD_SUBCATEGORY_COLORS: 'The tile colours could not be saved. Pick a colour from the list for each sub-category (names up to 40 characters).',
+  // Release 1.3 (009): sub-category order + Start fresh (Back Office, owner only)
+  BAD_SUBCATEGORY_ORDER: 'The sub-category order could not be saved. Each name can be in the list once, up to 40 characters, at most 100 names.',
+  BAD_DATE: 'Choose a date and time that is not in the future.',
+  CONFIRM_REQUIRED: 'Type START FRESH (in capital letters) to confirm.',
+  SHIFT_STILL_OPEN: 'A counter still has an open shift. Close every shift first, then try again.',
+  BUSY_TRY_AGAIN: 'A counter was uploading sales just now. Please wait a moment and try again.',
   // CAPTCHA (Cloudflare Turnstile) before an anonymous sign-in
   CAPTCHA_FAILED: 'We couldn\'t confirm you\'re a person. Check your internet and try again.',
   // Anything unexpected on the server
@@ -179,6 +185,8 @@ const REVIEW_REASON_TEXT = {
   TAX_MISMATCH: 'Tax or service charge doesn\'t match your settings',
   PAYMENT_MISMATCH: 'Payments don\'t add up to the total',
   STAFF_MISMATCH: 'Recorded cashier differs from who was signed in',
+  OUT_OF_STOCK: 'Sold when an ingredient had run out (stock went below zero)',
+  BEFORE_START_FRESH: 'Dated before the shop started fresh (old test data uploaded late)',
 };
 // "PRICE_BELOW_MENU, TAX_MISMATCH" -> "Sold below the menu price; Tax or service charge doesn't match your settings".
 // Unknown codes become plain lower-case words; an empty reason gives 'Flagged by the server'.
@@ -221,6 +229,45 @@ function friendlyError(e){
   if(/foreign key/i.test(raw)) return 'This record is still used elsewhere (e.g. in sales history), so it cannot be deleted.';
   if(/duplicate key/i.test(raw)) return 'That already exists.';
   return raw || 'Something went wrong.';
+}
+
+/* ================= Sub-category order (release 1.3, A16) =================
+   Pure helpers (no shop state) so the QR page can use them too; logic.js adds
+   sortSubcategories() / subcategoryRank() on top for the counter and Back Office.
+   Blocks: drinks first, then pastry, then food, then everything else (sauces / syrups,
+   unknown). A type can be a recipe_type ('DRINKS', 'PASTRY', 'FOOD', ...) or its label
+   ('Drinks', 'Pastry', 'Food'), any case. */
+const SUBCATEGORY_BLOCKS = {DRINKS: 0, DRINK: 0, PASTRY: 1, PASTRIES: 1, FOOD: 2};
+function subcategoryBlock(type){
+  const k = String(type == null ? '' : type).trim().toUpperCase();
+  return Object.prototype.hasOwnProperty.call(SUBCATEGORY_BLOCKS, k) ? SUBCATEGORY_BLOCKS[k] : 3;
+}
+// Names compare without case or extra spaces: "Iced  Coffee" = "iced coffee".
+function subcategoryKey(name){ return String(name == null ? '' : name).trim().replace(/\s+/g, ' ').toLowerCase(); }
+// sortSubcategoryNames(names, typeOf, order) -> a new array:
+//   names:  sub-category names (duplicates are kept as given)
+//   typeOf: function name -> recipe type (or label), or a {name: type} object; unknown -> last block
+//   order:  the owner's list (settings.subcategory_order); missing / not a list -> []
+// Sorted by block, then by place in order, then (names not in order) A to Z.
+function sortSubcategoryNames(names, typeOf, order){
+  const map = (typeOf && typeof typeOf === 'object') ? typeOf : null;
+  const typeFn = typeof typeOf === 'function' ? typeOf : (n => {
+    if(!map) return undefined;
+    if(Object.prototype.hasOwnProperty.call(map, n)) return map[n];
+    const k = subcategoryKey(n);
+    const hit = Object.keys(map).find(x => subcategoryKey(x) === k);
+    return hit === undefined ? undefined : map[hit];
+  });
+  const pos = new Map();   // a Map, so names like "constructor" are just names
+  (Array.isArray(order) ? order : []).forEach((n, i) => { const k = subcategoryKey(n); if(typeof n === 'string' && !pos.has(k)) pos.set(k, i); });
+  const rows = (names || []).map((name, i) => {
+    const k = subcategoryKey(name);
+    let t; try{ t = typeFn(name); }catch(e){ t = undefined; }
+    return {name, i, block: subcategoryBlock(t), at: pos.has(k) ? pos.get(k) : Infinity, k};
+  });
+  rows.sort((a, b) => a.block - b.block || (a.at === b.at ? 0 : a.at < b.at ? -1 : 1)
+    || a.k.localeCompare(b.k) || String(a.name).localeCompare(String(b.name)) || a.i - b.i);
+  return rows.map(r => r.name);
 }
 
 function debounce(fn, ms){ let t; return function(){ const a=arguments, self=this; clearTimeout(t); t=setTimeout(()=>fn.apply(self,a), ms); }; }

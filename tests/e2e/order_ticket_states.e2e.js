@@ -15,6 +15,7 @@ const NAME = 'order_ticket_states.e2e';
 const URL = BASE + '/cccc/order/?t=tabletoken5';
 const REFRESH_MS = 11000;     // 5-second refresh: allow two rounds + rendering
 
+H.openShopForQr();   // 1.3: QR ordering needs an open shift (see lib/h.js)
 (async () => {
   const browser = await chromium.launch();
   const ctx = await browser.newContext({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true, deviceScaleFactor: 2});

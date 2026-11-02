@@ -121,9 +121,43 @@ function dayValue(v){ if(!v) return ''; const s = String(v); return /^\d{4}-\d{2
 
 /* ================= loading ================= */
 async function boLoad(){
+  const seq = BO_MODAL_SEQ;
   const d = await cloud.rpc('bo_bootstrap', {}, {timeout: 30000});
   applyBoBootstrap(d || {});
+  boGuardLateClose(seq);
   return d;
+}
+
+/* ---- late "close the window" calls (QA 2026-11-02, bo_modal_race) ----
+   A save writes, reloads the shop data (slow on mobile data), then its screen calls closeModal().
+   If the owner opened ANOTHER window while that was loading (e.g. the confirm dialog had already
+   closed the first one), that late closeModal() must not close the new window.
+   Every window gets a number when it opens. When a save / reload finishes, closeModal() calls made
+   right after it (in the same moment, before anything else can run) only close a window that was
+   already open when the save started; a newer window is left open. Everything else is unchanged:
+   the shared openModal / closeModal from ../shared/ui.js still do the work. */
+let BO_MODAL_SEQ = 0, BO_CLOSE_GUARD = null, BO_MODAL_OPENING = false;
+const boSharedOpenModal = openModal, boSharedCloseModal = closeModal;
+openModal = function(opts){
+  BO_MODAL_OPENING = true;              // openModal first closes the window before it: always allowed
+  try{ boSharedOpenModal(opts); }
+  finally{ BO_MODAL_OPENING = false; }
+  const o = document.getElementById('active-modal-overlay');
+  if(o && !o._boSeq) o._boSeq = ++BO_MODAL_SEQ;
+};
+closeModal = function(){
+  const g = BO_CLOSE_GUARD, o = document.getElementById('active-modal-overlay');
+  if(g && !BO_MODAL_OPENING && o && (o._boSeq || 0) > g.seq){
+    console.info('A window opened during a save was kept open');
+    return;
+  }
+  return boSharedCloseModal();
+};
+// seq = the newest window number when the save / reload started.
+function boGuardLateClose(seq){
+  const g = {seq};
+  BO_CLOSE_GUARD = g;
+  setTimeout(() => { if(BO_CLOSE_GUARD === g) BO_CLOSE_GUARD = null; }, 0);
 }
 function applyBoBootstrap(d){
   state.business = d.business || null;
@@ -155,6 +189,8 @@ function applyBoBootstrap(d){
   BO.counts.customer_count = Number(d.customer_count) || 0;
   BO.pinUpdateNeeded = (Array.isArray(d.pin_update_needed) ? d.pin_update_needed : []).map(x => x && typeof x === 'object' ? (x.id || x.staff_id) : x).filter(Boolean).map(String);
   state.staff.forEach(st => { if(st.pin_update_needed === true && !BO.pinUpdateNeeded.includes(String(st.id))) BO.pinUpdateNeeded.push(String(st.id)); });
+  // 009: ACTIVE shifts opened 24 h ago or more (QR ordering only counts shifts opened in the last 24 h)
+  BO.staleOpenShifts = (Array.isArray(d.stale_open_shifts) ? d.stale_open_shifts : []).filter(x => x && typeof x === 'object');
   BO.pinLockouts = (Array.isArray(d.pin_lockouts) ? d.pin_lockouts : []).filter(x => x && typeof x === 'object');
   BO.ownerStaff = state.staff.find(s => s.profile_id && s.profile_id === cloud.userId()) || null;
   BO.lastLoadAt = Date.now();
@@ -339,6 +375,7 @@ async function applyChanges(ops){
 // Saves, shows a plain error if it fails, then reloads the shop data. Returns true when saved.
 async function boSave(ops, opts){
   opts = opts || {};
+  const seq = BO_MODAL_SEQ;
   try{
     await applyChanges(ops);
   }catch(e){
@@ -351,6 +388,7 @@ async function boSave(ops, opts){
   }
   if(opts.dropSales) BO.salesCache.clear();
   if(opts.success) toast(opts.success);
+  boGuardLateClose(seq);       // the window open when this save STARTED may be closed; newer ones stay
   return true;
 }
 
@@ -699,6 +737,7 @@ const BO_ROUTES = {
   auditLog: {title: 'Audit log', render: () => renderAuditLog()},
   settings: {title: 'Settings', render: () => renderSettings()},
   backup: {title: 'Backup & import', render: () => renderBackup()},
+  startFresh: {title: 'Start fresh before opening', nav: 'backup', render: () => renderStartFresh()},   // bo-fresh.js (1.3, A4)
 };
 
 function renderShell(){
@@ -853,6 +892,15 @@ function selectOptions(list, selected, labelFn, valueFn){
   return list.map(x => { const v = valueFn ? valueFn(x) : x.id; return `<option value="${esc(v)}" ${String(v) === String(selected) ? 'selected' : ''}>${esc(labelFn ? labelFn(x) : x.name)}</option>`; }).join('');
 }
 
+/* ---- shifts left open for 24 hours or more (009 stale_open_shifts) ---- */
+function staleShiftsAlertHtml(){
+  const list = BO.staleOpenShifts || [];
+  if(!list.length) return '';
+  return `<div class="notice warn stale-shifts" id="stale-shifts"><b>${list.length === 1 ? 'A shift has' : 'Shifts have'} been open for more than 24 hours</b>
+    <ul>${list.map(sh => `<li><b>${esc(sh.device_name || 'A counter')}</b>: ${esc(sh.cashier_name || 'staff')}${sh.shift_number ? ' · ' + esc(sh.shift_number) : ''}, open since ${esc(fmtShopDateTime(sh.opened_at))}</li>`).join('')}</ul>
+    <div>Close ${list.length === 1 ? 'it' : 'them'} on that counter (Close shift, then count the cash). Until then, the QR page treats the shop as closed if no other shift was opened in the last 24 hours.</div></div>`;
+}
+
 /* ================= dashboard ================= */
 function renderDashboard(){
   const content = document.getElementById('content');
@@ -891,6 +939,7 @@ function renderDashboard(){
   content.innerHTML = `
     ${pinUpdateBannerHtml()}
     ${pinLockoutAlertHtml()}
+    ${staleShiftsAlertHtml()}
     ${noPins ? `<div class="notice warn">No staff PIN is set yet, so nobody can sign in at the counter. <a class="linklike" data-go="staff">Set PINs in Staff &amp; PINs</a>.</div>` : ''}
     <div id="dash-review"></div>
     <div class="section-title" style="margin-top:0;">Today</div>

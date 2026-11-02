@@ -116,5 +116,23 @@ async function boLogin(page, email, pass){
   await page.waitForSelector('#app', {state: 'visible', timeout: 20000});
 }
 
-module.exports = {PORT, DB, BASE, SHOTS, PLAYWRIGHT, sql, rows, one, num, ok, failures, summary, abort, sleep, until, must,
+// QR ordering needs an open shift in the shop (release 1.3 / 009: otherwise the menu is empty and
+// qr_place_order answers SHOP_CLOSED). The browser seed has no shift, because counter tests start their
+// own. QR-only suites call this once at the start: it adds a separate test counter ("QA QR counter",
+// never paired, so no browser uses it) with one ACTIVE shift. Safe to call twice. Returns the shift id.
+const QR_SHIFT_DEVICE = '7a7a7a7a-0000-0000-0000-000000000001', QR_SHIFT_ID = '7a7a7a7a-0000-0000-0000-000000000002';
+function openShopForQr(){
+  sql(`insert into public.devices(id, business_id, device_name, device_type, device_tag, device_key, active)
+       select '${QR_SHIFT_DEVICE}', business_id, 'QA QR counter', 'COUNTER', 'QAQR', 'qa-qr-open-shift-device', true
+         from public.profiles where id = '00000000-0000-0000-0000-0000000000a1' on conflict (id) do nothing`);
+  sql(`insert into public.shifts(id, business_id, device_id, cashier_name, shift_number, opened_at, status, opening_cash)
+       select '${QR_SHIFT_ID}', business_id, '${QR_SHIFT_DEVICE}', 'QA QR shift', 'QA-QR-1', now(), 'ACTIVE', 0
+         from public.profiles where id = '00000000-0000-0000-0000-0000000000a1'
+       on conflict (id) do update set status = 'ACTIVE', closed_at = null`);
+  return QR_SHIFT_ID;
+}
+// ... and closes it again (to see the "closed" page).
+function closeShopForQr(){ sql(`update public.shifts set status = 'CLOSED', closed_at = now() where id = '${QR_SHIFT_ID}'`); }
+
+module.exports = {openShopForQr, closeShopForQr, QR_SHIFT_ID, PORT, DB, BASE, SHOTS, PLAYWRIGHT, sql, rows, one, num, ok, failures, summary, abort, sleep, until, must,
   attach, typePin, money, r2, shot, pairCounter, startShift, boLogin, focusSettled};

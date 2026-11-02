@@ -2,7 +2,7 @@
 tags: [cccc, pos, session-log]
 project: Cavite City Coffee Club POS
 updated: 2026-11-02
-checkpoint: 10
+checkpoint: 12
 repo: zdboi/coffee-shop-system (branch wip/cccc-online-qr)
 ---
 
@@ -14,7 +14,29 @@ It has three apps on one Supabase database:
 - **Back Office:** the owner's email login only.
 - **QR order page:** customers order from their phones and pay at the counter.
 
-## Where things stand (Nov 2): release 1.2 ready for me
+## Where things stand (Nov 2): release 1.3 ready for me
+- **1.2 is live** and saved as the **last working version** (checkpoint 11).
+- 1.3 is built in 3 waves (`docs/PLAN_1.3.md`). **Wave 1 "Opening day" is built, tested (3,414 checks, 0 failing) and security-reviewed** (checkpoint 12).
+- To publish it I follow `docs/RELEASE_1.3.md` (about 25 min): upload counters → backup → run `009_release_1_3.sql` → merge the pull request → reload → set up (sub-category order, QR cards, Xprinter).
+- **Start fresh** once, after the last test sale and before the first real sale (night before or morning of **Nov 8**), with all shifts closed.
+- **What's in Wave 1:**
+  - receipt printer (Xprinter 58 mm over Bluetooth, auto-print, cut, cash drawer);
+  - "Sarado pa po kami!" when no shift is open;
+  - QR ticket colours by stage and a pickup banner;
+  - sub-category order (drinks first) everywhere, and recipes grouped and coloured;
+  - out-of-stock check at payment;
+  - Customers tab sorting;
+  - retry without the reward;
+  - tick-and-remove ingredients;
+  - branded QR table cards;
+  - Start fresh.
+- With auto-print off, the receipt window no longer pops up after a sale; I tap **Print receipt** instead.
+- **Next:** Wave 2 (1.4, menu and inventory) and Wave 3 (1.5, QR accounts), only when I say so.
+
+## Earlier (Nov 2): release 1.2 is LIVE 🎉
+- I ran 008 and merged pull request #3. 1.2 is saved as the **last working version** (checkpoint 11).
+
+## Earlier (Nov 2): release 1.2 ready for me
 - **1.1 is live** (I ran 007 on Oct 29). It's saved as the **last working version**.
 - **Release 1.2 is built, tested (4,295 checks, twice) and security-reviewed.** To publish it, I follow `docs/RELEASE_1.2.md` (about 20 min):
   1. counters show "all saved";
@@ -95,6 +117,9 @@ It has three apps on one Supabase database:
 | Nov 2 | QR security and thermal printing go in **1.3**, after 1.2 ships |
 | Nov 2 | Out of stock at payment: staff **must remove** the item (counter sales too) |
 | Nov 2 | Existing QR customers get an auto **coffee-themed username** (e.g. "Mika the Coffee Devourer"), changeable later |
+| Nov 2 | 1.3 built in **3 waves**; Wave 1 "Opening day" first, plus **branded QR printouts**; no optional extras |
+| Nov 2 | Printer: **Xprinter 58 mm**, no print helper (iPad uses the print screen) |
+| Nov 2 | QR page is **closed** when no counter has an open shift; **Start fresh** once before Nov 8 |
 
 ## What got built and fixed
 - **Counter:**

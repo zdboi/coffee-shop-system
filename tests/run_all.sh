@@ -64,16 +64,16 @@ run_cmd(){ # name command [args...]
 echo "== test database (PostgreSQL 16 on :54329)"
 "$DIR/start_pg.sh" >/dev/null || { echo "test postgres did not start"; exit 1; }
 
-echo "== database: live order 004 -> 005 -> 006 -> 007 -> 008 on the live-schema copy (with live CHECK rules), installed twice"
+echo "== database: live order 004 -> 005 -> 006 -> 007 -> 008 -> 009 on the live-schema copy (with live CHECK rules), installed twice"
 t0=$SECONDS
 if "$DIR/reset_db.sh" "" "$DB" > "$LOGS/install-1.log" 2>&1; then
   ok2=1; : > "$LOGS/install-2.log"
-  for m in 004_cccc_online_qr.sql 005_live_fixes.sql 006_live_fix_sync_operations.sql 007_batch1.sql 008_release_1_2.sql; do
+  for m in 004_cccc_online_qr.sql 005_live_fixes.sql 006_live_fix_sync_operations.sql 007_batch1.sql 008_release_1_2.sql 009_release_1_3.sql; do
     $PSQL -v ON_ERROR_STOP=1 -q -f "$REPO/cccc/supabase/$m" >> "$LOGS/install-2.log" 2>&1 || { ok2=0; echo "second run of $m failed" >> "$LOGS/install-2.log"; break; }
   done
-  if [ $ok2 = 1 ]; then record "004..008 install (x2)" PASS 2 0 $((SECONDS-t0)) "$LOGS/install-2.log"
-  else record "004..008 install (x2)" FAIL 2 1 $((SECONDS-t0)) "$LOGS/install-2.log"; tail -3 "$LOGS/install-2.log"; fi
-else record "004..008 install (x2)" FAIL 1 1 $((SECONDS-t0)) "$LOGS/install-1.log"; tail -3 "$LOGS/install-1.log"; fi
+  if [ $ok2 = 1 ]; then record "004..009 install (x2)" PASS 2 0 $((SECONDS-t0)) "$LOGS/install-2.log"
+  else record "004..009 install (x2)" FAIL 2 1 $((SECONDS-t0)) "$LOGS/install-2.log"; tail -3 "$LOGS/install-2.log"; fi
+else record "004..009 install (x2)" FAIL 1 1 $((SECONDS-t0)) "$LOGS/install-1.log"; tail -3 "$LOGS/install-1.log"; fi
 run_sql_lines  sql/36_live_rules_tests "$DIR/sql/36_live_rules_tests.sql"   # CHECK rules now match live
 
 echo "== database behaviour suites (on the twice-installed database)"
@@ -98,6 +98,11 @@ run_sql_lines  sql/37_batch1_tests "$DIR/sql/37_batch1_tests.sql"               
 if $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/10_behaviour_tests.sql" > /dev/null 2>&1 && $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/11_qr_tests.sql" > /dev/null 2>&1; then
   run_sql_lines sql/38_release_1_2_tests "$DIR/sql/38_release_1_2_tests.sql"
 else record sql/38_release_1_2_tests FAIL 1 1 0 "$LOGS/sql_38_release_1_2_tests.log"; echo "      setup (10 + 11) failed"; fi
+"$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
+# 009 (release 1.3): same set-up as 38 (fresh database -> 10 -> 11 -> 39)
+if $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/10_behaviour_tests.sql" > /dev/null 2>&1 && $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/11_qr_tests.sql" > /dev/null 2>&1; then
+  run_sql_lines sql/39_release_1_3_tests "$DIR/sql/39_release_1_3_tests.sql"
+else record sql/39_release_1_3_tests FAIL 1 1 0 "$LOGS/sql_39_release_1_3_tests.log"; echo "      setup (10 + 11) failed"; fi
 
 echo "== unit checks (shared core)"
 run_node unit/core_check "$DIR/unit/core_check.js" "$REPO"
@@ -108,6 +113,8 @@ run_node unit/email_link_check "$DIR/unit/email_link_check.js" "$REPO"
 run_node unit/captcha_check "$DIR/unit/captcha_check.js" "$REPO"
 run_node unit/units_check "$DIR/unit/units_check.js" "$REPO"
 run_node unit/shift_reward_check "$DIR/unit/shift_reward_check.js" "$REPO"        # 1.2: shift summary with stamp rewards
+REPO="$REPO" run_node unit/printer_check "$DIR/unit/printer_check.js"             # 1.3: receipt printer (ESC/POS, Bluetooth / Serial fakes)
+REPO="$REPO" run_node unit/menu_stock_check "$DIR/unit/menu_stock_check.js"       # 1.3: sub-category order + cart stock check
 "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1          # parity check needs a shop (runs inside a rolled-back transaction)
 run_node unit/refund_parity_check "$DIR/unit/refund_parity_check.js" "$REPO" "$DB" 500
 run_node unit/loyalty_totals_check "$DIR/unit/loyalty_totals_check.js" "$REPO" "$DB" 1500   # 1.2: reward totals vs the 008 server (rolled back)
@@ -125,7 +132,9 @@ if [ "$BROWSER" = 1 ]; then
              "captcha.e2e:captcha.e2e.js:" \
              "fo_batch1.e2e:fo_batch1.e2e.js:" "bo_batch1.e2e:bo_batch1.e2e.js:" "bo_excel.e2e:bo_excel.e2e.js:" \
              "fo_release12.e2e:fo_release12.e2e.js:" "bo_release12.e2e:bo_release12.e2e.js:" "order_release12.e2e:order_release12.e2e.js:" \
-             "money12.e2e:money12.e2e.js:"; do
+             "money12.e2e:money12.e2e.js:" \
+             "fo_release13.e2e:fo_release13.e2e.js:" "bo_release13.e2e:bo_release13.e2e.js:" "order_release13.e2e:order_release13.e2e.js:" \
+             "bo_modal_race.e2e:bo_modal_race.e2e.js:"; do
       IFS=: read -r name file vp <<<"$t"
       "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1      # every browser suite starts from a fresh seed
       BO_VIEWPORT="${vp:-1280x900}" run_node "e2e/$name#$run" "$DIR/e2e/$file"

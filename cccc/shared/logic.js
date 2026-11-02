@@ -204,6 +204,9 @@ const DEVICE_DEFAULTS = {
 };
 const DEVICE_SETTINGS_KEY = 'cccc.device.settings';
 const SERVER_SETTING_KEYS = Object.keys(DEFAULT_SETTINGS);
+// Optional receipt settings read only when the server row has them (column names to be
+// confirmed for 009): the shop's TIN and an extra header line under the address.
+const RECEIPT_EXTRA_KEYS = ['business_tin', 'receipt_header'];
 
 function loadDeviceSettings(){
   try{ return Object.assign({}, DEVICE_DEFAULTS, JSON.parse(localStorage.getItem(DEVICE_SETTINGS_KEY)||'{}')); }
@@ -223,6 +226,11 @@ function setSettingsFromServer(row){
   // Sub-category tile colours (column added by 008). Kept out of DEFAULT_SETTINGS so a
   // full settings save never sends the column to a database that doesn't have it yet.
   s.subcategory_colors = cleanSubcategoryColors(row && row.subcategory_colors);
+  // Release 1.3 (009): the arranged sub-category list, same rule ([] when the column isn't there).
+  s.subcategory_order = cleanSubcategoryOrder(row && row.subcategory_order);
+  // Optional receipt lines (only when the database has these columns): kept out of
+  // DEFAULT_SETTINGS for the same reason. Missing -> '' (nothing printed).
+  RECEIPT_EXTRA_KEYS.forEach(k => { s[k] = (row && typeof row[k] === 'string') ? row[k] : ''; });
   // Stamp card: always a fresh, valid copy (a bad / missing value -> the default, like the server).
   s.loyalty_rewards = cleanLoyaltyRewards(s.loyalty_rewards);
   state.settings = Object.assign(s, loadDeviceSettings());
@@ -234,6 +242,9 @@ function serverSettingsRow(){
   // The counter's offline copy keeps the tile colours too (only when there are any).
   if(state.settings.subcategory_colors && Object.keys(state.settings.subcategory_colors).length)
     row.subcategory_colors = Object.assign({}, state.settings.subcategory_colors);
+  if(Array.isArray(state.settings.subcategory_order) && state.settings.subcategory_order.length)
+    row.subcategory_order = state.settings.subcategory_order.slice();
+  RECEIPT_EXTRA_KEYS.forEach(k => { if(state.settings[k]) row[k] = state.settings[k]; });
   row.updated_at = new Date().toISOString();
   return row;
 }
@@ -400,6 +411,57 @@ function inventoryLinesForSaleLine(recipeId, quantity, modifiers){
     if(m.ingredient_id && Number(m.ingredient_qty_delta)){
       out.push({ingredient_id: m.ingredient_id, quantity: Number(m.ingredient_qty_delta) * Number(quantity||0), kind:'modifier', label: m.label});
     }
+  });
+  return out;
+}
+
+/* ================= Stock check at payment (release 1.3, Q6) =================
+   Owner decision 2026-11-02: an item that has run out must be REMOVED before payment
+   (counter sales and QR orders alike; no "Add anyway?").
+   cartStockProblems(lines, stock?) -> [{line, index, recipe_id, name, sold_out,
+       short_ingredients: [{ingredient_id, name, needed, available}], alone_ok}]
+   - lines: cart lines {recipe_id, name, quantity, modifiers} (the counter's posState.cart,
+     or a QR order's items).
+   - Every line is turned into stock lines with inventoryLinesForSaleLine (recipe + option
+     extras, exactly what the sale will deduct), SUMMED over the whole cart per ingredient,
+     so two lattes share the milk. An ingredient is short when the cart needs more than
+     the counter's stock number by more than 0.001 of the base unit (state.stock;
+     missing = 0, same as the server's _recipe_makeable / 009 OUT_OF_STOCK rule).
+     Every line that uses a short ingredient is listed.
+     needed = what the WHOLE cart needs of it, available = stock now.
+   - A recipe marked sold out (recipes.sold_out) is always listed (sold_out: true).
+   - alone_ok: this line would fit the stock if it were the only line (helps the cashier
+     choose which line to remove); false for sold-out lines.
+   - stock: optional {ingredient_id: qty} instead of state.stock (tests, previews).
+   Returns [] when the cart can be paid. Lines keep their order; index = position in lines. */
+const STOCK_EPSILON = 0.001;   // same as the server's OUT_OF_STOCK check (009 _sale_stock_review)
+function cartStockProblems(lines, stock){
+  stock = stock || state.stock || {};
+  const have = (id) => Number(stock[id]) || 0;
+  const per = (lines || []).map(line => {
+    const sum = {};
+    if(line && line.recipe_id){
+      inventoryLinesForSaleLine(line.recipe_id, line.quantity, line.modifiers).forEach(l => {
+        sum[l.ingredient_id] = (sum[l.ingredient_id] || 0) + Math.abs(Number(l.quantity) || 0);   // a sale always takes |qty| off (signedQty)
+      });
+    }
+    return sum;
+  });
+  const total = {};
+  per.forEach(sum => Object.keys(sum).forEach(id => { total[id] = (total[id] || 0) + sum[id]; }));
+  const shortIds = new Set(Object.keys(total).filter(id => total[id] > 0 && total[id] - have(id) > STOCK_EPSILON));
+  const out = [];
+  (lines || []).forEach((line, index) => {
+    if(!line) return;
+    const rec = state.recipes.find(r => r.id === line.recipe_id);
+    const soldOut = !!(rec && rec.sold_out);
+    const short = Object.keys(per[index]).filter(id => per[index][id] > 0 && shortIds.has(id)).map(id => ({
+      ingredient_id: id, name: ingName(id), needed: _unitRound(total[id]), available: _unitRound(have(id)),
+    }));
+    if(!soldOut && !short.length) return;
+    const aloneOk = !soldOut && Object.keys(per[index]).every(id => !(per[index][id] > 0) || per[index][id] - have(id) <= STOCK_EPSILON);
+    out.push({line, index, recipe_id: line.recipe_id, name: line.name || (rec && rec.name) || '',
+      sold_out: soldOut, short_ingredients: short, alone_ok: aloneOk});
   });
   return out;
 }
@@ -930,6 +992,76 @@ function tileStyleVars(key){
     + (TILE_COLORS[key].light ? 'border-color:var(--tile-border-light);border-style:solid;border-width:1px;' : '');
 }
 
+/* ================= Sub-category order (release 1.3, A16) =================
+   settings.subcategory_order (009): the owner's arranged list of sub-category names.
+   Rule (owner): drinks sub-categories ALWAYS first, then pastry, then food, then the rest;
+   inside each block the owner's order; names not in the list go to the end of their
+   block, A to Z. The pure sorter is sortSubcategoryNames() in ui.js (the QR page has no
+   logic.js); these wrap it with the shop's recipes and settings. */
+// Keeps a clean list: text names, trimmed, 1..40 characters, each once (case-insensitive), at most 100
+// (the 009 database rule _valid_subcategory_order; the Back Office can save the result as it is).
+function cleanSubcategoryOrder(list){
+  if(typeof list === 'string'){ try{ list = JSON.parse(list); }catch(e){ list = null; } }
+  if(!Array.isArray(list)) return [];
+  const seen = new Set(), out = [];
+  list.forEach(n => {
+    if(typeof n !== 'string') return;
+    const t = n.trim();
+    const k = subcategoryKey(t);
+    if(!t || t.length > 40 || seen.has(k) || out.length >= 100) return;
+    seen.add(k); out.push(t);
+  });
+  return out;
+}
+// The shop's arranged list ([] when 009 isn't installed yet or nothing is arranged).
+function subcategoryOrder(settings){
+  const s = settings || (state && state.settings) || {};
+  return cleanSubcategoryOrder(s.subcategory_order);
+}
+// {sub-category name: recipe_type} for recipes (default: the shop's active recipes).
+// A sub-category's type = the type most of its items have; a tie goes to the type of
+// its first item (menu order: sort_order, then name).
+function subcategoryTypeMap(recipes){
+  const list = (recipes || state.recipes || []).filter(r => r && r.active !== false)
+    .slice().sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0) || String(a.name || '').localeCompare(String(b.name || '')));
+  const counts = Object.create(null), first = Object.create(null);   // no inherited keys ("constructor" is a name)
+  list.forEach(r => {
+    const name = posCategoryOf(r), t = recipeTypeOf(r);
+    counts[name] = counts[name] || Object.create(null);
+    counts[name][t] = (counts[name][t] || 0) + 1;
+    if(!(name in first)) first[name] = t;
+  });
+  const out = Object.create(null);
+  Object.keys(counts).forEach(name => {
+    let best = first[name], bestN = counts[name][best];
+    Object.keys(counts[name]).forEach(t => { if(counts[name][t] > bestN){ best = t; bestN = counts[name][t]; } });
+    out[name] = best;
+  });
+  return out;
+}
+function _subcategoryTypeOf(recipesOrTypes){
+  if(typeof recipesOrTypes === 'function') return recipesOrTypes;
+  const map = (recipesOrTypes && !Array.isArray(recipesOrTypes) && typeof recipesOrTypes === 'object')
+    ? recipesOrTypes : subcategoryTypeMap(Array.isArray(recipesOrTypes) ? recipesOrTypes : undefined);
+  const loose = Object.create(null);
+  Object.keys(map).forEach(k => { loose[subcategoryKey(k)] = map[k]; });
+  return (name) => Object.prototype.hasOwnProperty.call(map, name) ? map[name] : loose[subcategoryKey(name)];
+}
+// sortSubcategories(names, recipesOrTypes?) -> a new array in menu order.
+//   recipesOrTypes: recipe rows (default state.recipes), a {name: recipe_type} map, or a
+//   function name -> recipe_type. The order comes from state.settings.subcategory_order.
+function sortSubcategories(names, recipesOrTypes){
+  return sortSubcategoryNames(names, _subcategoryTypeOf(recipesOrTypes), subcategoryOrder());
+}
+// A number to sort by (smaller = earlier): block × 1000 + place in the owner's list
+// (999 when not listed; ties among unlisted names are broken A to Z by the sorter).
+function subcategoryRank(name, recipesOrTypes){
+  const typeOf = _subcategoryTypeOf(recipesOrTypes);
+  const order = subcategoryOrder().map(subcategoryKey);
+  const i = order.indexOf(subcategoryKey(name));
+  return subcategoryBlock(typeOf(name)) * 1000 + (i < 0 ? 999 : Math.min(i, 998));
+}
+
 /* ================= Google Drive backups (optional, per device) ================= */
 let gdriveAccessToken = null;
 const GDRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
@@ -1183,10 +1315,22 @@ function shiftDuration(shift){
 /* ================= Receipts (shared by Front Office + Back Office) ================= */
 // opts.rewardLabel: words of the stamp reward used (e.g. "₱10 off"), shown as
 // "Stamp reward: ₱10 off" when sale.loyalty_discount > 0 (else just "Stamp reward").
+// opts.paperWidth: 58 | 80 (release 1.3). Missing: this counter's printer setting when
+// printer.js is loaded (Printer.settings().paper_width), else 80 (the layout used before 1.3).
+// 58 mm: a narrower page (@page size 58mm) for small receipt printers in the print dialog.
 function receiptHtml(sale, items, payments, opts){
   opts = opts || {};
   const s = state.settings;
   const pay = (payments||[])[0] || {};
+  let paper = Number(opts.paperWidth);
+  if(paper !== 58 && paper !== 80){
+    try{ paper = (typeof Printer !== 'undefined' && Printer.settings) ? Number(Printer.settings().paper_width) : 80; }catch(e){ paper = 80; }
+    if(paper !== 58) paper = 80;
+  }
+  const printCss = paper === 58
+    ? `@page{size:58mm auto;margin:0;} body{width:200px;font-size:11.5px;}
+      @media print{ body{width:58mm;margin:0;padding:0 1.5mm;box-sizing:border-box;font-size:9.5px;} .biz{font-size:12.5px;} .small,.modline{font-size:8.5px;} .logo{width:34px;height:34px;} }`
+    : `@media print{ body{width:80mm;margin:0;font-size:11px;} }`;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt ${escapeHtml(sale.transaction_number||'')}</title>
     <style>
       body{font-family:'Courier New',monospace;width:300px;margin:20px auto;color:#111;font-size:12.5px;}
@@ -1196,13 +1340,15 @@ function receiptHtml(sale, items, payments, opts){
       .biz{font-weight:700;font-size:15px;} .small{font-size:11px;color:#555;}
       .items td{padding:2px 0;vertical-align:top;} table{width:100%;border-collapse:collapse;}
       .modline{font-size:10.5px;color:#555;padding-left:8px;}
-      @media print{ body{width:80mm;margin:0;font-size:11px;} }
-    </style></head><body>
+      ${printCss}
+    </style></head><body class="paper-${paper}">
     <div class="center">
       ${s.logo_url?`<img class="logo" src="${escapeHtml(s.logo_url)}">`:''}
       <div class="biz">${escapeHtml(businessName()||appDisplayName())}</div>
       ${s.business_address?`<div class="small">${escapeHtml(s.business_address)}</div>`:''}
       ${s.business_contact?`<div class="small">${escapeHtml(s.business_contact)}</div>`:''}
+      ${s.business_tin?`<div class="small">TIN: ${escapeHtml(s.business_tin)}</div>`:''}
+      ${s.receipt_header?`<div class="small">${escapeHtml(s.receipt_header)}</div>`:''}
     </div>
     <hr>
     <div class="row"><span>${escapeHtml(sale.transaction_number||'')}</span><span>${fmtDate(sale.transaction_date)}</span></div>

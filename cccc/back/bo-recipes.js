@@ -14,20 +14,22 @@
 const recFilter = {search: '', category: '', type: '', hidden: false};
 const recPicked = new Set();          // recipes ticked on the list (for "Remove selected")
 function renderRecipes(){
-  const bar = setTopbarActions(`<button class="btn btn-outline" id="btn-excel-import" type="button">Import from Excel</button>
-    <button class="btn btn-outline" id="btn-excel-export" type="button">Export to Excel</button>
-    <button class="btn btn-outline" id="btn-subcat-colors" type="button">Sub-category colours</button>
-    <button class="btn btn-primary" id="btn-new-recipe">+ New recipe</button>`);
+  // Only "+ New recipe" sits in the top bar (so the page title stays visible); the menu tools are
+  // in a row at the top of the page (same button ids as before).
+  const bar = setTopbarActions(`<button class="btn btn-primary" id="btn-new-recipe">+ New recipe</button>`);
   bar.querySelector('#btn-new-recipe').onclick = () => openRecipeForm();
-  bar.querySelector('#btn-subcat-colors').onclick = () => openSubcategoryColors();
-  const imp = bar.querySelector('#btn-excel-import'), exp = bar.querySelector('#btn-excel-export');
-  imp.onclick = () => busy(imp, () => startExcelImport(), 'Opening…');
-  exp.onclick = () => busy(exp, () => exportRecipesToExcel(), 'Preparing…');
   const content = document.getElementById('content');
-  const cats = [...new Set(state.recipes.map(r => r.category).filter(Boolean))].sort();
+  const cats = sortSubcategories([...new Set(state.recipes.map(r => r.category).filter(Boolean))]);
   const activeRecipes = state.recipes.filter(r => r.active !== false);
   const typeTabs = [{id: '', label: 'All'}, ...RECIPE_TYPES];
   content.innerHTML = `
+    <div class="rec-tools" role="group" aria-label="Menu tools">
+      <button class="btn btn-sm btn-outline" id="btn-subcat-order" type="button">Arrange sub-categories</button>
+      <button class="btn btn-sm btn-outline" id="btn-subcat-colors" type="button">Sub-category colours</button>
+      <span class="rec-tools-gap" aria-hidden="true"></span>
+      <button class="btn btn-sm btn-ghost" id="btn-excel-import" type="button">${icon('upload', {size: 16})} Import from Excel</button>
+      <button class="btn btn-sm btn-ghost" id="btn-excel-export" type="button">${icon('download', {size: 16})} Export to Excel</button>
+    </div>
     <div class="toolbar-left" style="margin-bottom:14px;flex-wrap:wrap;">
       ${typeTabs.map(t => {
         const count = t.id ? activeRecipes.filter(r => recipeTypeOf(r) === t.id).length : activeRecipes.length;
@@ -47,6 +49,11 @@ function renderRecipes(){
       <button class="btn btn-sm btn-danger" id="rec-remove-picked" type="button" disabled>Remove selected (0)</button>
     </div>
     <div id="rec-grid-wrap"></div>`;
+  content.querySelector('#btn-subcat-colors').onclick = () => openSubcategoryColors();
+  content.querySelector('#btn-subcat-order').onclick = () => openSubcategoryOrder();
+  const imp = content.querySelector('#btn-excel-import'), exp = content.querySelector('#btn-excel-export');
+  imp.onclick = () => busy(imp, () => startExcelImport(), 'Opening…');
+  exp.onclick = () => busy(exp, () => exportRecipesToExcel(), 'Preparing…');
   document.getElementById('rec-pick-all').onchange = (e) => {
     recShownIds().forEach(id => { if(e.target.checked) recPicked.add(id); else recPicked.delete(id); });
     renderRecipesGrid();
@@ -64,7 +71,22 @@ function recShownList(){
   if(recFilter.type) list = list.filter(r => recipeTypeOf(r) === recFilter.type);
   if(recFilter.search) list = list.filter(r => r.name.toLowerCase().includes(recFilter.search.toLowerCase()));
   if(recFilter.category) list = list.filter(r => r.category === recFilter.category);
-  return list.sort(byName);
+  return list.sort(recMenuOrder);
+}
+// Inside a sub-category: the counter's order (sort order, then name).
+function recMenuOrder(a, b){ return num(a.sort_order) - num(b.sort_order) || byName(a, b); }
+// The shown recipes grouped under their sub-category (posCategoryOf, like the counter), groups in
+// menu order (sortSubcategories: drinks first, then pastry, food, the rest; the owner's arranged order).
+function recGroups(list){
+  const groups = new Map();
+  list.forEach(r => {
+    const name = posCategoryOf(r), k = subcategoryKey(name);
+    if(!groups.has(k)) groups.set(k, {name, items: []});
+    groups.get(k).items.push(r);
+  });
+  const byKey = {};
+  groups.forEach((g, k) => { byKey[g.name] = g; });
+  return sortSubcategories(Object.keys(byKey)).map(n => byKey[n]);
 }
 function recShownIds(){ return recShownList().map(r => r.id); }
 // Ticks only count for recipes that are shown; the bar shows how many are ticked.
@@ -87,7 +109,7 @@ function renderRecipesGrid(){
   }
   const warnPct = num(state.settings.food_cost_warning_pct) || 35;
   const mini = (label, value, cls) => `<div><div class="text-light" style="font-size:11px;text-transform:uppercase;">${label}</div><b class="${cls || ''}">${value}</b></div>`;
-  wrap.innerHTML = `<div class="grid grid-3">${list.map(r => {
+  const card = (r) => {
     const m = recipeMetrics(r);
     const sellsDirectly = num(r.selling_price) > 0;
     const warn = m.foodCostPct > warnPct;
@@ -102,18 +124,39 @@ function renderRecipesGrid(){
       sellsDirectly && r.pos_visible === false ? '<span class="badge badge-gray">Not at counter</span>' : '',
       sellsDirectly && r.qr_visible === false ? '<span class="badge badge-gray">Not on QR</span>' : '',
     ].join('');
-    return `<div class="card clickable rec-card ${recPicked.has(r.id) ? 'picked' : ''}" data-id="${esc(r.id)}" style="cursor:pointer;" tabindex="0">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
-        <div style="display:flex;gap:10px;align-items:center;min-width:0;">
-          <label class="rec-tick" title="Select for removing"><input type="checkbox" data-pick="${esc(r.id)}" ${recPicked.has(r.id) ? 'checked' : ''} aria-label="Select ${esc(r.name)}"></label>
-          ${r.image_url ? `<img class="thumb" src="${esc(r.image_url)}" alt="">` : ''}
-          <div style="min-width:0;"><b style="font-size:16px;">${esc(r.name)}</b><div class="text-light" style="font-size:12px;">${tileColorKeyFor(posCategoryOf(r)) ? `<span class="rec-sub-dot" style="${tileStyleVars(tileColorKeyFor(posCategoryOf(r)))}" aria-hidden="true"></span>` : ''}${esc(recipeTypeLabel(recipeTypeOf(r)))}${r.category ? ' · ' + esc(r.category) : ''}${(r.modifier_groups || []).length ? ' · ' + plural(r.modifier_groups.length, 'option group') : ''}</div></div>
-        </div>
-        <div class="pill-stack" style="justify-content:flex-end;">${flags}</div>
+    const key = tileColorKeyFor(posCategoryOf(r));
+    return `<div class="card clickable rec-card ${key ? 'tinted' : ''} ${recPicked.has(r.id) ? 'picked' : ''}" data-id="${esc(r.id)}" style="cursor:pointer;" tabindex="0">
+      <div class="rec-card-head" ${key ? `style="${tileStyleVars(key)}"` : ''}>
+        <label class="rec-tick" title="Select for removing"><input type="checkbox" data-pick="${esc(r.id)}" ${recPicked.has(r.id) ? 'checked' : ''} aria-label="Select ${esc(r.name)}"></label>
+        ${r.image_url ? `<img class="thumb" src="${esc(r.image_url)}" alt="">` : ''}
+        <div style="min-width:0;"><b class="rec-name">${esc(r.name)}</b><div class="rec-sub">${esc(recipeTypeLabel(recipeTypeOf(r)))}${r.category ? ' · ' + esc(r.category) : ''}${(r.modifier_groups || []).length ? ' · ' + plural(r.modifier_groups.length, 'option group') : ''}</div></div>
       </div>
-      <div style="display:flex;justify-content:space-between;gap:8px;margin-top:14px;font-size:13.5px;">${stats}</div>
+      ${flags ? `<div class="pill-stack rec-flags">${flags}</div>` : ''}
+      <div class="rec-stats">${stats}</div>
     </div>`;
-  }).join('')}</div>`;
+  };
+  wrap.innerHTML = recGroups(list).map(g => {
+    const key = tileColorKeyFor(g.name);
+    const ids = g.items.map(r => r.id);
+    const allPicked = ids.every(id => recPicked.has(id)), somePicked = ids.some(id => recPicked.has(id));
+    return `<section class="rec-group" data-group="${esc(g.name)}">
+      <div class="rec-group-head">
+        <label class="rec-tick" title="Select all in ${esc(g.name)}"><input type="checkbox" data-pick-group="${esc(g.name)}" ${allPicked ? 'checked' : ''} ${!allPicked && somePicked ? 'data-some="1"' : ''} aria-label="Select all in ${esc(g.name)}"></label>
+        <span class="rec-group-chip" ${key ? `style="${tileStyleVars(key)}"` : ''}>${esc(g.name)}</span>
+        <span class="rec-group-count">${esc(plural(g.items.length, 'recipe'))}</span>
+      </div>
+      <div class="grid grid-3">${g.items.map(card).join('')}</div>
+    </section>`;
+  }).join('');
+  wrap.querySelectorAll('[data-some]').forEach(b => { b.indeterminate = true; });
+  wrap.querySelectorAll('[data-pick-group]').forEach(box => {
+    box.onchange = () => {
+      const g = recGroups(recShownList()).find(x => x.name === box.dataset.pickGroup);
+      if(!g) return;
+      g.items.forEach(r => { if(box.checked) recPicked.add(r.id); else recPicked.delete(r.id); });
+      renderRecipesGrid();
+    };
+  });
   wrap.querySelectorAll('[data-id]').forEach(card => {
     card.onclick = (e) => { if(e.target.closest('.rec-tick')) return; navigate('recipeDetail', card.dataset.id); };
     card.onkeydown = (e) => { if(e.key === 'Enter' && !e.target.closest('.rec-tick')) navigate('recipeDetail', card.dataset.id); };
@@ -123,6 +166,11 @@ function renderRecipesGrid(){
     box.onchange = () => {
       if(box.checked) recPicked.add(box.dataset.pick); else recPicked.delete(box.dataset.pick);
       box.closest('.rec-card').classList.toggle('picked', box.checked);
+      const sec = box.closest('.rec-group'), gb = sec && sec.querySelector('[data-pick-group]');
+      if(gb){
+        const all = [...sec.querySelectorAll('[data-pick]')];
+        gb.checked = all.every(x => x.checked); gb.indeterminate = !gb.checked && all.some(x => x.checked);
+      }
       refreshPickBar();
     };
   });
@@ -184,6 +232,131 @@ function openSubcategoryColors(){
         const named = list.filter(x => draft[x.name]).map(x => `${x.name}: ${TILE_COLORS[draft[x.name]].label}`);
         const ok = await boSave([Ops.update('settings', {subcategory_colors: map, updated_at: nowISO()}),
           Ops.audit('Sub-category colours saved', named.join(', ') || 'all plain')], {success: 'Colours saved — counters show them within a few minutes'});
+        if(ok){ closeModal(); if(state.route === 'recipes') renderRecipes(); }
+      });
+    }});
+}
+
+/* ---- sub-category order (release 1.3, owner item A16) ----
+   The owner arranges the sub-categories inside three blocks: Drinks, then Pastry, then Food
+   (+ Other: sauces / syrups and anything else). Drinks always come first and an item can't move
+   to another block (its block comes from its recipes' type). Saved once for the shop as
+   settings.subcategory_order (a list of names) with apply_changes; the counter, the QR page and
+   the Recipes list all sort with the shared sortSubcategories(). */
+const SUBCAT_BLOCKS = [
+  {id: 0, label: 'Drinks', hint: 'Always first on the menu.'},
+  {id: 1, label: 'Pastry', hint: 'After the drinks.'},
+  {id: 2, label: 'Food', hint: 'After the pastries.'},
+  {id: 3, label: 'Other', hint: 'Sauces, syrups and anything else: last.'},
+];
+// [{name, block, items, onMenu}] for every sub-category of the active recipes, in today's menu order.
+function subcategoriesForOrder(){
+  const seen = new Map();
+  state.recipes.filter(r => r.active !== false).forEach(r => {
+    const name = posCategoryOf(r), k = subcategoryKey(name);
+    if(!name) return;
+    if(!seen.has(k)) seen.set(k, {name, items: 0, onMenu: 0});
+    const x = seen.get(k); x.items++;
+    if(num(r.selling_price) > 0) x.onMenu++;
+  });
+  const types = subcategoryTypeMap();
+  const named = {};
+  seen.forEach(x => { named[x.name] = x; });
+  return sortSubcategories(Object.keys(named)).map(n => Object.assign(named[n], {block: subcategoryBlock(types[n])}));
+}
+function openSubcategoryOrder(){
+  const all = subcategoriesForOrder();
+  const blocks = SUBCAT_BLOCKS.map(b => ({b, list: all.filter(x => x.block === b.id)})).filter(x => x.list.length);
+  const tile = (name) => { const k = tileColorKeyFor(name); return k ? tileStyleVars(k) : ''; };
+  const rowHtml = (x, i, n) => `<li class="so-row" draggable="true" data-so="${esc(x.name)}" tabindex="-1">
+      <span class="so-grip" aria-hidden="true">⋮⋮</span>
+      <span class="so-chip" style="${tile(x.name)}">${esc(x.name)}</span>
+      <span class="so-count">${esc(plural(x.items, 'recipe'))}${x.onMenu < x.items ? ` · ${x.onMenu} on the menu` : ''}</span>
+      <span class="so-move">
+        <button class="btn btn-sm btn-ghost" type="button" data-so-up ${i === 0 ? 'disabled' : ''} aria-label="Move ${esc(x.name)} up">${icon('chevron-down', {size: 18, className: 'so-up-ic'})}</button>
+        <button class="btn btn-sm btn-ghost" type="button" data-so-down ${i === n - 1 ? 'disabled' : ''} aria-label="Move ${esc(x.name)} down">${icon('chevron-down', {size: 18})}</button>
+      </span></li>`;
+  const blockHtml = (bk) => `<div class="so-block" data-block="${bk.b.id}">
+      <div class="so-block-head"><b>${esc(bk.b.label)}</b> <span class="text-light">${esc(bk.b.hint)}</span></div>
+      <ol class="so-list" data-block-list="${bk.b.id}" aria-label="${esc(bk.b.label)} sub-categories">${bk.list.map((x, i) => rowHtml(x, i, bk.list.length)).join('')}</ol></div>`;
+  const previewHtml = () => `<div class="so-preview-row">${blocks.flatMap(bk => bk.list).map(x => `<span class="so-chip" style="${tile(x.name)}">${esc(x.name)}</span>`).join('')}</div>`;
+  openModal({title: 'Arrange sub-categories', wide: true, body: all.length ? `
+    <p class="hint" style="margin-top:0;">Drag the sub-categories (or use the arrows) to set their order on the counter's menu, the QR page and the Recipes list. Drinks always come first, then pastries, then food: you arrange them inside each block. A new sub-category goes to the end of its block until you move it.</p>
+    <div id="so-blocks">${blocks.map(blockHtml).join('')}</div>
+    <div class="so-preview"><div class="so-block-head"><b>How the counter will show them</b></div><div id="so-preview">${previewHtml()}</div></div>`
+    : emptyLine('No sub-categories yet. Give recipes a sub-category in the recipe form first.'),
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button>${all.length ? '<button class="btn btn-primary" id="so-save">Save order</button>' : ''}`,
+    onMount: (root) => {
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      if(!all.length) return;
+      const wrap = root.querySelector('#so-blocks');
+      const redraw = (focusName, focusSel) => {
+        wrap.innerHTML = blocks.map(blockHtml).join('');
+        root.querySelector('#so-preview').innerHTML = previewHtml();
+        if(focusName){
+          const row = [...wrap.querySelectorAll('[data-so]')].find(r => r.dataset.so === focusName);
+          const btn = row && (row.querySelector(focusSel + ':not([disabled])') || row.querySelector('button:not([disabled])'));
+          if(btn) btn.focus();
+        }
+      };
+      const findBlock = (name) => blocks.find(bk => bk.list.some(x => x.name === name));
+      const move = (name, by) => {
+        const bk = findBlock(name); if(!bk) return;
+        const i = bk.list.findIndex(x => x.name === name), j = i + by;
+        if(j < 0 || j >= bk.list.length) return;
+        const [x] = bk.list.splice(i, 1); bk.list.splice(j, 0, x);
+        redraw(name, by < 0 ? '[data-so-up]' : '[data-so-down]');
+      };
+      wrap.addEventListener('click', (e) => {
+        const up = e.target.closest('[data-so-up]'), down = e.target.closest('[data-so-down]');
+        const row = e.target.closest('[data-so]');
+        if(row && up) move(row.dataset.so, -1);
+        if(row && down) move(row.dataset.so, 1);
+      });
+      // drag and drop (mouse / pen); stays inside its own block
+      let dragName = null;
+      wrap.addEventListener('dragstart', (e) => {
+        const row = e.target.closest('[data-so]'); if(!row) return;
+        dragName = row.dataset.so; row.classList.add('dragging');
+        try{ e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragName); }catch(err){}
+      });
+      wrap.addEventListener('dragend', () => { dragName = null; wrap.querySelectorAll('.dragging,.drop-before,.drop-after').forEach(n => n.classList.remove('dragging', 'drop-before', 'drop-after')); });
+      const target = (e) => {
+        const row = e.target.closest('[data-so]');
+        if(!dragName || !row || row.dataset.so === dragName) return null;
+        const from = findBlock(dragName), to = findBlock(row.dataset.so);
+        if(!from || from !== to) return null;          // never across blocks
+        const r = row.getBoundingClientRect();
+        return {row, after: e.clientY > r.top + r.height / 2, bk: from};
+      };
+      wrap.addEventListener('dragover', (e) => {
+        wrap.querySelectorAll('.drop-before,.drop-after').forEach(n => n.classList.remove('drop-before', 'drop-after'));
+        const t = target(e); if(!t) return;
+        e.preventDefault();
+        t.row.classList.add(t.after ? 'drop-after' : 'drop-before');
+      });
+      wrap.addEventListener('drop', (e) => {
+        const t = target(e); if(!t) return;
+        e.preventDefault();
+        const list = t.bk.list;
+        const [x] = list.splice(list.findIndex(y => y.name === dragName), 1);
+        let j = list.findIndex(y => y.name === t.row.dataset.so);
+        if(t.after) j++;
+        list.splice(j, 0, x);
+        const name = dragName; dragName = null;
+        redraw(name);
+      });
+      const save = root.querySelector('#so-save');
+      save.onclick = () => busy(save, async () => {
+        const names = blocks.flatMap(bk => bk.list.map(x => x.name.trim()));
+        const long = names.find(n => n.length > 40);
+        if(long){ toast(`"${long}" is longer than 40 characters, so it can't be arranged. Shorten the sub-category name first.`, 'error'); return; }
+        // names arranged earlier but not in use now are kept at the end (they return to their place in their block)
+        const shown = new Set(names.map(subcategoryKey));
+        if(names.length > 100){ toast('Up to 100 sub-categories can be arranged', 'error'); return; }
+        const order = cleanSubcategoryOrder(names.concat(subcategoryOrder().filter(n => !shown.has(subcategoryKey(n)))));
+        const ok = await boSave([Ops.update('settings', {subcategory_order: order, updated_at: nowISO()}),
+          Ops.audit('Sub-category order saved', names.join(' → '))], {success: 'Order saved. Counters show it within a few minutes'});
         if(ok){ closeModal(); if(state.route === 'recipes') renderRecipes(); }
       });
     }});

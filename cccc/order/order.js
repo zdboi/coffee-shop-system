@@ -23,7 +23,12 @@
     orderType: 'DINE_IN', note: '', justRegistered: false, pollTimer: null,
     ticketAlert: null,   // {id, text}: a problem with cancelling, shown under the ticket's buttons
     signIn: null, signInErr: '', signInPromise: null,   // first sign-in with the person check (beginSignIn)
+    readyHidden: new Set(),   // READY orders whose "ready for pickup" banner was closed (until reload)
   };
+  // Release 1.3 (A7): the shop takes QR orders only while a counter has an open shift.
+  // get_qr_menu says so in is_open (missing on an older database = open).
+  function isOpen(){ return !(S.menu && S.menu.is_open === false); }
+  function reducedMotion(){ try{ return matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){ return false; } }
 
   /* ---------------- helpers ---------------- */
   const $ = (sel, root) => (root || document).querySelector(sel);
@@ -73,6 +78,9 @@
     ORDER_TOO_BIG: 'That order is too big for the app. Please order at the counter.',
     CANNOT_CANCEL: 'The shop already started this order, so it can\'t be cancelled here. Please talk to our staff.',
     NOT_SIGNED_IN: 'Your phone isn\'t connected. Reload the page and try again.',
+    // qr_place_order (1.3): the last shift closed while the customer was ordering. The page
+    // then shows the closed screen; the cart stays on this phone.
+    SHOP_CLOSED: 'Sorry, we just closed. Your order is saved on this phone for when we open again.',
     // The optional "are you a person" check before a new phone's first sign-in (Captcha).
     CAPTCHA_FAILED: 'We couldn\'t confirm you\'re a person. Check your internet and try again.',
   };
@@ -206,7 +214,8 @@
     S.menu = menu;
     if(menu.table.kind === 'TAKEAWAY') S.orderType = 'TAKEAWAY';
     applyTheme(menu);
-    S.cart = loadCart().filter(l => itemById(l.recipe_id));
+    // Closed: the menu has no items, so keep the saved cart as it is until the shop opens.
+    S.cart = isOpen() ? loadCart().filter(l => itemById(l.recipe_id)) : loadCart();
     // A new phone with the person check switched on: show the welcome screen first and sign in
     // while the customer types their name (see beginSignIn). There's no customer or order yet.
     let signInLater = false;
@@ -235,7 +244,38 @@
     render();
     if(signInLater) beginSignIn();
     schedulePoll();
+    setInterval(() => { if(!document.hidden) checkMenu(); }, 120000);
   }
+
+  /* ---------------- open / closed (release 1.3, A7) ---------------- */
+  // Fetch the menu again (light: one call). Used every 2 minutes, when the page comes back,
+  // and after a "sold out / menu changed" answer. Opening or closing redraws the page.
+  let lastCheck = 0;
+  async function checkMenu(){
+    lastCheck = Date.now();
+    let m;
+    try{ m = await cloud.rpc('get_qr_menu', {p_token: token}); }catch(e){ return; }
+    if(!m || m.error || !S.menu) return;
+    const was = isOpen();
+    S.menu = m;
+    const now = isOpen();
+    if(was && !now) onClosed();
+    else if(!was && now){
+      S.cart = loadCart().filter(l => itemById(l.recipe_id));
+      render();
+      toast('We\'re open! You can order now.');
+      return;
+    }
+    render(true);
+  }
+  // The shop closed while the page was open: no more ordering. An item or cart sheet closes
+  // (the cart itself stays saved on this phone); a ticket stays on screen.
+  function onClosed(){
+    const root = $('#sheet-root');
+    if(root.dataset.kind === 'order') closeSheet();
+    if(S.view !== 'order') window.scrollTo({top: 0});
+  }
+  window.addEventListener('focus', () => { if(S.menu && Date.now() - lastCheck > 15000) checkMenu(); });
 
   /* ---------------- first sign-in with the optional person check ---------------- */
   // With CCCC_CONFIG.CAPTCHA_SITE_KEY empty, Captcha.enabled() is false and nothing here runs:
@@ -302,9 +342,9 @@
   }
   function onStatusChange(o){
     if(o.status === 'READY'){
+      // The banner at the top says it too (renderBanner); buzz once, unless reduced motion.
       toast(`${o.order_number} is ready!`);
-      try{ navigator.vibrate && navigator.vibrate([200, 100, 200]); }catch(e){}
-      document.title = `Ready: ${o.order_number} — ${shop()}`;
+      if(!reducedMotion()){ try{ navigator.vibrate && navigator.vibrate(200); }catch(e){} }
     } else if(o.status === 'PREPARING') toast(`${o.order_number} is being prepared`);
     else if(o.status === 'REJECTED') toast(`Sorry, we couldn't take ${o.order_number}`, true);
   }
@@ -318,7 +358,9 @@
     }, 5000);
   }
   document.addEventListener('visibilitychange', async () => {
-    if(!document.hidden && S.canOrder && S.menu){ await loadOrders(); render(true); schedulePoll(); }
+    if(document.hidden || !S.menu) return;
+    if(Date.now() - lastCheck > 15000) checkMenu();
+    if(S.canOrder){ await loadOrders(); render(true); schedulePoll(); }
   });
 
   /* ---------------- rendering ---------------- */
@@ -333,15 +375,84 @@
   let lastScreen = '';
   function render(quiet){
     if(!S.menu) return;
-    const screen = S.view === 'order' ? 'order:' + S.orderId : (S.canOrder && !S.customer ? 'welcome' : 'menu');
+    const closed = !isOpen();
+    const join = S.canOrder && !S.customer;
+    const screen = S.view === 'order' ? 'order:' + S.orderId
+      : closed ? (join ? 'closed-join' : 'closed') : (join ? 'welcome' : 'menu');
     const changed = screen !== lastScreen;
     if(changed){ hideToast(); S.ticketAlert = null; lastScreen = screen; }
     if(S.view === 'order') renderTicket();
     // The welcome form doesn't depend on orders: never wipe what the customer is typing.
-    else if(screen === 'welcome'){ if(changed || !quiet) renderWelcome(); }
+    else if(screen === 'welcome' || screen === 'closed-join'){ if(changed || !quiet) renderWelcome(closed); }
+    else if(screen === 'closed') renderClosed(quiet);
     else renderMenu(quiet);
     renderBottom();
+    renderBanner();
   }
+
+  /* ---------------- closed screen (release 1.3, A7) ----------------
+     No counter has an open shift: no menu, no cart, no ordering. The customer can still
+     see their stamp card, join, or connect this phone ("I've ordered here before"). */
+  function closedHeroHtml(){
+    const custom = isCustomTheme(S.menu);
+    const settings = {theme: custom ? 'CUSTOM' : 'CCCC', business_name: S.menu.business.name, logo_url: S.menu.business.logo_url};
+    const mark = window.brandLogo ? brandLogo('mark', settings) : null;
+    const word = window.brandWordmark ? brandWordmark('cream', settings) : null;
+    const name = S.menu.business.name || 'Cavite City Coffee Club';
+    const logo = (mark && (!custom || mark.custom))
+      ? `<img class="closed-mark" src="${esc(mark.src)}" alt="" width="88" height="88" decoding="async">` : '';
+    const wordmark = (word && word.src)
+      ? `<img class="closed-wordmark" src="${esc(word.src)}" alt="${esc(word.alt)}" width="190" height="80" decoding="async">`
+      : `<p class="closed-name">${esc(name)}</p>`;
+    const n = S.cart.reduce((t, l) => t + (Number(l.quantity) || 0), 0);
+    return `<section class="closed" id="closed" aria-labelledby="closed-title">
+      ${logo}${wordmark}
+      <div class="closed-sign">
+        <h1 class="disp closed-title" id="closed-title">Sarado pa po kami!</h1>
+        <p class="closed-line">We're closed right now. Come back when we're open!</p>
+      </div>
+      ${n ? `<p class="closed-cart">${ico('receipt', {size: 18})}<span>Your order (${n} ${n === 1 ? 'item' : 'items'}) is saved on this phone for when we open.</span></p>` : ''}
+    </section>`;
+  }
+  function openOrdersHtml(){
+    const open = S.orders.filter(o => ['PENDING','PREPARING','READY'].includes(o.status) || (Date.now() - new Date(o.created_at).getTime() < 3600e3 && o.status !== 'CANCELLED'));
+    return open.length ? `<div class="my-orders">${open.map(o => `<button class="my-order" data-order="${esc(o.id)}"><span><b>${esc(o.order_number)}</b> &nbsp;${money(o.total)}</span>${statusPill(o)}</button>`).join('')}</div>` : '';
+  }
+  function wireOpenOrders(){
+    document.querySelectorAll('[data-order]').forEach(b => b.onclick = () => { S.view = 'order'; S.orderId = b.dataset.order; render(); window.scrollTo({top: 0}); });
+  }
+  function renderClosed(quiet){
+    const y = window.scrollY;
+    $('#main').innerHTML = `${closedHeroHtml()}${openOrdersHtml()}${S.customer ? memberCardHtml() : ''}`;
+    wireOpenOrders();
+    const nm = $('#not-me'); if(nm) nm.onclick = notMe;
+    if(quiet) window.scrollTo({top: y});
+  }
+
+  /* ---------------- "ready for pickup" banner (release 1.3, A5) ----------------
+     Every order (dine-in too) is picked up at the counter. While an order is READY a banner
+     sits under the top bar on every screen. Closing it hides it until the page reloads. */
+  function renderBanner(){
+    const el = $('#ready-banner');
+    if(!el) return;
+    const ready = S.orders.filter(o => o.status === 'READY');
+    const show = ready.filter(o => !S.readyHidden.has(o.id));
+    document.title = ready.length ? `Ready: ${ready.map(o => o.order_number).join(', ')} — ${shop()}` : 'Order — ' + shop();
+    const nums = show.map(o => o.order_number);
+    const html = show.length ? `<div class="ready-inner">
+        <span class="ready-ico" aria-hidden="true">${ico('check', {size: 22})}</span>
+        <p class="ready-text"><b>Ready for pickup at the counter</b><span> — ${nums.length === 1 ? 'Order' : 'Orders'} ${esc(joinAnd(nums))}</span></p>
+        <button class="ready-x" id="ready-x" type="button" aria-label="Hide this message">${ico('x', {size: 22})}</button>
+      </div>` : '';
+    if(el._html !== html){
+      el.innerHTML = html; el._html = html;
+      el.hidden = !show.length;
+      const x = $('#ready-x');
+      if(x) x.onclick = () => { show.forEach(o => S.readyHidden.add(o.id)); renderBanner(); };
+    }
+    document.documentElement.style.setProperty('--banner-h', (el.hidden ? 0 : el.offsetHeight) + 'px');
+  }
+  window.addEventListener('resize', () => { const el = $('#ready-banner'); if(el) document.documentElement.style.setProperty('--banner-h', (el.hidden ? 0 : el.offsetHeight) + 'px'); });
 
   function memberCardHtml(){
     const c = S.customer;
@@ -394,7 +505,9 @@
     const next = (card.milestones || []).find(m => m.status === 'locked' && m.stamp > n);
     if(next){
       const left = next.stamp - n;
-      const txt = n === 0 ? `Get your first stamp with today's order. ${left} to ${rewardName(next)}.`
+      // Closed (1.3): there's no "today's order" to stamp.
+      const first = isOpen() ? 'Get your first stamp with today\'s order.' : 'Get your first stamp on your next visit.';
+      const txt = n === 0 ? `${first} ${left} to ${rewardName(next)}.`
         : `${left} more ${left === 1 ? 'stamp' : 'stamps'} to ${rewardName(next)}.`;
       return {line: `${of} · ${txt}`, sr: `${of} stamps. ${txt}`};
     }
@@ -445,14 +558,25 @@
     }catch(e){}
   }
 
-  function renderWelcome(){
+  // closed (1.3): the shop is closed. Same form under the closed sign, without the menu:
+  // the customer can still join the stamp card or connect this phone.
+  function renderWelcome(closed){
     // Keep a person check that is still running (its box holds the check's own frame).
     const runningBox = S.signIn === 'pending' ? $('#w-captcha-box') : null;
+    // Keep what the customer typed when the page redraws (e.g. the shop opens or closes).
+    const kept = {name: ($('#w-name') || {}).value, phone: ($('#w-phone') || {}).value, consent: ($('#w-consent') || {}).checked};
+    const goLabel = closed ? 'Join the stamp card' : 'Start ordering';
+    const joinCopy = closed
+      ? (S.menu.loyalty_enabled
+        ? `<h2 class="disp">Collect stamps next time</h2><p>Save your name now, and we'll greet you and add your stamps when you order.</p>`
+        : `<h2 class="disp">Save your name</h2><p>Save your name now, and we'll greet you by name when you order.</p>`)
+      : `<h1 class="disp">What should we call you?</h1>
+        <p>We'll use this name when your order is ready, and greet you by name next time.</p>`;
     $('#main').innerHTML = `
+      ${closed ? closedHeroHtml() + openOrdersHtml() : ''}
       ${joinCardHtml()}
       <div class="welcome-copy">
-        <h1 class="disp">What should we call you?</h1>
-        <p>We'll use this name when your order is ready, and greet you by name next time.</p>
+        ${joinCopy}
       </div>
       <div class="field"><label for="w-name">Name or nickname</label>
         <input class="input" id="w-name" maxlength="30" autocomplete="nickname" autocapitalize="words" enterkeyhint="next"></div>
@@ -467,10 +591,13 @@
         <div class="captcha-box" id="w-captcha-box"></div>
         <div id="w-captcha-fail"></div>
       </div>
-      <button class="btn btn-main" id="w-go">Start ordering</button>
+      <button class="btn btn-main" id="w-go" data-label="${esc(goLabel)}">${esc(goLabel)}</button>
       <p class="center"><button class="textlink" id="w-relink">I've ordered here before on another phone</button></p>
-      ${menuHtml(true)}`;
+      ${closed ? '' : menuHtml(true)}`;
     const name = $('#w-name'), preview = $('#w-preview');
+    if(kept.name) name.value = kept.name;
+    if(kept.phone) $('#w-phone').value = kept.phone;
+    if(kept.consent) $('#w-consent').checked = true;
     name.oninput = () => {
       const v = name.value.trim();
       preview.textContent = v || 'there';
@@ -479,7 +606,8 @@
     $('#w-phone').oninput = () => { $('#w-help').innerHTML = ''; };
     $('#w-go').onclick = register;
     $('#w-relink').onclick = () => openRelinkSheet();
-    wireMenu();
+    if(closed) wireOpenOrders(); else wireMenu();
+    if(kept.name) name.oninput();
     if(runningBox) $('#w-captcha-box').replaceWith(runningBox);
     paintCaptcha();
   }
@@ -520,7 +648,7 @@
     if(S.signIn){
       btn.textContent = 'Just a moment…';
       const ok = await signedIn();
-      btn.textContent = 'Start ordering';
+      btn.textContent = btn.dataset.label || 'Start ordering';
       if(!ok){ btn.disabled = false; const retry = $('#w-captcha-retry'); if(retry) retry.focus(); return; }
     }
     try{
@@ -539,19 +667,48 @@
     }catch(e){ err.textContent = errFor(e, 'register'); btn.disabled = false; }
   }
 
+  /* ---------------- sub-category order and colours (release 1.3, A16 + A3) ----------------
+     Sections follow the shop's order (menu.subcategory_order) with drinks always first, then
+     pastry, then food (sortSubcategoryNames in ../shared/ui.js). Each section's items sit on
+     tiles in the counter's colour for that sub-category (menu.subcategory_colors). Only the
+     known colour KEYS below are used, as var(--tile-<key>-bg/fg) from tokens.css; anything
+     else (an unknown word, a colour code) is ignored and the item keeps the plain card. */
+  const TILE_KEYS = {terracotta: 0, deep_terracotta: 0, olive: 0, ink: 0, cocoa: 0, gold: 1, butter: 1, sage: 1, clay: 1, sky: 1};   // 1 = light tile (gets a border)
+  function tileKeyFor(name){
+    const map = S.menu && S.menu.subcategory_colors;
+    if(!map || typeof map !== 'object' || Array.isArray(map) || name == null) return null;
+    const good = (k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(TILE_KEYS, k) ? k : null;
+    if(Object.prototype.hasOwnProperty.call(map, name)) return good(map[name]);
+    const norm = (x) => String(x).trim().replace(/\s+/g, ' ').toLowerCase();
+    const want = norm(name);
+    const hit = Object.keys(map).find(k => norm(k) === want);
+    return hit === undefined ? null : good(map[hit]);
+  }
+  function tileAttrs(key){   // class + style for a coloured item tile / chip dot; '' when no colour
+    if(!key) return {cls: '', style: ''};
+    return {cls: ' tiled ' + (TILE_KEYS[key] ? 'tile-light' : 'tile-dark'),
+            style: ` style="--t-bg:var(--tile-${key}-bg);--t-fg:var(--tile-${key}-fg)"`};
+  }
+  function orderedCategories(items){
+    const cats = [], types = {};
+    items.forEach(i => { if(!cats.includes(i.category)){ cats.push(i.category); types[i.category] = i.recipe_type; } });
+    if(typeof window.sortSubcategoryNames !== 'function') return cats;
+    try{ return sortSubcategoryNames(cats, (n) => types[n], S.menu.subcategory_order); }catch(e){ return cats; }
+  }
+
   function menuHtml(preview){
     const items = S.menu.items;
     if(!items.length) return `<div class="notice">The menu is being updated. Please order at the counter for now.</div>`;
-    const cats = [];
-    items.forEach(i => { if(!cats.includes(i.category)) cats.push(i.category); });
+    const cats = orderedCategories(items);
     const counts = {};
     S.cart.forEach(l => { counts[l.recipe_id] = (counts[l.recipe_id] || 0) + l.quantity; });
+    const tiles = cats.map(c => tileAttrs(tileKeyFor(c)));
     return `
       ${preview ? '<h2 class="disp menu-title">On the menu</h2>' : ''}
-      <nav class="cats" aria-label="Menu sections">${cats.map((c, i) => `<button class="cat ${i === 0 ? 'on' : ''}" data-cat="${i}">${esc(c)}</button>`).join('')}</nav>
-      ${cats.map((c, i) => `<section class="menu-section" id="cat-${i}"><h2 class="disp">${esc(c)}</h2><div class="items">
+      <nav class="cats" aria-label="Menu sections">${cats.map((c, i) => `<button class="cat ${i === 0 ? 'on' : ''}${tiles[i].cls}" data-cat="${i}"${tiles[i].style}>${tiles[i].cls ? '<span class="cat-dot" aria-hidden="true"></span>' : ''}${esc(c)}</button>`).join('')}</nav>
+      ${cats.map((c, i) => `<section class="menu-section${tiles[i].cls}" id="cat-${i}"${tiles[i].style}><h2 class="disp">${esc(c)}</h2><div class="items">
         ${items.filter(it => it.category === c).map(it => `
-          <button class="item ${it.available ? '' : 'off'}" data-item="${esc(it.id)}" ${(!it.available || preview || !S.canOrder) ? 'aria-disabled="true"' : ''}>
+          <button class="item ${it.available ? '' : 'off'}${tiles[i].cls}" data-item="${esc(it.id)}" ${(!it.available || preview || !S.canOrder) ? 'aria-disabled="true"' : ''}>
             <span class="item-thumb">${it.image_url ? `<img src="${esc(it.image_url)}" alt="" width="64" height="64" loading="lazy" decoding="async">` : ico('cup', {size: 26})}</span>
             <span class="item-body">
               <span class="item-name">${esc(it.name)}${counts[it.id] ? `<span class="item-count">${counts[it.id]} in order</span>` : ''}</span>
@@ -581,14 +738,13 @@
 
   function renderMenu(quiet){
     const y = window.scrollY;
-    const open = S.orders.filter(o => ['PENDING','PREPARING','READY'].includes(o.status) || (Date.now() - new Date(o.created_at).getTime() < 3600e3 && o.status !== 'CANCELLED'));
     $('#main').innerHTML = `
       ${S.customer ? memberCardHtml() : ''}
       ${!S.canOrder ? `<div class="notice warn" role="status">${esc(S.blockedReason)}</div>` : (S.menu.welcome_message ? `<div class="notice">${esc(S.menu.welcome_message)}</div>` : '')}
-      ${open.length ? `<div class="my-orders">${open.map(o => `<button class="my-order" data-order="${o.id}"><span><b>${esc(o.order_number)}</b> &nbsp;${money(o.total)}</span>${statusPill(o)}</button>`).join('')}</div>` : ''}
+      ${openOrdersHtml()}
       ${menuHtml(false)}`;
     wireMenu();
-    document.querySelectorAll('[data-order]').forEach(b => b.onclick = () => { S.view = 'order'; S.orderId = b.dataset.order; render(); window.scrollTo({top: 0}); });
+    wireOpenOrders();
     const nm = $('#not-me'); if(nm) nm.onclick = notMe;
     if(quiet) window.scrollTo({top: y});
   }
@@ -601,7 +757,7 @@
   function renderBottom(){
     const b = $('#bottom');
     const t = cartTotals();
-    if(S.view !== 'menu' || !S.canOrder || !S.customer || !t.count){ b.hidden = true; return; }
+    if(S.view !== 'menu' || !isOpen() || !S.canOrder || !S.customer || !t.count){ b.hidden = true; return; }
     b.hidden = false;
     b.innerHTML = `<button class="btn" id="view-cart"><span>View order · ${t.count} item${t.count === 1 ? '' : 's'}</span><span>${money(t.total)}</span></button>`;
     $('#view-cart').onclick = openCartSheet;
@@ -613,12 +769,13 @@
     root.innerHTML = `<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}">
       <div class="sheet-head"><h3>${esc(title)}</h3><button class="sheet-close" id="sheet-x" aria-label="Close">${ico('x', {size: 22})}</button></div>
       <div class="sheet-body">${bodyHtml}</div>${footHtml ? `<div class="sheet-foot">${footHtml}</div>` : ''}</div></div>`;
+    root.dataset.kind = '';
     $('#sheet-x').onclick = closeSheet;
     $('#scrim').addEventListener('click', e => { if(e.target.id === 'scrim') closeSheet(); });
     document.body.style.overflow = 'hidden';
     if(onMount) onMount($('#sheet-root .sheet'));
   }
-  function closeSheet(){ $('#sheet-root').innerHTML = ''; document.body.style.overflow = ''; }
+  function closeSheet(){ const r = $('#sheet-root'); r.innerHTML = ''; r.dataset.kind = ''; document.body.style.overflow = ''; }
   document.addEventListener('keydown', e => { if(e.key === 'Escape') closeSheet(); });
 
   function openItemSheet(itemId){
@@ -638,6 +795,7 @@
         <input class="input" id="it-note" maxlength="140" placeholder="e.g. less ice"></div>
       <div class="qty"><button id="q-minus" aria-label="One less">${ico('minus', {size: 22})}</button><span id="q-val" aria-live="polite">1</span><button id="q-plus" aria-label="One more">${ico('plus', {size: 22})}</button></div>`;
     openSheet(it.name, body, `<button class="btn btn-main" id="it-add"></button>`, (sheet) => {
+      $('#sheet-root').dataset.kind = 'order';
       function refresh(){
         sheet.querySelectorAll('.opt').forEach(b => b.setAttribute('aria-pressed', String(selections.some(s => s.group_id === b.dataset.g && s.option_id === b.dataset.o))));
         $('#q-val').textContent = qty;
@@ -706,6 +864,7 @@
       <p class="pay-note">${esc(S.menu.payment_note || 'Pay at the counter.')}</p>
       <div class="form-error err-after" id="c-err" role="alert"></div>`;
     openSheet('Your order', body, `<button class="btn btn-main" id="c-place">Place order · ${money(t.total)}</button>`, (sheet) => {
+      $('#sheet-root').dataset.kind = 'order';
       sheet.querySelectorAll('[data-inc],[data-dec]').forEach(b => b.onclick = () => {
         const key = b.dataset.inc || b.dataset.dec;
         const l = S.cart.find(x => x.key === key);
@@ -741,6 +900,13 @@
         btn.disabled = false; btn.textContent = `Place order · ${money(cartTotals().total)}`;
         if(r.error === 'ITEM_UNAVAILABLE' || r.error === 'BAD_OPTION'){ refreshMenuQuietly(); }
         if(r.error === 'REGISTER_FIRST'){ S.customer = null; closeSheet(); render(); }
+        if(r.error === 'SHOP_CLOSED'){
+          // The last shift closed while they were ordering: show the closed screen. The cart
+          // is NOT cleared (it stays saved on this phone for when the shop opens).
+          S.menu.is_open = false; S.menu.items = [];
+          closeSheet(); window.scrollTo({top: 0}); render();
+          toast(MSG.SHOP_CLOSED);
+        }
         return;
       }
       S.cart = []; S.note = ''; saveCart();
@@ -755,9 +921,7 @@
       btn.disabled = false; btn.textContent = `Place order · ${money(cartTotals().total)}`;
     }
   }
-  async function refreshMenuQuietly(){
-    try{ const m = await cloud.rpc('get_qr_menu', {p_token: token}); if(m && !m.error){ S.menu = m; render(true); } }catch(e){}
-  }
+  function refreshMenuQuietly(){ return checkMenu(); }
 
   // "I've ordered here before". prefill = {phone, nickname} when we come from a PHONE_TAKEN answer.
   function openRelinkSheet(prefill){
@@ -831,6 +995,9 @@
         <section class="ticket" id="t-ticket" aria-label="Your order"></section>
         <div class="after-order"><div class="slot" id="t-phone"></div><div class="slot" id="t-hint"></div><div class="slot" id="t-actions"></div></div></div>`;
     }
+    // Ticket colour by stage (A2): received = butter, being prepared = olive, ready = sage.
+    const stage = {PENDING: 'pending', PREPARING: 'preparing', READY: 'ready'}[o.status] || 'plain';
+    $('#t-ticket').className = 'ticket stage-' + stage;
     patch($('#t-ticket'), ticketHtml(o));
     if(patch($('#t-phone'), phoneCardHtml(o))) wirePhoneCard();
     if(patch($('#t-hint'), hintHtml())) wireHint();
@@ -846,7 +1013,7 @@
     const steps = [
       {b: 'Order received', s: st === 'PENDING' ? 'Waiting for the barista to confirm' : 'The barista has your order'},
       {b: 'Being prepared', s: 'Freshly made for you'},
-      {b: 'Ready', s: takeaway ? 'Pick it up at the counter' : 'We\'ll bring it to your table'},
+      {b: 'Ready', s: 'Pick it up at the counter'},   // every order, dine-in too (A5)
     ];
     const bad = st === 'REJECTED' || st === 'CANCELLED';
     const c = S.customer || {};
@@ -918,12 +1085,13 @@
   function ticketActionsHtml(o){
     const bad = o.status === 'REJECTED' || o.status === 'CANCELLED';
     const alert = S.ticketAlert && S.ticketAlert.id === o.id ? S.ticketAlert.text : '';
-    return `<button class="btn btn-main" id="order-more">${bad ? 'Back to the menu' : 'Order something else'}</button>
+    const more = !isOpen() ? 'Back' : (bad ? 'Back to the menu' : 'Order something else');
+    return `<button class="btn btn-main" id="order-more">${more}</button>
       ${o.status === 'PENDING' ? '<button class="btn btn-quiet" id="cancel-order">Cancel this order</button>' : ''}
       ${alert ? `<div class="inline-alert" role="alert">${esc(alert)}</div>` : ''}`;
   }
   function wireTicketActions(){
-    $('#order-more').onclick = () => { S.view = 'menu'; document.title = 'Order — ' + shop(); render(); window.scrollTo({top: 0}); };
+    $('#order-more').onclick = () => { S.view = 'menu'; render(); window.scrollTo({top: 0}); };
     const cancel = $('#cancel-order');
     if(cancel) cancel.onclick = async () => {
       const id = S.orderId;
