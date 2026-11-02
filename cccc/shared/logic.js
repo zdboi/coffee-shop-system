@@ -165,13 +165,17 @@ const state = {
   ingredientTxns: {},        // ingredient_id -> inventory history (loaded when opened)
   sales: [], saleItems: [], payments: [], refunds: [], shifts: [], cashMovements: [],
   staff: [], tables: [], devices: [], stores: [], qrOrders: [],
+  ingredientBrands: [],      // ingredient_brands rows (Back Office; the counter keeps [])
+  brandStock: [],            // bo_bootstrap.brand_stock / ingredient_brand_stock() (Back Office; counter [])
+  floorShapes: [],           // floor_shapes rows (fo_bootstrap / bo_bootstrap / fo_floor_plan)
   settings: {}, route: 'dashboard', routeParam: null,
 };
 
 // Settings stored in Supabase (shared by every device of the shop)
 const DEFAULT_SETTINGS = {
   currency:'PHP', costing_method:'weighted_average',
-  low_stock_default_threshold: 10, food_cost_warning_pct: 35, theme:'light',
+  low_stock_default_threshold: 10, food_cost_warning_pct: 35,
+  theme:'CCCC',   // 'CCCC' = brand look (default) | 'CUSTOM' = the colours/logo/font below. Old rows: 'light'/'dark' = CCCC.
   business_name: '', app_name: 'Brew Ledger', logo_url: null,
   primary_color: '#241209', secondary_color: '#33513f', accent_color: '#c17a3d',
   background_color: '#f7f1e6', card_color: '#fffdf9', text_color: '#2c1e14',
@@ -182,7 +186,14 @@ const DEFAULT_SETTINGS = {
   backup_retain_count: 10,
   qr_ordering_enabled: true, qr_welcome_message: 'Order from your phone, pay at the counter.',
   qr_payment_note: 'Please pay at the counter when your order is called.', qr_hide_out_of_stock: false,
-  loyalty_enabled: false, stamps_per_reward: 10, timezone: 'Asia/Manila', order_page_url: '',
+  loyalty_enabled: false,
+  stamps_per_reward: 10,   // pre-1.2 setting, no longer used by the server (kept for older apps)
+  // Stamp card (008). A full value: the Back Office saves it with the other settings.
+  loyalty_rewards: {card_size: 15, rewards: [
+    {stamp: 5,  type: 'AMOUNT_OFF', amount: 10, label: '₱10 off'},
+    {stamp: 10, type: 'AMOUNT_OFF', amount: 50, label: '₱50 off'},
+    {stamp: 15, type: 'FREE_ITEM', label: 'One free drink or food'}]},
+  timezone: 'Asia/Manila', order_page_url: '',
   payout_review_limit: 1000,
 };
 // Settings that belong to THIS device only (backups, Google Drive link)
@@ -209,12 +220,20 @@ function setSettingsFromServer(row){
   if(row) SERVER_SETTING_KEYS.forEach(k => { if(row[k] !== undefined && row[k] !== null) s[k] = row[k]; });
   ['tax_pct','service_charge_pct','low_stock_default_threshold','food_cost_warning_pct','backup_retain_count','stamps_per_reward','payout_review_limit']
     .forEach(k => { s[k] = Number(s[k])||0; });
+  // Sub-category tile colours (column added by 008). Kept out of DEFAULT_SETTINGS so a
+  // full settings save never sends the column to a database that doesn't have it yet.
+  s.subcategory_colors = cleanSubcategoryColors(row && row.subcategory_colors);
+  // Stamp card: always a fresh, valid copy (a bad / missing value -> the default, like the server).
+  s.loyalty_rewards = cleanLoyaltyRewards(s.loyalty_rewards);
   state.settings = Object.assign(s, loadDeviceSettings());
   return state.settings;
 }
 function serverSettingsRow(){
   const row = {};
   SERVER_SETTING_KEYS.forEach(k => { row[k] = state.settings[k]; });
+  // The counter's offline copy keeps the tile colours too (only when there are any).
+  if(state.settings.subcategory_colors && Object.keys(state.settings.subcategory_colors).length)
+    row.subcategory_colors = Object.assign({}, state.settings.subcategory_colors);
   row.updated_at = new Date().toISOString();
   return row;
 }
@@ -291,8 +310,16 @@ function ingredientCosting(ingredientId, visiting){
 
   const stats = computeCostingStats(purchasesFor(ingredientId));
   const method = costingMethod();
-  const current = stats.count ? (method==='latest'?stats.latest:stats.weightedAvg) : 0;
-  return {...stats, current, method, isProduced:false};
+  let current = stats.count ? (method==='latest'?stats.latest:stats.weightedAvg) : 0;
+  // Release 1.2 (owner: "cost follows what we're currently using"): an ingredient with
+  // brands costs what the lot in use now cost (its purchase price per base unit).
+  // No lot in use, or that lot has no price (e.g. starting stock) -> the method above.
+  let costSource = 'purchases', inUse = null;
+  if(ingredientHasBrands(ingredientId)){
+    inUse = inUseBrand(ingredientId);
+    if(inUse && inUse.price_per_base_unit !== null){ current = inUse.price_per_base_unit; costSource = 'in_use_lot'; }
+  }
+  return {...stats, current, method, isProduced:false, costSource, inUseBrand: inUse};
 }
 
 function ingredientStock(ingredientId){
@@ -406,7 +433,16 @@ function toCSV(headers, rows){
 
 /* ================= Sale totals ================= */
 // Recompute a sale's totals from source line items rather than trusting any cached total.
-function computeSaleTotals(lines, discount, settings){
+//   lines:    [{unit_price, quantity}]
+//   discount: the manager discount {type:'percent'|'fixed', value} or null
+//   settings: tax / service settings (default state.settings)
+//   loyalty:  optional stamp-card reward (release 1.2): a number (₱), or {amount} /
+//             {loyalty_discount}. Missing / 0 -> exactly the pre-1.2 result.
+// S = subtotal, D = discount (at most S), R = min(reward, S − D) rounded to centavos
+// (the server's rule in _loyalty_reward_amount), base = S − D − R,
+// tax = inclusive ? 0 : base × tax%, service = base × service%, grand = base + tax + service.
+// Returns {subtotal, discountAmt, loyaltyDiscount, tax, serviceCharge, grandTotal}.
+function computeSaleTotals(lines, discount, settings, loyalty){
   settings = settings || state.settings;
   const subtotal = lines.reduce((s,l)=> s + (Number(l.unit_price||0) * Number(l.quantity||0)), 0);
   let discountAmt = 0;
@@ -414,12 +450,25 @@ function computeSaleTotals(lines, discount, settings){
   else if(discount && discount.type==='fixed') discountAmt = Number(discount.value)||0;
   discountAmt = Math.min(discountAmt, subtotal);
   const afterDiscount = subtotal - discountAmt;
+  const loyaltyDiscount = capLoyaltyAmount(loyalty, afterDiscount);
+  // R is rounded to centavos, so it can be up to ₱0.005 more than S − D: base never below 0
+  // (the server refuses a negative tax / service charge; grand 0 is within its 2-centavo check).
+  const base = loyaltyDiscount ? Math.max(0, afterDiscount - loyaltyDiscount) : afterDiscount;
   const taxPct = Number(settings.tax_pct)||0;
   const servicePct = Number(settings.service_charge_pct)||0;
-  const tax = settings.tax_inclusive ? 0 : afterDiscount * taxPct/100;
-  const serviceCharge = afterDiscount * servicePct/100;
-  const grandTotal = afterDiscount + tax + serviceCharge;
-  return {subtotal, discountAmt, tax, serviceCharge, grandTotal: Math.round(grandTotal*100)/100};
+  const tax = settings.tax_inclusive ? 0 : base * taxPct/100;
+  const serviceCharge = base * servicePct/100;
+  const grandTotal = base + tax + serviceCharge;
+  return {subtotal, discountAmt, loyaltyDiscount, tax, serviceCharge, grandTotal: Math.round(grandTotal*100)/100};
+}
+// A reward amount (number, {amount} or {loyalty_discount}) capped at what is left after
+// the manager discount, never below 0, rounded to centavos like the server.
+function capLoyaltyAmount(loyalty, afterDiscount){
+  let r = loyalty;
+  if(r && typeof r === 'object') r = (r.loyalty_discount !== undefined && r.loyalty_discount !== null) ? r.loyalty_discount : r.amount;
+  r = Number(r);
+  if(!isFinite(r) || r <= 0) return 0;
+  return roundMoney(Math.min(r, Math.max(0, Number(afterDiscount) || 0)));
 }
 
 /* ================= Refunds: how much money goes back =================
@@ -515,6 +564,178 @@ function refundAmountForItems(sale, items, refundItems, prior){
   return Math.min(left, roundMoney(returnedValue * G / S));
 }
 
+/* ================= Stamp card (release 1.2, 008) =================
+   The SERVER decides stamps, cards and which rewards are ready (_loyalty_summary)
+   and checks every reward used on a sale. These helpers only read its answer for
+   the screens and work out the money a chosen reward takes off the cart, by the
+   same rule the server uses (_loyalty_reward_amount), so the two agree. */
+const DEFAULT_LOYALTY_REWARDS = {card_size: 15, rewards: [
+  {stamp: 5,  type: 'AMOUNT_OFF', amount: 10, label: '₱10 off'},
+  {stamp: 10, type: 'AMOUNT_OFF', amount: 50, label: '₱50 off'},
+  {stamp: 15, type: 'FREE_ITEM', label: 'One free drink or food'},
+]};
+// Recipe types a FREE_ITEM reward may be used on (same list as the server).
+const REWARD_ITEM_TYPES = ['DRINKS', 'PASTRY', 'FOOD'];
+function _isWholeNum(v){ return typeof v === 'number' && isFinite(v) && Math.floor(v) === v; }
+// Same rule as the database's _valid_loyalty_rewards (else BAD_LOYALTY_REWARDS):
+// {card_size: whole 1..100, rewards: 1..10 of {stamp: whole 1..card_size, each once,
+//  type AMOUNT_OFF (amount above 0, at most 10000) | FREE_ITEM, label: text up to 40 or none}}.
+function isValidLoyaltyRewards(p){
+  if(!p || typeof p !== 'object' || Array.isArray(p)) return false;
+  const size = p.card_size;
+  if(!_isWholeNum(size) || size < 1 || size > 100) return false;
+  if(!Array.isArray(p.rewards) || p.rewards.length < 1 || p.rewards.length > 10) return false;
+  const seen = new Set();
+  for(const r of p.rewards){
+    if(!r || typeof r !== 'object' || Array.isArray(r) || !_isWholeNum(r.stamp)) return false;
+    if(r.stamp < 1 || r.stamp > size || seen.has(r.stamp)) return false;
+    seen.add(r.stamp);
+    if(r.type !== 'AMOUNT_OFF' && r.type !== 'FREE_ITEM') return false;
+    if(r.type === 'AMOUNT_OFF' && (typeof r.amount !== 'number' || !isFinite(r.amount) || r.amount <= 0 || r.amount > 10000)) return false;
+    if(r.label !== undefined && r.label !== null && (typeof r.label !== 'string' || r.label.length > 40)) return false;
+  }
+  return true;
+}
+// A fresh copy of a valid stamp-card setting, else of the default (like the server's _loyalty_config).
+function cleanLoyaltyRewards(p){
+  if(typeof p === 'string'){ try{ p = JSON.parse(p); }catch(e){ p = null; } }
+  return JSON.parse(JSON.stringify(isValidLoyaltyRewards(p) ? p : DEFAULT_LOYALTY_REWARDS));
+}
+// The shop's stamp card (settings.loyalty_rewards), rewards sorted by stamp.
+function loyaltyConfig(settings){
+  const c = cleanLoyaltyRewards((settings || (state && state.settings) || {}).loyalty_rewards);
+  c.rewards.sort((a, b) => a.stamp - b.stamp);
+  return c;
+}
+// Words for a reward: its label, else "₱10.00 off" / "One free drink or food".
+function rewardLabel(r){
+  if(!r) return '';
+  if(r.label && String(r.label).trim()) return String(r.label);
+  return r.type === 'AMOUNT_OFF' ? fmtMoney(r.amount) + ' off' : 'One free drink or food';
+}
+// "2:5" = the stamp-5 reward of card 2 (one reward can be used once).
+function rewardKey(r){ return r ? (Number(r.card_no) || 1) + ':' + Number(r.stamp != null ? r.stamp : r.milestone) : ''; }
+function _normReward(r){
+  return {card_no: Number(r.card_no) || 1, stamp: Number(r.stamp), type: r.type,
+          amount: (r.amount === null || r.amount === undefined || r.amount === '') ? null : Number(r.amount),
+          label: rewardLabel(r)};
+}
+// Every reward the customer can use now (this card and earlier ones), oldest first,
+// straight from the server's summary: [{card_no, stamp, type, amount, label}].
+function readyRewards(summary){
+  const list = summary && Array.isArray(summary.ready_rewards) ? summary.ready_rewards : [];
+  return list.filter(r => r && (r.type === 'AMOUNT_OFF' || r.type === 'FREE_ITEM') && isFinite(Number(r.stamp)))
+    .map(_normReward)
+    .sort((a, b) => a.card_no - b.card_no || a.stamp - b.stamp);
+}
+// The stamp card to draw, from the server's summary (statuses from the server; the
+// config only fills in when an older answer has no card):
+//   {card_size, card_no, stamps_on_card, total_stamps,
+//    milestones: [{stamp, type, amount, label, status: 'locked'|'ready'|'redeemed', to_go}],
+//    next: {stamp, type, amount, label, to_go} | null   (the next locked reward on this card),
+//    ready: readyRewards(summary), ready_count}
+// to_go = stamps still needed for that reward (0 when reached).
+function loyaltyCardView(summary, rewardsConfig){
+  summary = summary || {};
+  const cfg = cleanLoyaltyRewards(rewardsConfig || (state && state.settings && state.settings.loyalty_rewards));
+  const card = summary.card && typeof summary.card === 'object' ? summary.card : null;
+  const total = Math.max(0, Number(summary.total_stamps) || 0);
+  const size = Math.max(1, Number(card && card.card_size) || cfg.card_size);
+  const cardNo = Math.max(1, Number(card && card.card_no) || Math.max(Math.ceil(total / size), 1));
+  const onCard = (card && card.stamps_on_card != null) ? Math.max(0, Number(card.stamps_on_card) || 0) : Math.max(0, total - (cardNo - 1) * size);
+  const source = (card && Array.isArray(card.milestones) && card.milestones.length) ? card.milestones : cfg.rewards;
+  const milestones = source.map(m => {
+    const stamp = Number(m.stamp);
+    const reached = onCard >= stamp;
+    let status = m.status;
+    if(status !== 'locked' && status !== 'ready' && status !== 'redeemed') status = reached ? 'ready' : 'locked';
+    const r = _normReward(Object.assign({}, m, {card_no: cardNo}));
+    return {stamp, type: r.type, amount: r.amount, label: r.label, status, to_go: Math.max(0, stamp - onCard)};
+  }).sort((a, b) => a.stamp - b.stamp);
+  const next = milestones.find(m => m.status === 'locked') || null;
+  const ready = readyRewards(summary);
+  return {card_size: size, card_no: cardNo, stamps_on_card: onCard, total_stamps: total, milestones,
+    next: next ? {stamp: next.stamp, type: next.type, amount: next.amount, label: next.label, to_go: next.to_go} : null,
+    ready, ready_count: ready.length};
+}
+// A line a FREE_ITEM reward can use: a whole quantity of at least 1 (server rule, 008 M3).
+function _wholeQtyLine(l){ const q = Number(l && l.quantity); return isFinite(q) && q >= 1 && Math.floor(q) === q; }
+// Cart lines a FREE_ITEM reward may be used on: a drink / pastry / food item, whole quantity >= 1.
+function rewardEligibleLines(lines){
+  return (lines || []).filter(l => {
+    if(!l || !l.recipe_id || !_wholeQtyLine(l)) return false;
+    const rec = state.recipes.find(r => r.id === l.recipe_id);
+    return !!rec && REWARD_ITEM_TYPES.includes(recipeTypeOf(rec));
+  });
+}
+// How much a chosen ready reward takes off this cart (₱, centavos):
+//   AMOUNT_OFF -> its amount;
+//   FREE_ITEM  -> the price of ONE of the chosen item: per line min(unit_price, line_total)
+//                 (unit_price = recipe price + chosen options); only lines with a whole
+//                 quantity >= 1 count, and if the item is on several the DEAREST counts (server rule).
+//   Both capped at subtotal − manager discount.
+//   choice: the chosen cart line ({recipe_id}) or a recipe id (FREE_ITEM only).
+// Returns 0 when nothing applies (e.g. FREE_ITEM with no matching line).
+function loyaltyRewardAmount(reward, lines, discount, choice){
+  if(!reward) return 0;
+  lines = lines || [];
+  let amt = 0;
+  if(reward.type === 'AMOUNT_OFF'){
+    amt = Math.max(0, Number(reward.amount) || 0);
+  } else if(reward.type === 'FREE_ITEM'){
+    const rid = choice && typeof choice === 'object' ? choice.recipe_id : choice;
+    if(!rid) return 0;
+    lines.forEach(l => {
+      if(!l || l.recipe_id !== rid || !_wholeQtyLine(l)) return;
+      const unit = Math.max(0, Number(l.unit_price) || 0);
+      const lt = (l.line_total === undefined || l.line_total === null || l.line_total === '') ? unit * Number(l.quantity) : Math.max(0, Number(l.line_total) || 0);
+      amt = Math.max(amt, Math.min(unit, lt));
+    });
+  } else return 0;
+  const t = computeSaleTotals(lines, discount, {tax_pct: 0, service_charge_pct: 0});
+  return capLoyaltyAmount(amt, t.subtotal - t.discountAmt);
+}
+// The two fields a counter 'sale' op carries for a reward (contract D, put them on data.sale):
+//   {loyalty_reward: {customer_id, card_no, milestone, recipe_id (FREE_ITEM only)}, loyalty_discount}
+// amount = computeSaleTotals(..., amount).loyaltyDiscount. No reward -> {loyalty_discount: 0}.
+function saleLoyaltyFields(reward, customerId, amount, recipeId){
+  if(!reward || !customerId) return {loyalty_discount: 0};
+  const lr = {customer_id: customerId, card_no: Number(reward.card_no) || 1, milestone: Number(reward.stamp != null ? reward.stamp : reward.milestone)};
+  if(reward.type === 'FREE_ITEM' && recipeId) lr.recipe_id = recipeId;
+  return {loyalty_reward: lr, loyalty_discount: roundMoney(amount)};
+}
+
+/* ================= Ingredient brands, first in first out (release 1.2, 008) =================
+   The server works out which lot (delivery) is being used now and what is left of
+   each brand (bo_bootstrap.brand_stock / ingredient_brand_stock()). These only read it:
+   state.brandStock = [{ingredient_id, stock, in_use, brands, lots}], state.ingredientBrands =
+   ingredient_brands rows. The counter has neither (both stay []). */
+function brandStockFor(ingredientId){
+  return (state.brandStock || []).find(b => b && b.ingredient_id === ingredientId) || null;
+}
+// The brand being used now (the oldest lot that still has stock):
+// {brand_id, brand_name ('Not set' when the lot has no brand), price_per_base_unit (null = no price),
+//  lot_id, lot_date, remaining} | null
+function inUseBrand(ingredientId){
+  const e = brandStockFor(ingredientId);
+  const u = e && e.in_use;
+  if(!u || typeof u !== 'object') return null;
+  const p = (u.price_per_base_unit === null || u.price_per_base_unit === undefined || u.price_per_base_unit === '') ? null : Number(u.price_per_base_unit);
+  return {brand_id: u.brand_id || null, brand_name: u.brand_id ? (u.brand_name || 'Not set') : 'Not set',
+    price_per_base_unit: (p !== null && isFinite(p)) ? p : null,
+    lot_id: u.lot_id || null, lot_date: u.lot_date || null, remaining: Number(u.remaining) || 0};
+}
+function brandsFor(ingredientId, includeInactive){
+  return (state.ingredientBrands || []).filter(b => b && b.ingredient_id === ingredientId && (includeInactive || b.active !== false))
+    .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0) || String(a.name).localeCompare(String(b.name)));
+}
+function brandName(brandId){
+  if(!brandId) return 'Not set';
+  const b = (state.ingredientBrands || []).find(x => x.id === brandId);
+  return b ? b.name : 'Not set';
+}
+function ingredientHasBrands(ingredientId){ return brandsFor(ingredientId).length > 0; }
+
 const PAYMENT_METHODS = [
   {id:'CASH', label:'Cash', ic:'💵'},
   {id:'GCASH', label:'GCash', ic:'📱'},
@@ -579,9 +800,13 @@ function isBackupDue(lastBackupISO, frequency){
   return new Date() >= nextBackupDueDate(lastBackupISO, frequency);
 }
 
-/* ================= Branding / theme (shared) ================= */
+/* ================= Branding / theme (shared) =================
+   Release 1.2: settings.theme decides the look (brandTheme() in ui.js).
+   - 'CCCC' (default; also missing / old 'light' / old 'dark'): the brand look from
+     brand/tokens.css. Saved colours and fonts are NOT applied and no outside font is loaded.
+   - 'CUSTOM': the shop's saved colours and font, mapped onto the --cc-* tokens. */
 const FONT_OPTIONS = [
-  {id:'default', label:'Default (Fraunces + Inter)', bodyStack:"'Inter', system-ui, -apple-system, sans-serif"},
+  {id:'default', label:'Default (CCCC brand fonts)', bodyStack:null},
   {id:'system', label:'System Default (fully offline)', bodyStack:"-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"},
   {id:'inter', label:'Inter', bodyStack:"'Inter', system-ui, sans-serif", cdn:'Inter:wght@400;500;600;700'},
   {id:'roboto', label:'Roboto', bodyStack:"'Roboto', system-ui, sans-serif", cdn:'Roboto:wght@400;500;700'},
@@ -591,19 +816,32 @@ const FONT_OPTIONS = [
 ];
 const FONT_SIZES = {small:'13.5px', medium:'15px', large:'16.5px'};
 
-function lightenHex(hex, percent){
-  try{
-    hex = String(hex).replace('#','');
-    if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
-    const num = parseInt(hex,16);
-    let r=(num>>16)&0xFF, g=(num>>8)&0xFF, b=num&0xFF;
-    r = Math.min(255, Math.round(r+(255-r)*percent/100));
-    g = Math.min(255, Math.round(g+(255-g)*percent/100));
-    b = Math.min(255, Math.round(b+(255-b)*percent/100));
-    return '#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
-  }catch(e){ return hex; }
+function _hexParts(hex){
+  hex = String(hex == null ? '' : hex).trim().replace('#','');
+  if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+  if(!/^[0-9a-fA-F]{6}$/.test(hex)) return null;
+  const num = parseInt(hex,16);
+  return [(num>>16)&0xFF, (num>>8)&0xFF, num&0xFF];
 }
+function _hexOf(rgb){ return '#'+rgb.map(v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join(''); }
+function lightenHex(hex, percent){
+  const p = _hexParts(hex);
+  if(!p) return hex;
+  return _hexOf(p.map(v => v+(255-v)*percent/100));
+}
+function darkenHex(hex, percent){
+  const p = _hexParts(hex);
+  if(!p) return hex;
+  return _hexOf(p.map(v => v*(1-percent/100)));
+}
+function isHexColor(v){ return _hexParts(v) !== null; }
+
+// Every CSS variable the custom theme may set on <html>; cleared again for the CCCC look.
+const CUSTOM_THEME_VARS = ['--ui-dark','--cc-terracotta','--cc-terracotta-deep','--cc-terracotta-tint','--cc-butter',
+  '--cc-paper','--cc-cream','--cc-card','--cc-ink','--cc-font-body','--cc-font-display'];
+
 function applyFontChoice(fontId){
+  const root = document.documentElement.style;
   const opt = FONT_OPTIONS.find(f=>f.id===fontId) || FONT_OPTIONS[0];
   if(opt.cdn && !document.getElementById('font-cdn-'+opt.id)){
     const link = document.createElement('link');
@@ -611,24 +849,85 @@ function applyFontChoice(fontId){
     link.href = `https://fonts.googleapis.com/css2?family=${opt.cdn}&display=swap`;
     document.head.appendChild(link);
   }
-  document.documentElement.style.setProperty('--font-body', opt.bodyStack);
-  if(fontId==='system') document.documentElement.style.setProperty('--font-display', opt.bodyStack);
-  else document.documentElement.style.removeProperty('--font-display');
+  if(opt.bodyStack) root.setProperty('--cc-font-body', opt.bodyStack);
+  else root.removeProperty('--cc-font-body');
+  if(fontId==='system') root.setProperty('--cc-font-display', opt.bodyStack);
+  else root.removeProperty('--cc-font-display');
 }
+// overrides: a settings-like object (Back Office preview), else state.settings.
 function applyCustomTheme(overrides){
-  const s = overrides || state.settings;
+  const s = overrides || state.settings || {};
   const root = document.documentElement.style;
-  root.setProperty('--espresso-dark', s.primary_color);
-  root.setProperty('--espresso', s.primary_color);
-  root.setProperty('--green', s.secondary_color);
-  root.setProperty('--green-light', lightenHex(s.secondary_color, 18));
-  root.setProperty('--amber', s.accent_color);
-  root.setProperty('--cream', s.background_color);
-  root.setProperty('--white', s.card_color);
-  root.setProperty('--text', s.text_color);
-  applyFontChoice(s.font_family);
+  CUSTOM_THEME_VARS.forEach(v => root.removeProperty(v));
+  // Old (pre-1.2) variables this function used to set: clear them so the brand mapping in styles.css applies.
+  ['--espresso-dark','--espresso','--green','--green-light','--amber','--cream','--white','--text','--font-body','--font-display']
+    .forEach(v => root.removeProperty(v));
   root.setProperty('--base-font-size', FONT_SIZES[s.font_size]||FONT_SIZES.medium);
-  document.body.classList.toggle('dark', s.theme==='dark');
+  if(brandTheme(s) === 'CUSTOM'){
+    const set = (v, hex) => { if(isHexColor(hex)) root.setProperty(v, hex); };
+    set('--ui-dark', s.primary_color);                       // sidebar, sign-in backdrop, toasts
+    if(isHexColor(s.secondary_color)){                        // main buttons, active item
+      root.setProperty('--cc-terracotta', s.secondary_color);
+      root.setProperty('--cc-terracotta-deep', darkenHex(s.secondary_color, 22));
+      root.setProperty('--cc-terracotta-tint', lightenHex(s.secondary_color, 85));
+    }
+    set('--cc-butter', s.accent_color);                       // accents on dark, badges
+    set('--cc-paper', s.background_color);
+    if(isHexColor(s.background_color)) root.setProperty('--cc-cream', darkenHex(s.background_color, 3));
+    set('--cc-card', s.card_color);
+    set('--cc-ink', s.text_color);
+    applyFontChoice(s.font_family);
+  }
+  document.body.classList.toggle('dark', s.theme==='dark');   // old dark mode (pre-1.2 setting)
+}
+
+/* ================= Sub-category tile colours (release 1.2) =================
+   The database stores a KEY per sub-category name (settings.subcategory_colors,
+   e.g. {"Iced coffee": "terracotta"}); the colours live in brand/tokens.css.
+   Raw colour codes are never accepted here. */
+const TILE_COLORS = {
+  terracotta:      {label:'Terracotta'},
+  deep_terracotta: {label:'Deep terracotta'},
+  olive:           {label:'Olive'},
+  gold:            {label:'Gold', light:true},
+  butter:          {label:'Butter', light:true},
+  ink:             {label:'Ink'},
+  sage:            {label:'Sage', light:true},
+  clay:            {label:'Clay', light:true},
+  cocoa:           {label:'Cocoa'},
+  sky:             {label:'Sky', light:true},
+};
+const TILE_COLOR_KEYS = Object.keys(TILE_COLORS);
+function isTileColorKey(key){ return typeof key === 'string' && Object.prototype.hasOwnProperty.call(TILE_COLORS, key); }
+// Keeps only {name: known key} pairs (same rule as the database check).
+function cleanSubcategoryColors(map){
+  const out = {};
+  if(!map || typeof map !== 'object' || Array.isArray(map)) return out;
+  Object.keys(map).forEach(name => {
+    const n = String(name).trim();
+    if(n && n.length <= 40 && isTileColorKey(map[name])) out[name] = map[name];
+  });
+  return out;
+}
+// tileColorKeyFor('Iced coffee') -> 'terracotta' | null (not set / unknown).
+// Exact name first, then a case- and space-insensitive match.
+function tileColorKeyFor(subcategoryName){
+  const map = state && state.settings && state.settings.subcategory_colors;
+  if(!map || typeof map !== 'object' || subcategoryName == null) return null;
+  const name = String(subcategoryName);
+  if(Object.prototype.hasOwnProperty.call(map, name)) return isTileColorKey(map[name]) ? map[name] : null;
+  const want = name.trim().toLowerCase();
+  if(!want) return null;
+  const hit = Object.keys(map).find(k => k.trim().toLowerCase() === want);
+  return hit && isTileColorKey(map[hit]) ? map[hit] : null;
+}
+// tileStyleVars('olive') -> 'background:var(--tile-olive-bg);color:var(--tile-olive-fg);'
+// Light tiles also get a thin border so they show on the paper background.
+// Unknown / empty key -> '' (the screen keeps its default tile look).
+function tileStyleVars(key){
+  if(!isTileColorKey(key)) return '';
+  return `background:var(--tile-${key}-bg);color:var(--tile-${key}-fg);`
+    + (TILE_COLORS[key].light ? 'border-color:var(--tile-border-light);border-style:solid;border-width:1px;' : '');
 }
 
 /* ================= Google Drive backups (optional, per device) ================= */
@@ -754,11 +1053,18 @@ const SALES_HINTS = {
   voids: 'Sales cancelled in full. Already left out of Sales.',
 };
 
+// Release 1.2: the stamp-card rewards line. Kept out of SALES_LABELS / SALES_HINTS so
+// those stay as they were (tests pin their keys); salesSummaryRows() uses these words.
+const LOYALTY_SALES_LABEL = 'Loyalty rewards';
+const LOYALTY_SALES_HINT = 'Stamp card rewards customers used, taken off after discounts.';
+
 // The full accounting picture for one shift (same maths as the original POS, incl. the
 // void double-count fix). `data` lets reports pass their own loaded records; otherwise state.
 // Sales figures (finished sales = not HELD, not VOIDED):
 //   itemSales     = Σ subtotals                  ("Item sales (before discounts)")
 //   discounts     = Σ discounts
+//   loyaltyRewards = Σ loyalty_discount (stamp card rewards, release 1.2)
+//   itemSales − discounts − loyaltyRewards + taxAndService = sales
 //   taxAndService = Σ tax + Σ service charge
 //   sales         = Σ grand totals               ("Sales": what customers paid)
 //   refunds       = refunds made in this shift (voids not included)
@@ -776,6 +1082,7 @@ function shiftMetrics(shift, data){
 
   const grossSales = nonVoided.reduce((s,x)=> s + Number(x.subtotal||0), 0);
   const discountTotal = nonVoided.reduce((s,x)=> s + Number(x.discount_amount||0), 0);
+  const loyaltyRewards = nonVoided.reduce((s,x)=> s + Number(x.loyalty_discount||0), 0);
   const taxTotal = nonVoided.reduce((s,x)=> s + Number(x.tax_amount||0), 0);
   const serviceTotal = nonVoided.reduce((s,x)=> s + Number(x.service_charge_amount||0), 0);
   const grossGrandTotal = nonVoided.reduce((s,x)=> s + Number(x.grand_total||0), 0);
@@ -817,7 +1124,7 @@ function shiftMetrics(shift, data){
   return {
     transactionCount: nonVoided.length, voidedCount,
     // clear names (use these with SALES_LABELS)
-    itemSales: grossSales, discounts: discountTotal, taxAndService: taxTotal + serviceTotal,
+    itemSales: grossSales, discounts: discountTotal, loyaltyRewards, taxAndService: taxTotal + serviceTotal,
     sales: grossGrandTotal, refunds: refundsOnly, voids: voidsOnly, netSales,
     // older names, unchanged
     grossSales, discountTotal, taxTotal, serviceTotal,
@@ -836,6 +1143,8 @@ function shiftMetrics(shift, data){
 // saved when it closed are used (gross_sales, refunds_total, net_sales; Sales =
 // net_sales + refunds_total), like the X/Z reports do; discounts and tax & service are
 // not saved on the shift, so they always come from m.
+// The "Loyalty rewards" row (after Discounts) appears only when rewards were used
+// (m.loyaltyRewards > 0), so a shift without rewards shows the same rows as before.
 function salesSummaryRows(m, shift){
   if(!m) return [];
   const closed = !!(shift && shift.status === 'CLOSED');
@@ -848,14 +1157,17 @@ function salesSummaryRows(m, shift){
   const v = {
     itemSales: savedItems !== null ? savedItems : m.itemSales,
     discounts: m.discounts,
+    loyaltyRewards: Number(m.loyaltyRewards) || 0,
     taxAndService: m.taxAndService,
     sales: (savedNet !== null && savedRefunds !== null) ? savedNet + savedRefunds : m.sales,
     refunds: savedRefunds !== null ? savedRefunds : m.refunds,
     netSales: savedNet !== null ? savedNet : m.netSales,
   };
-  const sign = {discounts: '-', taxAndService: '+', refunds: '-'};
-  return ['itemSales', 'discounts', 'taxAndService', 'sales', 'refunds', 'netSales'].map(key => ({
-    key, label: SALES_LABELS[key], hint: SALES_HINTS[key], amount: Number(v[key]) || 0,
+  const sign = {discounts: '-', loyaltyRewards: '-', taxAndService: '+', refunds: '-'};
+  const keys = ['itemSales', 'discounts'].concat(v.loyaltyRewards > 0 ? ['loyaltyRewards'] : [], ['taxAndService', 'sales', 'refunds', 'netSales']);
+  return keys.map(key => ({
+    key, label: key === 'loyaltyRewards' ? LOYALTY_SALES_LABEL : SALES_LABELS[key],
+    hint: key === 'loyaltyRewards' ? LOYALTY_SALES_HINT : SALES_HINTS[key], amount: Number(v[key]) || 0,
     sign: sign[key] || '', total: key === 'sales' || key === 'netSales',
   }));
 }
@@ -869,6 +1181,8 @@ function shiftDuration(shift){
 }
 
 /* ================= Receipts (shared by Front Office + Back Office) ================= */
+// opts.rewardLabel: words of the stamp reward used (e.g. "₱10 off"), shown as
+// "Stamp reward: ₱10 off" when sale.loyalty_discount > 0 (else just "Stamp reward").
 function receiptHtml(sale, items, payments, opts){
   opts = opts || {};
   const s = state.settings;
@@ -905,6 +1219,7 @@ function receiptHtml(sale, items, payments, opts){
     <!-- Customer receipt words: Subtotal = "Item sales (before discounts)", Total = what the customer paid ("Sales"). -->
     <div class="row"><span>Subtotal</span><span>${fmtMoney(sale.subtotal)}</span></div>
     ${Number(sale.discount_amount)>0?`<div class="row"><span>Discount</span><span>-${fmtMoney(sale.discount_amount)}</span></div>`:''}
+    ${Number(sale.loyalty_discount)>0?`<div class="row"><span>${opts.rewardLabel?'Stamp reward: '+escapeHtml(opts.rewardLabel):'Stamp reward'}</span><span>-${fmtMoney(sale.loyalty_discount)}</span></div>`:''}
     ${Number(sale.tax_amount)>0?`<div class="row"><span>Tax</span><span>${fmtMoney(sale.tax_amount)}</span></div>`:''}
     ${Number(sale.service_charge_amount)>0?`<div class="row"><span>Service charge</span><span>${fmtMoney(sale.service_charge_amount)}</span></div>`:''}
     <div class="row" style="font-weight:700;font-size:14px;margin-top:4px;"><span>Total</span><span>${fmtMoney(sale.grand_total)}</span></div>

@@ -72,7 +72,7 @@ function ingredientOptionsGrouped(selectedId, excludeId){
   const produced = producedIngredientsList().filter(i => i.id !== excludeId).sort(byName);
   let html = '';
   if(raw.length) html += `<optgroup label="Raw ingredients">${raw.map(i => `<option value="${esc(i.id)}" ${selectedId === i.id ? 'selected' : ''}>${esc(i.name)} (${esc(i.base_unit)})</option>`).join('')}</optgroup>`;
-  if(produced.length) html += `<optgroup label="Produced items (house-made)">${produced.map(i => `<option value="${esc(i.id)}" ${selectedId === i.id ? 'selected' : ''}>${esc(i.name)} 🏭 (${esc(i.base_unit)})</option>`).join('')}</optgroup>`;
+  if(produced.length) html += `<optgroup label="Produced items (house-made)">${produced.map(i => `<option value="${esc(i.id)}" ${selectedId === i.id ? 'selected' : ''}>${esc(i.name)} (house-made, ${esc(i.base_unit)})</option>`).join('')}</optgroup>`;
   // an inactive ingredient still used by this line stays selectable
   const cur = selectedId && ingredientById(selectedId);
   if(cur && cur.active === false) html += `<option value="${esc(cur.id)}" selected>${esc(cur.name)} (inactive)</option>`;
@@ -132,7 +132,7 @@ function renderIngredientsTable(){
   if(ingFilter.status) list = list.filter(i => stockStatus(ingredientStock(i.id), i.reorder_level) === ingFilter.status);
   list.sort(byName);
   if(!list.length){
-    wrap.innerHTML = `<div class="table-wrap"><div class="empty-state"><div class="big">🌿</div>No ingredients found.<br><br><button class="btn btn-primary" id="empty-add-ing">+ Add ingredient</button></div></div>`;
+    wrap.innerHTML = `<div class="table-wrap"><div class="empty-state"><div class="big">${icon('box', {size: 40})}</div>No ingredients found.<br><br><button class="btn btn-primary" id="empty-add-ing">+ Add ingredient</button></div></div>`;
     wrap.querySelector('#empty-add-ing').onclick = () => openIngredientForm();
     return;
   }
@@ -144,7 +144,7 @@ function renderIngredientsTable(){
         <td><b>${esc(i.name)}</b>${i.active === false ? ' <span class="badge badge-gray">Inactive</span>' : ''}</td>
         <td>${isProducedItem(i) ? '<span class="badge badge-gray">Produced</span>' : '<span class="badge badge-gray" style="opacity:.6;">Raw</span>'}</td>
         <td>${esc(catName(i.category_id))}</td>
-        <td class="num">${fmtNum(stock, 2)}</td><td>${esc(i.base_unit)}</td>
+        <td class="num">${fmtNum(stock, 2)}${brandInUseLine(i.id)}</td><td>${esc(i.base_unit)}</td>
         <td class="num">${fmtMoney(costing.current)}/${esc(i.base_unit)}</td>
         <td class="num">${fmtNum(i.reorder_level, 1)}</td>
         <td>${statusBadge(stockStatus(stock, i.reorder_level))}</td>
@@ -180,7 +180,8 @@ function openIngredientForm(id){
       <div class="form-row"><label for="f-shelflife">Shelf life (days, optional)</label><input id="f-shelflife" type="number" step="1" min="0" value="${esc(editing.shelf_life_days || '')}"></div>
       <div class="form-row"><label for="f-storage">Storage notes</label><input id="f-storage" maxlength="120" value="${esc(editing.storage_notes || '')}" placeholder="e.g. Refrigerated"></div>
     </div>` : ''}
-    ${!editing ? `<div class="form-row"><label for="f-initial">Starting stock (optional)</label>${qtyWithUnitHtml('f-initial', 'f-initial-unit', UNITS[0], 'min="0" value="0"', 'Starting stock unit')}<div class="hint" id="f-initial-hint">Recorded as starting stock in the inventory history</div></div>` : ''}
+    ${!editing ? `<div class="form-grid"><div class="form-row"><label for="f-initial">Starting stock (optional)</label>${qtyWithUnitHtml('f-initial', 'f-initial-unit', UNITS[0], 'min="0" value="0"', 'Starting stock unit')}<div class="hint" id="f-initial-hint">Recorded as starting stock in the inventory history</div></div>
+      <div class="form-row"><label for="f-initial-brand">Brand of this stock (optional)</label><input id="f-initial-brand" maxlength="60" placeholder="e.g. Laciate" autocomplete="off"><div class="hint">Adds the brand to this ingredient. More brands can be added on its page.</div></div></div>` : ''}
     <div class="form-row"><label for="f-notes">Notes</label><textarea id="f-notes" rows="2">${esc(editing ? (editing.notes || '') : '')}</textarea></div>`;
   const foot = `
     ${editing ? (editing.active === false
@@ -272,8 +273,17 @@ function openIngredientForm(id){
         const initUnitSel = root.querySelector('#f-initial-unit');
         const initQty = typedToBase(root.querySelector('#f-initial').value, initUnitSel && initUnitSel.value, fields.base_unit);
         if(initQty == null && num(root.querySelector('#f-initial').value) > 0){ toast('That starting stock unit does not fit the base unit — choose the unit again', 'error'); return; }
+        // optional brand: the brand row first, then the stock line that names it (same call)
+        const brandName0 = cleanBrandName((root.querySelector('#f-initial-brand') || {}).value);
+        let brandId = null;
+        if(brandName0 === false){ toast('A brand name can have at most 60 characters', 'error'); return; }
+        if(brandName0){
+          brandId = uid();
+          ops.push(Ops.upsert('ingredient_brands', {id: brandId, ingredient_id: newId, name: brandName0, active: true, sort_order: 1, created_at: now, updated_at: now}));
+        }
         if(initQty > 0) ops.push(Ops.upsert('inventory_transactions', {id: uid(), ingredient_id: newId, transaction_type: 'INITIAL_STOCK', quantity: initQty, reference_id: null, transaction_date: shopTodayKey(),
-          notes: 'Starting stock' + (initUnitSel && initUnitSel.value !== fields.base_unit ? ` (${formatQuantity(initQty, fields.base_unit, initUnitSel.value)})` : ''), created_at: now}));
+          brand_id: brandId,
+          notes: 'Starting stock' + (initUnitSel && initUnitSel.value !== fields.base_unit ? ` (${formatQuantity(initQty, fields.base_unit, initUnitSel.value)})` : '') + (brandName0 ? ' · ' + brandName0 : ''), created_at: now}));
         ops.push(Ops.audit('Ingredient added', name, newId));
       }
       if(await boSave(ops, {success: editing ? 'Ingredient updated' : 'Ingredient added'})){
@@ -448,7 +458,7 @@ function renderIngredientDetail(id){
     <a class="linklike" id="back-ing" style="font-size:13px;">← Back to ingredients</a>
     <div class="ingredient-detail-header" style="margin-top:10px;gap:12px;flex-wrap:wrap;">
       <div>
-        <h2 style="font-family:var(--font-display);font-size:26px;">${esc(ing.name)} ${ing.active === false ? '<span class="badge badge-gray">Inactive</span>' : ''} ${produced ? '<span class="badge badge-gray">Produced</span>' : ''}</h2>
+        <h2 class="display page-title">${esc(ing.name)} ${ing.active === false ? '<span class="badge badge-gray">Inactive</span>' : ''} ${produced ? '<span class="badge badge-gray">Produced</span>' : ''}</h2>
         <div class="pill-stack" style="margin-top:6px;">
           <span class="tag-pill">${esc(catName(ing.category_id))}</span><span class="tag-pill">${u}</span>${statusBadge(status)}
           ${produced && sourceRecipe ? `<a class="linklike" data-recipe="${esc(sourceRecipe.id)}" style="font-size:12.5px;">Recipe: ${esc(sourceRecipe.name)} →</a>` : ''}
@@ -469,6 +479,7 @@ function renderIngredientDetail(id){
       ${statCard('Lowest / highest cost', costing.count ? `${fmtMoney(costing.lowest)} / ${fmtMoney(costing.highest)}` : '—', produced ? 'across production batches' : 'across purchase history')}
       ${statCard('Inventory value', fmtMoney(stock * (costing.current || 0)), 'stock × current cost')}
     </div>
+    ${produced ? '' : brandSectionHtml(ing)}
     ${produced ? `<p class="hint" style="margin-top:10px;">This item's cost in other recipes is worked out live from its recipe (${esc(sourceRecipe ? sourceRecipe.name : '—')}) and today's ingredient costs, so it updates by itself — the same way a raw ingredient updates when you record a new purchase. Batch figures above are for reference.</p>` : ''}
     ${produced ? `
       <div class="section-title">Production history</div>
@@ -476,8 +487,8 @@ function renderIngredientDetail(id){
         <tbody>${batches.map(b => `<tr><td>${fmtDay(b.production_date)}</td><td>${esc(b.batch_number || '—')}</td><td class="num">${fmtNum(b.expected_yield, 2)} ${esc(b.yield_unit || '')}</td><td class="num">${fmtNum(b.actual_yield, 2)} ${esc(b.yield_unit || '')}</td><td class="num">${fmtMoney(b.raw_cost_total)}</td><td class="num mono">${fmtMoney(b.actual_cost_per_unit)}/${esc(b.yield_unit || '')}</td></tr>`).join('')}</tbody></table></div>`
         : emptyBlock('No production batches recorded yet. Use "+ Produce" to make your first batch.')}` : `
       <div class="section-title">Purchase history</div>
-      ${purchases.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Supplier</th><th>Invoice #</th><th class="num">Quantity</th><th>Unit</th><th class="num">Total price</th><th class="num">Price / base unit</th></tr></thead>
-        <tbody>${purchases.map(p => `<tr><td>${fmtDay(p.purchase_date)}</td><td>${esc(supName(p.supplier_id))}</td><td>${esc(p.invoice_number || '—')}</td><td class="num">${fmtNum(p.quantity, 2)}</td><td>${esc(p.purchase_unit || '')}</td><td class="num">${fmtMoney(p.total_price)}</td><td class="num mono">${fmtMoney(p.price_per_base_unit)}/${u}</td></tr>`).join('')}</tbody></table></div>`
+      ${purchases.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Supplier</th><th>Brand</th><th>Invoice #</th><th class="num">Quantity</th><th>Unit</th><th class="num">Total price</th><th class="num">Price / base unit</th></tr></thead>
+        <tbody>${purchases.map(p => `<tr><td>${fmtDay(p.purchase_date)}</td><td>${esc(supName(p.supplier_id))}</td><td>${p.brand_id ? esc(brandName(p.brand_id)) : '<span class="text-light">—</span>'}</td><td>${esc(p.invoice_number || '—')}</td><td class="num">${fmtNum(p.quantity, 2)}</td><td>${esc(p.purchase_unit || '')}</td><td class="num">${fmtMoney(p.total_price)}</td><td class="num mono">${fmtMoney(p.price_per_base_unit)}/${u}</td></tr>`).join('')}</tbody></table></div>`
         : emptyBlock('No purchases recorded yet for this ingredient.')}`}
     <div class="section-title">Inventory history</div>
     <div id="ing-history"><div class="loading-line">Loading the stock history…</div></div>
@@ -489,6 +500,7 @@ function renderIngredientDetail(id){
   content.querySelector('#edit-ing-btn').onclick = () => openIngredientForm(id);
   const pb = content.querySelector('#produce-btn'); if(pb) pb.onclick = () => openProductionForm(sourceRecipe ? sourceRecipe.id : null);
   const bb = content.querySelector('#buy-btn'); if(bb) bb.onclick = () => openPurchaseForm(id);
+  if(!produced) wireBrandSection(content, ing);
   content.querySelectorAll('[data-recipe]').forEach(a => a.onclick = () => navigate('recipeDetail', a.dataset.recipe));
   loadIngredientTxns(id).then(txns => {
     const box = document.getElementById('ing-history');
@@ -506,6 +518,124 @@ function runningStockRows(txns, unit){
     <td class="num">${signedQty(t) > 0 ? '+' : ''}${fmtNum(signedQty(t), 2)} ${esc(unit)}</td>
     <td class="num"><b>${fmtNum(t.running, 2)} ${esc(unit)}</b></td>
     <td class="text-light">${esc(t.notes || '—')}</td></tr>`).join('');
+}
+
+/* ================= Ingredient brands (release 1.2) =================
+   Each ingredient can have brands (e.g. milk: Laciate, Alaska). A purchase, starting stock or
+   stock added by hand can name one. The server works out what is left of each brand, oldest
+   stock first (first in, first out), and which brand is being used now (bo_bootstrap
+   brand_stock; read with brandStockFor / inUseBrand / brandsFor from ../shared/logic.js).
+   A brand that a purchase or stock line names can't be deleted (BRAND_IN_USE): switch it off. */
+function cleanBrandName(raw){
+  const n = String(raw == null ? '' : raw).replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
+  if(n.length > 60) return false;
+  return n;
+}
+// small line under the stock number in lists: the brand being used now
+function brandInUseLine(ingredientId){
+  if(!brandsFor(ingredientId, true).length) return '';
+  const u = inUseBrand(ingredientId);
+  return u ? `<span class="brand-tag" title="Being used now (oldest stock first)">${esc(u.brand_id ? u.brand_name : 'Brand not set')}</span>` : '';
+}
+// fills a Brand dropdown with the ingredient's active brands (optional); hides the row when there are none
+function fillBrandSelect(sel, hint, ingredientId, what){
+  if(!sel) return;
+  const list = brandsFor(ingredientId);
+  const row = sel.closest('.form-row');
+  sel.innerHTML = `<option value="">No brand / not sure</option>` + list.map(b => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');
+  if(hint) hint.textContent = list.length ? `Optional: which brand ${what} is.` : '';
+  if(row && row.id === 'p-brand-row'){
+    sel.disabled = !list.length;
+    if(hint && !list.length) hint.textContent = 'This ingredient has no brands. Add them on its page if you buy more than one brand.';
+  }
+}
+function brandUsed(b){
+  if(state.purchases.some(p => p.brand_id === b.id)) return true;
+  const e = brandStockFor(b.ingredient_id);
+  return !!(e && (e.lots || []).some(l => l.brand_id === b.id));
+}
+function brandSectionHtml(ing){
+  const u = ing.base_unit;
+  const all = brandsFor(ing.id, true);
+  const stockEntry = brandStockFor(ing.id);
+  const left = {};
+  ((stockEntry && stockEntry.brands) || []).forEach(x => { left[x.brand_id || ''] = num(x.remaining); });
+  const inUse = inUseBrand(ing.id);
+  const inUseText = !all.length ? '' : inUse
+    ? `<div class="brand-inuse" id="brand-inuse">${icon('check', {size: 20})}<span>In use now: <b>${esc(inUse.brand_id ? inUse.brand_name : 'brand not set')}</b> (oldest stock first)${inUse.price_per_base_unit != null ? ` · ${fmtMoney(inUse.price_per_base_unit)} per ${esc(u)}` : ''} · ${esc(fmtNum(inUse.remaining, 2))} ${esc(u)} left of that delivery</span></div>`
+    : `<div class="brand-inuse none" id="brand-inuse">${icon('info', {size: 20})}<span>No stock yet, so no brand is in use.</span></div>`;
+  const notSet = left[''] > 0 ? `<tr class="muted-row"><td><b>Not set</b><div class="sub-line">stock without a brand</div></td><td class="num">${fmtNum(left[''], 2)} ${esc(u)}</td><td></td><td></td></tr>` : '';
+  return `<div class="section-title">Brands</div>
+    <div class="card" id="brand-card">
+      ${inUseText}
+      ${all.length ? `<div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Brand</th><th class="num">Stock now</th><th>Status</th><th></th></tr></thead><tbody>
+        ${all.map((b, i) => `<tr class="${b.active === false ? 'muted-row' : ''}" data-brand-row="${esc(b.id)}"><td><b>${esc(b.name)}</b>${inUse && inUse.brand_id === b.id ? ' <span class="badge badge-green">In use now</span>' : ''}</td>
+          <td class="num">${fmtNum(left[b.id] || 0, 2)} ${esc(u)}</td>
+          <td>${b.active !== false ? '<span class="badge badge-green">On</span>' : '<span class="badge badge-gray">Off</span>'}</td>
+          <td class="row-actions"><span class="brand-order"><button class="btn btn-sm btn-ghost" data-brand-move="-1" data-brand="${esc(b.id)}" ${i === 0 ? 'disabled' : ''} aria-label="Move ${esc(b.name)} up">${icon('chevron-down', {size: 18, className: 'rot180'})}</button><button class="btn btn-sm btn-ghost" data-brand-move="1" data-brand="${esc(b.id)}" ${i === all.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(b.name)} down">${icon('chevron-down', {size: 18})}</button></span>
+            <button class="btn btn-sm btn-ghost" data-brand-rename="${esc(b.id)}">Rename</button>
+            <button class="btn btn-sm btn-ghost" data-brand-toggle="${esc(b.id)}">${b.active !== false ? 'Switch off' : 'Switch on'}</button>
+            ${brandUsed(b) ? '' : `<button class="btn btn-sm btn-ghost" data-brand-del="${esc(b.id)}">Delete</button>`}</td></tr>`).join('')}
+        ${notSet}
+      </tbody></table></div>` : `<p class="hint" style="margin-top:0;">Buy more than one brand of ${esc(ing.name)}? Add the brands here. Then each purchase can say which brand it was, and you see how much of each is left and which one is being used now (oldest stock first).</p>`}
+      <div class="brand-add"><label class="sr-only" for="brand-new-name">New brand name</label><input id="brand-new-name" maxlength="60" placeholder="New brand, e.g. Laciate" autocomplete="off"><button class="btn btn-primary btn-sm" id="brand-add" type="button">${icon('plus', {size: 18})} Add brand</button></div>
+      ${all.length ? '<p class="hint" style="margin-bottom:0;">A brand that is on a purchase or stock can\'t be deleted — switch it off instead. Switched-off brands keep their history but are not offered for new purchases.</p>' : ''}
+    </div>`;
+}
+function wireBrandSection(root, ing){
+  const card = root.querySelector('#brand-card'); if(!card) return;
+  const again = () => { if(state.route === 'ingredientDetail' && state.routeParam === ing.id) navigate('ingredientDetail', ing.id); };
+  const B = (id) => state.ingredientBrands.find(b => b.id === id);
+  const nameTaken = (name, exceptId) => brandsFor(ing.id, true).some(b => b.id !== exceptId && b.name.trim().toLowerCase() === name.toLowerCase());
+  const add = card.querySelector('#brand-add'), input = card.querySelector('#brand-new-name');
+  input.onkeydown = (e) => { if(e.key === 'Enter'){ e.preventDefault(); add.click(); } };
+  add.onclick = () => busy(add, async () => {
+    const name = cleanBrandName(input.value);
+    if(name === false){ toast('A brand name can have at most 60 characters', 'error'); return; }
+    if(!name){ toast('Type the brand name first', 'error'); input.focus(); return; }
+    if(nameTaken(name)){ toast(`${ing.name} already has a brand called "${name}"`, 'error'); return; }
+    const now = nowISO();
+    const order = brandsFor(ing.id, true).reduce((m, b) => Math.max(m, num(b.sort_order)), 0) + 1;
+    const id = uid();
+    if(await boSave([Ops.upsert('ingredient_brands', {id, ingredient_id: ing.id, name, active: true, sort_order: order, created_at: now, updated_at: now}),
+      Ops.audit('Brand added', `${ing.name}: ${name}`, id)], {success: `Brand "${name}" added`})) again();
+  }, 'Adding…');
+  card.querySelectorAll('[data-brand-toggle]').forEach(btn => btn.onclick = () => busy(btn, async () => {
+    const b = B(btn.dataset.brandToggle); if(!b) return;
+    const on = b.active === false;
+    if(await boSave([Ops.update('ingredient_brands', {id: b.id, active: on, updated_at: nowISO()}), Ops.audit(on ? 'Brand switched on' : 'Brand switched off', `${ing.name}: ${b.name}`, b.id)],
+      {success: on ? `${b.name} is offered again` : `${b.name} is switched off (its history stays)`})) again();
+  }, '…'));
+  card.querySelectorAll('[data-brand-rename]').forEach(btn => btn.onclick = () => {
+    const b = B(btn.dataset.brandRename); if(!b) return;
+    openModal({title: 'Rename brand', body: `<div class="form-row"><label for="br-name">Brand name</label><input id="br-name" maxlength="60" value="${esc(b.name)}"></div><p class="hint">Purchases and stock keep pointing at this brand; only the name changes.</p>`,
+      foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="br-save">Save</button>`,
+      onMount: (m) => {
+        m.querySelector('[data-cancel]').onclick = closeModal;
+        const save = m.querySelector('#br-save');
+        save.onclick = () => busy(save, async () => {
+          const name = cleanBrandName(m.querySelector('#br-name').value);
+          if(!name){ toast(name === false ? 'A brand name can have at most 60 characters' : 'Enter a name', 'error'); return; }
+          if(nameTaken(name, b.id)){ toast(`${ing.name} already has a brand called "${name}"`, 'error'); return; }
+          if(await boSave([Ops.update('ingredient_brands', {id: b.id, name, updated_at: nowISO()}), Ops.audit('Brand renamed', `${ing.name}: ${b.name} → ${name}`, b.id)], {success: 'Saved'})){ closeModal(); again(); }
+        });
+      }});
+  });
+  card.querySelectorAll('[data-brand-move]').forEach(btn => btn.onclick = () => busy(btn, async () => {
+    const list = brandsFor(ing.id, true);
+    const i = list.findIndex(b => b.id === btn.dataset.brand), j = i + Number(btn.dataset.brandMove);
+    if(i < 0 || j < 0 || j >= list.length) return;
+    const t = list[i]; list[i] = list[j]; list[j] = t;
+    const now = nowISO();
+    const ops = list.map((b, k) => num(b.sort_order) !== k + 1 ? Ops.update('ingredient_brands', {id: b.id, sort_order: k + 1, updated_at: now}) : null).filter(Boolean);
+    if(await boSave(ops)) again();
+  }, '…'));
+  card.querySelectorAll('[data-brand-del]').forEach(btn => btn.onclick = async () => {
+    const b = B(btn.dataset.brandDel); if(!b) return;
+    const ok = await confirmDialog(`Delete the brand <b>${esc(b.name)}</b>? (A brand that is on a purchase or stock can't be deleted — switch it off instead.)`, 'Delete brand');
+    if(!ok) return;
+    if(await boSave([Ops.del('ingredient_brands', b.id), Ops.audit('Brand deleted', `${ing.name}: ${b.name}`, b.id)], {success: 'Brand deleted'})) again();
+  });
 }
 
 /* ================= Purchases ================= */
@@ -538,7 +668,7 @@ function renderPurchasesTable(){
   if(purFilter.supplier) list = list.filter(p => p.supplier_id === purFilter.supplier);
   list.sort((a, b) => String(b.purchase_date).localeCompare(String(a.purchase_date)) || String(b.created_at).localeCompare(String(a.created_at)));
   if(!list.length){
-    wrap.innerHTML = `<div class="table-wrap"><div class="empty-state"><div class="big">🧾</div>No purchases recorded yet.<br><br><button class="btn btn-primary" id="empty-add-pur">+ New purchase</button></div></div>`;
+    wrap.innerHTML = `<div class="table-wrap"><div class="empty-state"><div class="big">${icon('inbox', {size: 40})}</div>No purchases recorded yet.<br><br><button class="btn btn-primary" id="empty-add-pur">+ New purchase</button></div></div>`;
     wrap.querySelector('#empty-add-pur').onclick = () => openPurchaseForm();
     return;
   }
@@ -546,7 +676,7 @@ function renderPurchasesTable(){
     <thead><tr><th>Date</th><th>Ingredient</th><th>Supplier</th><th>Invoice #</th><th class="num">Qty</th><th>Unit</th><th class="num">Total price</th><th class="num">Price/base unit</th><th></th></tr></thead>
     <tbody>${list.map(p => `<tr>
       <td>${fmtDay(p.purchase_date)}</td>
-      <td><a class="linklike" data-ing="${esc(p.ingredient_id)}">${esc(ingName(p.ingredient_id))}</a></td>
+      <td><a class="linklike" data-ing="${esc(p.ingredient_id)}">${esc(ingName(p.ingredient_id))}</a>${p.brand_id ? `<span class="brand-tag">${esc(brandName(p.brand_id))}</span>` : ''}</td>
       <td>${esc(supName(p.supplier_id))}</td><td>${esc(p.invoice_number || '—')}</td>
       <td class="num">${fmtNum(p.quantity, 2)}</td><td>${esc(p.purchase_unit || '')}</td>
       <td class="num">${fmtMoney(p.total_price)}</td><td class="num mono">${fmtMoney(p.price_per_base_unit)}</td>
@@ -573,12 +703,15 @@ function openPurchaseForm(prefillIngredientId){
     <div class="form-row"><label for="p-ing">Ingredient</label><select id="p-ing">${list.map(i => `<option value="${esc(i.id)}" ${prefillIngredientId === i.id ? 'selected' : ''}>${esc(i.name)} (${esc(i.base_unit)})</option>`).join('')}</select></div>
     <div class="form-grid">
       <div class="form-row"><label for="p-sup">Supplier</label><select id="p-sup"><option value="">—</option>${selectOptions(state.suppliers.slice().sort(byName), '')}</select></div>
+      <div class="form-row" id="p-brand-row"><label for="p-brand">Brand</label><select id="p-brand"></select><div class="hint" id="p-brand-hint"></div></div>
+    </div>
+    <div class="form-grid">
       <div class="form-row"><label for="p-date">Purchase date</label><input type="date" id="p-date" value="${today}" max="${keyAddDays(today, 1)}"></div>
     </div>
     <div class="form-grid">
       <div class="form-row"><label for="p-invoice">Invoice number</label><input id="p-invoice" maxlength="60" placeholder="optional"></div>
-      <div class="form-row"><label for="p-price">Total price (₱)</label><input type="number" step="any" min="0" id="p-price" placeholder="0.00"></div>
     </div>
+    <div class="form-row"><label for="p-price">Total price (₱)</label><input type="number" step="any" min="0" id="p-price" placeholder="0.00"></div>
     <div class="form-grid">
       <div class="form-row"><label for="p-qty">Quantity purchased</label><input type="number" step="any" min="0" id="p-qty" placeholder="e.g. 1000"></div>
       <div class="form-row"><label for="p-unit">Purchase unit</label><select id="p-unit">${UNITS.map(u => `<option value="${u}">${u}</option>`).join('')}</select></div>
@@ -625,8 +758,9 @@ function openPurchaseForm(prefillIngredientId){
       preview.textContent = `${fmtNum(qty, 2)} ${unitSel.value} → ${fmtNum(baseQty, 2)} ${ing.base_unit} in total. Cost = ${fmtMoney(price / baseQty)} per ${ing.base_unit}.`;
     }
     const setDefaultUnit = () => { const ing = currentIngredient(); if(ing){ unitSel.value = ing.base_unit; const s = ing.supplier_id; if(s) root.querySelector('#p-sup').value = s; } };
-    setDefaultUnit();
-    ingSel.onchange = () => { setDefaultUnit(); updateConvVisibility(); };
+    const fillBrands = () => fillBrandSelect(root.querySelector('#p-brand'), root.querySelector('#p-brand-hint'), ingSel.value, 'this purchase');
+    setDefaultUnit(); fillBrands();
+    ingSel.onchange = () => { setDefaultUnit(); fillBrands(); updateConvVisibility(); };
     unitSel.onchange = updateConvVisibility;
     qtyInput.oninput = updatePreview; priceInput.oninput = updatePreview; convInput.oninput = updatePreview;
     updateConvVisibility();
@@ -647,13 +781,14 @@ function openPurchaseForm(prefillIngredientId){
         invoice_number: root.querySelector('#p-invoice').value.trim(),
         quantity: qty, purchase_unit: unitSel.value, base_quantity: baseQty,
         total_price: price, price_per_base_unit: price / baseQty,
+        brand_id: root.querySelector('#p-brand').value || null,
         notes: root.querySelector('#p-notes').value, created_at: now,
       };
       const ok = await boSave([
         Ops.upsert('purchases', purchase),
         Ops.upsert('inventory_transactions', {id: uid(), ingredient_id: ing.id, transaction_type: 'PURCHASE', quantity: baseQty, reference_id: purchase.id,
           transaction_date: purchase.purchase_date, notes: `Purchase${purchase.invoice_number ? ' #' + purchase.invoice_number : ''}`, created_at: now}),
-        Ops.audit('Purchase recorded', `${ing.name} — ${fmtNum(qty, 2)} ${unitSel.value} for ${fmtMoney(price)}`, purchase.id),
+        Ops.audit('Purchase recorded', `${ing.name}${purchase.brand_id ? ' (' + brandName(purchase.brand_id) + ')' : ''} — ${fmtNum(qty, 2)} ${unitSel.value} for ${fmtMoney(price)}`, purchase.id),
       ], {success: 'Purchase recorded — costs updated'});
       if(ok){ closeModal(); if(state.route === 'ingredientDetail') navigate('ingredientDetail', ing.id); else rerender(); }
     });
@@ -959,6 +1094,7 @@ function openAdjustmentForm(prefillId){
     <div class="seg" style="margin-bottom:12px;"><button class="seg-btn active" type="button" data-mode="delta">Add or take off an amount</button><button class="seg-btn" type="button" data-mode="count">I counted it</button></div>
     <div class="form-row" id="a-delta-row"><label for="a-qty">Adjustment amount (use a minus to reduce, e.g. -50)</label>${qtyWithUnitHtml('a-qty', 'a-qty-unit', (ingredientById(prefillId) || list[0]).base_unit, 'placeholder="e.g. -50 or 20"', 'Adjustment unit')}<div class="hint" id="a-qty-hint"></div></div>
     <div class="form-row" id="a-count-row" style="display:none;"><label for="a-count">Amount counted on the shelf</label>${qtyWithUnitHtml('a-count', 'a-count-unit', (ingredientById(prefillId) || list[0]).base_unit, 'min="0"', 'Counted unit')}<div class="hint" id="a-count-hint"></div></div>
+    <div class="form-row" id="a-brand-row" style="display:none;"><label for="a-brand">Brand of the stock added (optional)</label><select id="a-brand"></select><div class="hint" id="a-brand-hint"></div></div>
     <div class="form-row"><label for="a-date">Date</label><input type="date" id="a-date" value="${shopTodayKey()}"></div>
     <div class="form-row"><label for="a-notes">Reason / notes</label><textarea id="a-notes" rows="2" placeholder="e.g. Physical stock count correction"></textarea></div>`;
   openModal({title: 'Adjust stock', body, foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="btn-save-adj">Save adjustment</button>`, onMount: (root) => {
@@ -976,8 +1112,13 @@ function openAdjustmentForm(prefillId){
       root.querySelector('#a-count-hint').textContent = d != null ? `Change: ${signed(d, i.base_unit, i.base_unit)}${cUnit.value !== i.base_unit ? ' (' + signed(d, i.base_unit, cUnit.value) + ')' : ''}` : '';
       const q = i && qIn.value !== '' ? typedToBase(qIn.value, qUnit.value, i.base_unit) : null;
       root.querySelector('#a-qty-hint').textContent = q && qUnit.value !== i.base_unit ? `Change: ${signed(q, i.base_unit, i.base_unit)}` : '';
+      // a brand can only be named on stock that is ADDED (the database: BRAND_NOT_ALLOWED otherwise)
+      const adds = mode === 'count' ? (d != null && d > 0) : (q != null && q > 0);
+      root.querySelector('#a-brand-row').style.display = adds && i && brandsFor(i.id).length ? 'block' : 'none';
     };
-    root.querySelector('#a-ing').onchange = () => { const i = cur(); if(i){ resetUnitSelect(qUnit, i.base_unit); resetUnitSelect(cUnit, i.base_unit); } refresh(); };
+    const fillAdjBrands = () => fillBrandSelect(root.querySelector('#a-brand'), root.querySelector('#a-brand-hint'), root.querySelector('#a-ing').value, 'the stock added');
+    fillAdjBrands();
+    root.querySelector('#a-ing').onchange = () => { const i = cur(); if(i){ resetUnitSelect(qUnit, i.base_unit); resetUnitSelect(cUnit, i.base_unit); } fillAdjBrands(); refresh(); };
     cIn.oninput = refresh; qIn.oninput = refresh;
     wireUnitConvert(qIn, qUnit, refresh); wireUnitConvert(cIn, cUnit, refresh);
     { const i = cur(); if(i){ resetUnitSelect(qUnit, i.base_unit); resetUnitSelect(cUnit, i.base_unit); } }
@@ -1003,9 +1144,10 @@ function openAdjustmentForm(prefillId){
       if(!qty){ toast(mode === 'count' ? 'The count matches the stock — nothing to change' : 'Enter an amount that is not zero', mode === 'count' ? 'warn' : 'error'); return; }
       const notes = root.querySelector('#a-notes').value.trim() || (mode === 'count' ? 'Stock count' : '');
       const id = uid();
+      const brandId = qty > 0 && root.querySelector('#a-brand-row').style.display !== 'none' ? (root.querySelector('#a-brand').value || null) : null;
       if(await boSave([
-        Ops.upsert('inventory_transactions', {id, ingredient_id: ing.id, transaction_type: 'ADJUSTMENT', quantity: qty, reference_id: null, transaction_date: root.querySelector('#a-date').value || shopTodayKey(), notes, created_at: nowISO()}),
-        Ops.audit('Stock adjusted', `${ing.name} ${qty > 0 ? '+' : '-'}${typedQtyText(Math.abs(qty), ing.base_unit, typedUnit)}${mode === 'count' ? ` (counted ${formatQuantity(typedToBase(cIn.value, cUnit.value, ing.base_unit), ing.base_unit, cUnit.value)})` : ''}${notes ? ' — ' + notes : ''}`, id),
+        Ops.upsert('inventory_transactions', {id, ingredient_id: ing.id, transaction_type: 'ADJUSTMENT', quantity: qty, reference_id: null, transaction_date: root.querySelector('#a-date').value || shopTodayKey(), brand_id: brandId, notes, created_at: nowISO()}),
+        Ops.audit('Stock adjusted', `${ing.name}${brandId ? ' (' + brandName(brandId) + ')' : ''} ${qty > 0 ? '+' : '-'}${typedQtyText(Math.abs(qty), ing.base_unit, typedUnit)}${mode === 'count' ? ` (counted ${formatQuantity(typedToBase(cIn.value, cUnit.value, ing.base_unit), ing.base_unit, cUnit.value)})` : ''}${notes ? ' — ' + notes : ''}`, id),
       ], {success: 'Stock adjusted'})){ closeModal(); rerender(); }
     });
   }});

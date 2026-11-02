@@ -7,21 +7,17 @@
 <meta name="description" content="Back Office for the shop owner: stock, recipes and menu, costing, sales calendar, customers, tables and QR codes, staff PINs, counters and settings.">
 <meta name="robots" content="noindex">
 <link rel="manifest" href="./manifest.json">
-<meta name="theme-color" content="#241209">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%98%95%3C/text%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<!-- Web fonts load in the background (media="print" until loaded, switched by bo-core.js), so the first
-     screen never waits for them; until then the system fonts in the font stacks are used. -->
-<link id="web-fonts" href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print">
-<noscript><link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
+<meta name="theme-color" content="#1F1B19">
+<link rel="icon" type="image/png" href="../shared/brand/tile-icon-192.png">
+<link rel="apple-touch-icon" href="../shared/brand/tile-icon-192.png">
+<!-- No outside fonts: Brunson comes from ../shared/brand/tokens.css, body text uses the device's own font. -->
 <link rel="stylesheet" href="../shared/styles.css">
 <link rel="stylesheet" href="./back.css">
 </head>
 <body>
 <div id="boot-screen" class="auth-screen">
   <div class="auth-card">
-    <div class="pin-logo">☕</div>
+    <div class="pin-logo"><img class="brand-mark" src="../shared/brand/tile-icon-192.webp" alt="" width="72" height="72"></div>
     <p class="boot-msg text-light">Opening the Back Office…</p>
     <div class="boot-actions"></div>
   </div>
@@ -34,7 +30,7 @@
   <div id="nav-scrim"></div>
   <div id="main">
     <div id="topbar">
-      <button id="nav-toggle" class="nav-toggle" type="button" aria-label="Open the menu">☰</button>
+      <button id="nav-toggle" class="nav-toggle" type="button" aria-label="Open the menu"><svg class="cc-icon" aria-hidden="true" focusable="false" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
       <h1 id="topbar-title">Dashboard</h1>
       <div class="actions" id="topbar-actions"></div>
     </div>
@@ -57,6 +53,7 @@
 <script src="./bo-sales.js"></script>
 <script src="./bo-reports.js"></script>
 <script src="./bo-admin.js"></script>
+<script src="./bo-floor.js"></script>
 <script src="./bo-import.js"></script>
 </body>
 </html>

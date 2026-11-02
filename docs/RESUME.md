@@ -1,39 +1,40 @@
-# Resume here (save point: 2026-10-26, checkpoint 8, release 1.1 ready)
+# Resume here (save point: 2026-11-02, checkpoint 10, release 1.2 ready)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
 ## Where we are
-- **Live:** release 1.0, commit a53238e (merged PR #1 on 2026-10-20). This is the **last working version** (see `docs/checkpoints.md`).
-- **Release 1.1 (batch 1) is built, tested and reviewed** on `wip/cccc-online-qr`. It's waiting for the owner to follow `docs/RELEASE_1.1.md`:
-  1. download a backup;
-  2. run the read-only cash check and tell C the answer;
-  3. run `007_batch1.sql`;
-  4. merge the new pull request;
-  5. reload the counters.
-- **Batch 1 contents** (`docs/owner-feedback.md` #1–#6, T1, T2):
-  - Back Office button at the bottom of the counter menu;
-  - unit conversion everywhere (stored amounts stay in base units, the typed unit is only for display);
-  - category manager plus Raw materials;
-  - Excel import/export for recipes (`cccc/back/bo-excel.js`, vendored JSZip; imported menu items hidden by default);
-  - tick-and-remove recipes;
-  - ₱0 cash lines skipped in the old-backup import;
-  - `fo_sync` refuses ₱0 pay-ins and pay-outs (`AMOUNT_NOT_POSITIVE`, script 007).
-- **QA:** `tests/run_all.sh --runs 2` gives 60 suites and 3,716 checks, all green after the fixes. Security verdict: ready (all low findings fixed).
-- **The owner's private files** are in `/home/claude/private/`: costing spreadsheets and the developer changelog. They are never committed. The changelog also lives in the Claude project docs (`claude/developer-changelog.md`) and in the owner's Obsidian.
+- **Live:** release 1.1, commit 0741e1b (PR #2; 007 run on 2026-10-29). This is the **last working version** (`docs/checkpoints.md`).
+- **Release 1.2 is built, tested and security-reviewed** on `wip/cccc-online-qr`. It waits for the owner to follow `docs/RELEASE_1.2.md`:
+  1. counters uploaded;
+  2. backup;
+  3. run `008_release_1_2.sql`;
+  4. merge the pull request;
+  5. reload devices;
+  6. set up loyalty, floor plan, colours and brands.
+- **Contents of 1.2:**
+  - full redesign (tokens in `cccc/shared/brand/tokens.css`, Brunson display font, wordmark images; `docs/design/`);
+  - counter: Orders grouped by sub-category, tile colours, Customers tab, stamp rewards at checkout, floor plan on QR orders;
+  - Back Office: floor plan editor, sub-category colours, ingredient brands with FIFO stock and "in use" cost, loyalty settings, loyalty rewards in reports;
+  - QR page: restyle and the 15-stamp card.
+  - Database contract: `docs/handoff/contract-1.2.md`.
+- **QA:** `tests/run_all.sh --runs 2` passes 69/71 suites (4,295 checks). The 2 failures were one counter defect (D1), since fixed and re-tested. The money, stock, cash and brand-FIFO reconciliation (`tests/e2e/money12.e2e.js`) matches to the centavo. **Final run on the finished code (2026-11-02, `run_all.sh --runs 1`): 47 suites, 3,007 checks, 0 failing.**
+- **Security:** 008 passed two review rounds (all findings fixed). The 1.2 screens review found 4 low items, all fixed.
 
-## After the owner releases 1.1
-- Mark 007 as run and frozen in CLAUDE.md; the next script is 008.
-- Add checkpoint 9 "Release 1.1 live" and make it the new last working version.
-- Update the changelog (1.1 = live) and send the owner the Obsidian notes.
+## After the owner releases 1.2
+- Mark 008 as run and frozen in CLAUDE.md; the next script is 009.
+- Add checkpoint 11 "Release 1.2 live" as the new last working version.
+- Update the changelog (1.2 = live) and send the Obsidian note.
 
-## Next batch (not started)
-- T3: `not null` and no-NaN rules on `cash_movements.amount` (008), after the owner's check.
-- T4: optional review flag for large pay-ins (ask the owner).
-- Later list: drop `profiles.pin_hash`, Senior/PWD discount button, loyalty stamps, prototype walkthrough, CAPTCHA only if fake orders appear.
+## Next batch: release 1.3 (planned, see `docs/owner-feedback.md`)
+- **QR ordering security (Q1–Q7):** guest vs registered sign-in, unique coffee-themed usernames, max 4 open tickets per table, 1 guest per table, account-switch warning that removes unpaid orders, and a stock check at payment where out-of-stock items must be removed (also for counter sales).
+- **Thermal printing (P1):** the owner's counters are iPad, Android, Windows and Mac; printers are Bluetooth and LAN. Plan: a network printer with a built-in web print service (Epson ePOS / Star WebPRNT), with the print dialog as fallback. Ask the printer brand and model first.
+- **P2:** manager-only "Retry without the reward" for refused reward sales.
+- **Later, plan first:** RPG-style loyalty (levels, perks, promo stamps).
+- **Older items:** T3 cash amount rules (needs the owner's check), T4 large pay-in flag, drop `profiles.pin_hash`, Senior/PWD discount.
 
 ## How the team works
 Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs/checkpoints.md`.
-- Each agent has its own database and port: FO `db_fo`/8790, BO `db_bo`/8791 (batch 1 also used `db_bo2`/8793 and `db_bo_a`/8799), QR `db_qr`/8792, DB `db_sec`, QA `cccc`/8787.
+- **Databases and ports:** FO `db_fo`/8790, BO `db_bo`/8791, QR `db_qr`/8792, DB `db_sec`, core `db_core`/8795, review `db_rev`, QA `cccc`/8787.
 - Start PostgreSQL with `tests/start_pg.sh` after a restart.
-- Test PINs: cashier 1111, manager 222222, owner 999999.
-- The Obsidian notes live in `docs/obsidian/` (session log, public repo). The **developer changelog is private** and is never put in the repo.
+- **Test PINs:** cashier 1111, manager 222222, owner 999999.
+- Brand source files (logo prototype zip, Brunson font) came from the owner's Downloads; the shipped copies are in `cccc/shared/brand/`.

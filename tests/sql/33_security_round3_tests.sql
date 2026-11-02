@@ -273,7 +273,10 @@ select test.chk((select count(*) from suppliers) + (select count(*) from purchas
 select test.chk((select count(*) from devices) = 1 and (select device_key from devices) = :'key1', 'F9: counter reads only its own device row');
 select test.chk((select count(*) from sales) > 0 and (select count(*) from refunds) > 0 and (select count(*) from cash_movements) > 0 and (select count(*) from payments) > 0
            and (select count(*) from sale_items) > 0 and (select count(*) from recipes) > 0 and (select count(*) from staff) > 0 and (select count(*) from settings) = 1
-           and (select count(*) from v_ingredient_stock) = 1 and (select count(*) from dining_tables) > 0, 'F9: counter still reads what it needs (sales, refunds, cash, payments, items, menu, staff, settings, stock, tables)');
+           and (select count(*) from v_ingredient_stock) = 1 and (select count(*) from dining_tables) = 0
+           and jsonb_array_length(public.fo_floor_plan()->'tables') > 0
+           and not exists (select 1 from jsonb_array_elements(public.fo_floor_plan()->'tables') t where t ? 'qr_token'),
+  'F9: counter still reads what it needs (sales, refunds, cash, payments, items, menu, staff, settings, stock); tables only through fo_floor_plan, without qr_token');
 select public.fo_bootstrap(:'key1') as fb \gset
 select test.chk((:'fb'::jsonb->'device'->>'device_tag') = 'A' and (:'fb'::jsonb->'next_numbers'->>'pos')::int > 0 and jsonb_array_length(:'fb'::jsonb->'sales') > 0, 'F9: fo_bootstrap still works (device, next_numbers, sales)', :'fb'::jsonb->>'next_numbers');
 select test.chk(jsonb_array_length(public.sales_report(now() - interval '1 day', now() + interval '1 day')->'sales') > 0, 'F9: sales_report still works on a counter');
@@ -290,7 +293,8 @@ from pg_proc p where p.pronamespace = 'public'::regnamespace
   and p.proname not in ('get_qr_menu','qr_session','qr_register','qr_relink','qr_set_phone','qr_forget_device','qr_place_order','qr_my_orders','qr_cancel_order',
     'current_business_id','current_role_rank','app_rank','is_owner','apply_changes','staff_pin_ids','staff_pin_update_needed','staff_pin_login','staff_logout',
     'staff_set_pin','staff_import_legacy_pin','create_device_pairing_code','redeem_device_pairing','revoke_device','unlock_device_pin','fo_bootstrap',
-    'bo_bootstrap','sales_report','search_customers','fo_sync','fo_add_customer','qr_update_order','merge_customers','delete_customer_data');
+    'bo_bootstrap','sales_report','search_customers','fo_sync','fo_add_customer','qr_update_order','merge_customers','delete_customer_data',
+    'fo_floor_plan','ingredient_brand_stock','fo_customer_list','fo_customer_detail');   -- 1.2 (008): lead-approved additions 2026-10-29
 select test.chk(not has_function_privilege('authenticated', 'public._write_row(text,jsonb,text,text,uuid)', 'execute')
            and not has_function_privilege('authenticated', 'public._update_row(text,jsonb,text,uuid)', 'execute')
            and not has_function_privilege('authenticated', 'public._writable_tables()', 'execute')

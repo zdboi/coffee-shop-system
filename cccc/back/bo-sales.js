@@ -35,7 +35,9 @@ function salesSummary(ds, sales, refunds){
   const items = ds.saleItems.filter(i => ids.has(i.sale_id)).reduce((s, i) => s + num(i.quantity), 0);
   return {gross, refunds: ref, net: gross - ref, count: sales.length, avg: sales.length ? gross / sales.length : 0, items,
     qr: sales.filter(s => s.source === 'QR' || s.qr_order_id).length,
-    discounts: sales.reduce((s, x) => s + num(x.discount_amount), 0)};
+    discounts: sales.reduce((s, x) => s + num(x.discount_amount), 0),
+    // stamp card rewards (sales.loyalty_discount, release 1.2), shown as their own line
+    loyalty: sales.reduce((s, x) => s + num(x.loyalty_discount), 0), loyaltyCount: sales.filter(x => num(x.loyalty_discount) > 0).length};
 }
 
 /* ================= tooltips (shared by the charts) =================
@@ -89,12 +91,14 @@ function calCssVar(name, fallback){ try{ const v = getComputedStyle(document.doc
 function calHex(h){ h = String(h).trim().replace('#', ''); if(h.length === 3) h = h.split('').map(c => c + c).join(''); const n = parseInt(h, 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
 function calMix(a, b, t){ const A = calHex(a), B = calHex(b); return '#' + A.map((v, i) => Math.round(v + (B[i] - v) * t).toString(16).padStart(2, '0')).join(''); }
 function calLum(hex){ const [r, g, b] = calHex(hex).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; }
-// Sequential ramp in ONE hue (the shop's secondary colour): more = darker.
+// Sequential ramp in ONE hue (the brand's terracotta, or the Custom theme's main colour): more = darker.
+// Read from the brand tokens on <html> (tokens.css; applyCustomTheme sets them there too).
 function calShade(t){
-  const card = calCssVar('--white', '#fffdf9'), hue = calCssVar('--green', '#33513f');
-  if(!(t > 0)) return {bg: calMix(card, calCssVar('--beige', '#e9dcc4'), 0.35), fg: calCssVar('--text', '#2c1e14')};
-  const bg = calMix(card, hue, 0.12 + 0.78 * Math.min(1, t));
-  return {bg, fg: calLum(bg) < 0.32 ? '#ffffff' : calCssVar('--text', '#2c1e14')};
+  const card = calCssVar('--cc-card', '#FFFDF8'), hue = calCssVar('--cc-terracotta', '#B5432B'), ink = calCssVar('--cc-ink', '#1F1B19');
+  if(!(t > 0)) return {bg: calMix(card, calCssVar('--cc-cream', '#F6EEDC'), 0.7), fg: ink};
+  // the darkest step stops at a 75% mix, so ink text stays readable on every day (4.8:1 or more)
+  const bg = calMix(card, hue, 0.1 + 0.65 * Math.min(1, t));
+  return {bg, fg: calLum(bg) < 0.18 ? calCssVar('--cc-card', '#FFFDF8') : ink};
 }
 function calNiceMax(v){ if(v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p; }
 function calCompact(n){
@@ -117,7 +121,7 @@ function calColumns(points, title){
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const max = calNiceMax(Math.max(...points.map(p => p.value), 0));
   const slot = plotW / points.length, barW = Math.min(24, Math.max(4, slot * 0.6));
-  const hue = calCssVar('--green', '#33513f'), grid = calCssVar('--beige', '#e9dcc4');
+  const hue = calCssVar('--cc-terracotta', '#B5432B'), grid = calCssVar('--cc-line', '#E3D6BD');
   const peak = points.reduce((a, b) => b.value > a.value ? b : a, points[0]);
   const labelEvery = points.length > 16 ? 2 : 1;
   let svg = `<svg class="cal-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}">`;
@@ -135,7 +139,7 @@ function calColumns(points, title){
     if(i % labelEvery === 0) svg += `<text x="${cx}" y="${H - 9}" text-anchor="middle">${esc(p.short || p.label)}</text>`;
     if(p === peak && p.value > 0) svg += `<text class="cal-val" x="${cx}" y="${y - 6}" text-anchor="middle">${esc(calCompact(p.value))}</text>`;
   });
-  svg += `<line x1="${padL}" x2="${W - padR}" y1="${padT + plotH}" y2="${padT + plotH}" stroke="${calMix(grid, calCssVar('--text', '#2c1e14'), 0.25)}" stroke-width="1"/>`;
+  svg += `<line x1="${padL}" x2="${W - padR}" y1="${padT + plotH}" y2="${padT + plotH}" stroke="${calMix(grid, calCssVar('--cc-ink', '#1F1B19'), 0.25)}" stroke-width="1"/>`;
   return svg + '</svg>';
 }
 // The table twin of a chart (same numbers, readable without hovering)
@@ -152,7 +156,7 @@ function calKpis(sum){
   return `<div class="grid grid-4 cal-kpis">
     ${statCard(SALES_LABELS.netSales, fmtMoney(sum.net), sum.refunds > 0 ? salesMinusRefundsText(sum.gross, sum.refunds) : 'no refunds')}
     ${statCard('Transactions', sum.count.toLocaleString('en-PH'), sum.qr ? `${sum.qr} from QR orders` : 'voided sales not counted')}
-    ${statCard('Average sale', fmtMoney(sum.avg), sum.discounts > 0 ? `${fmtMoney(sum.discounts)} in discounts` : '')}
+    ${statCard('Average sale', fmtMoney(sum.avg), [sum.discounts > 0 ? `${fmtMoney(sum.discounts)} in discounts` : '', sum.loyalty > 0 ? `${fmtMoney(sum.loyalty)} in ${loyaltyLineLabel().toLowerCase()} (${sum.loyaltyCount})` : ''].filter(Boolean).join(' · '))}
     ${statCard('Items sold', sum.items.toLocaleString('en-PH'), '')}
   </div>`;
 }
@@ -177,9 +181,9 @@ async function renderCalendar(){
     <div class="cal-toolbar">
       <div class="seg" role="tablist" aria-label="Calendar view">${['day', 'week', 'month', 'shift'].map(v => `<button class="seg-btn ${CAL.view === v ? 'active' : ''}" data-view="${v}" role="tab" aria-selected="${CAL.view === v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div>
       <div class="cal-nav">
-        <button class="btn btn-outline btn-sm" id="cal-prev" aria-label="Previous">◀</button>
+        <button class="btn btn-outline btn-sm" id="cal-prev" aria-label="Previous">${icon('chevron-left', {size: 20})}</button>
         <span class="cal-label">${esc(range.label)}</span>
-        <button class="btn btn-outline btn-sm" id="cal-next" aria-label="Next">▶</button>
+        <button class="btn btn-outline btn-sm" id="cal-next" aria-label="Next">${icon('chevron-right', {size: 20})}</button>
         <button class="btn btn-ghost btn-sm" id="cal-today">Today</button>
       </div>
       <div class="cal-spacer"></div>
@@ -354,7 +358,7 @@ function calRenderDay(body, ds, range, r){
 }
 function calRenderShift(body, ds, range, r){
   const shifts = ds.shifts.filter(s => inRange(s.opened_at, r.from, r.to) || s.id === CAL.shiftId).sort((a, b) => String(b.opened_at).localeCompare(String(a.opened_at)));
-  if(!shifts.length){ body.innerHTML = `<div class="card"><div class="cal-empty">No shifts in ${esc(range.label)}. Use ◀ ▶ to pick another month.</div></div>`; CAL.lastTable = null; return; }
+  if(!shifts.length){ body.innerHTML = `<div class="card"><div class="cal-empty">No shifts in ${esc(range.label)}. Use the arrows next to the month to pick another one.</div></div>`; CAL.lastTable = null; return; }
   const shift = shifts.find(s => s.id === CAL.shiftId) || shifts[0];
   CAL.shiftId = shift.id;
   const m = shiftMetrics(shift, ds);            // same maths as the counter's shift report
@@ -366,7 +370,7 @@ function calRenderShift(body, ds, range, r){
   body.innerHTML = `
     <div class="toolbar" style="margin-bottom:12px;"><div class="toolbar-left">
       <select class="filter" id="cal-shift-pick" aria-label="Choose a shift">${shifts.map(s => `<option value="${esc(s.id)}" ${s.id === shift.id ? 'selected' : ''}>${esc(s.shift_number || 'Shift')} · ${esc(s.cashier_name || '')} · ${fmtShopDate(s.opened_at)}${s.status === 'ACTIVE' ? ' (open)' : ''}</option>`).join('')}</select>
-      <button class="btn btn-outline btn-sm" id="cal-shift-print">🖨 Print shift report</button>
+      <button class="btn btn-outline btn-sm" id="cal-shift-print">${icon('printer', {size: 18})} Print shift report</button>
     </div></div>
     <div class="grid grid-4 cal-kpis">
       ${statCard('Opened', esc(fmtShopDateTime(shift.opened_at)), shift.closed_at ? 'closed ' + esc(fmtShopTime(shift.closed_at)) + (shift.closed_by_name && shift.closed_by_name !== shift.cashier_name ? ' by ' + esc(shift.closed_by_name) : '') : 'still open')}
@@ -461,6 +465,7 @@ const REVIEW_CHECK_HINT = {
   TAX_MISMATCH: 'compare the tax and service charge with Settings → Receipts & tax',
   PAYMENT_MISMATCH: 'compare the payments with the total',
   STAFF_MISMATCH: 'check who was signed in at the counter (shown above)',
+  FUTURE_DATE: 'check the sale\'s date and time, and the clock of that counter',
 };
 function reviewHint(reason){
   const h = reviewCodes(reason).map(c => REVIEW_CHECK_HINT[c]).filter(Boolean);
@@ -561,7 +566,7 @@ function drawTransactions(){
   document.getElementById('tx-count').textContent = `${plural(list.length, 'transaction')} · ${fmtMoney(total)} (voided not counted)`;
   const payoutsHtml = ds.review ? reviewPayoutsHtml(ds.payouts || []) + reviewRefundsHtml(ds) : '';
   if(!list.length){
-    wrap.innerHTML = payoutsHtml + (ds.review ? (payoutsHtml ? '' : emptyBlock('Nothing needs review. 👍')) : emptyBlock('No transactions match. Try other dates or filters.'));
+    wrap.innerHTML = payoutsHtml + (ds.review ? (payoutsHtml ? '' : emptyBlock('Nothing needs review.')) : emptyBlock('No transactions match. Try other dates or filters.'));
     wireReviewPayouts(wrap);
     return;
   }
@@ -683,7 +688,7 @@ async function openSaleModal(saleId){
         <td class="num">${fmtNum(i.quantity, 0)}</td><td class="num">${fmtMoney(i.unit_price)}</td>${sale.needs_review ? `<td class="num ${mp != null && num(i.unit_price) < mp - 0.02 ? 'text-red' : ''}">${mp == null ? 'not on the menu' : fmtMoney(mp)}</td>` : ''}<td class="num">${fmtMoney(i.line_total)}</td></tr>`; }).join('') || '<tr><td colspan="4" class="text-light">No items.</td></tr>'}
     </tbody></table></div>
     <div class="kv-list" style="margin-top:12px;">
-      <div>Subtotal <b>${fmtMoney(sale.subtotal)}</b>${num(sale.discount_amount) > 0 ? ` · Discount <b>-${fmtMoney(sale.discount_amount)}</b>${sale.discount_approved_by_name ? ' (approved by ' + esc(sale.discount_approved_by_name) + ')' : ''}` : ''}${num(sale.tax_amount) > 0 ? ` · Tax <b>${fmtMoney(sale.tax_amount)}</b>` : ''}${num(sale.service_charge_amount) > 0 ? ` · Service charge <b>${fmtMoney(sale.service_charge_amount)}</b>` : ''}</div>
+      <div>Subtotal <b>${fmtMoney(sale.subtotal)}</b>${num(sale.discount_amount) > 0 ? ` · Discount <b>-${fmtMoney(sale.discount_amount)}</b>${sale.discount_approved_by_name ? ' (approved by ' + esc(sale.discount_approved_by_name) + ')' : ''}` : ''}${num(sale.loyalty_discount) > 0 ? ` · ${esc(loyaltyLineLabel())} <b>-${fmtMoney(sale.loyalty_discount)}</b>` : ''}${num(sale.tax_amount) > 0 ? ` · Tax <b>${fmtMoney(sale.tax_amount)}</b>` : ''}${num(sale.service_charge_amount) > 0 ? ` · Service charge <b>${fmtMoney(sale.service_charge_amount)}</b>` : ''}</div>
       <div style="font-size:16px;">Total <b>${fmtMoney(sale.grand_total)}</b></div>
       ${payments.map(p => `<div>Paid by <b>${esc(payLabel(p.method))}</b> ${fmtMoney(p.amount)}${p.method === 'CASH' && p.tendered != null ? ` (cash ${fmtMoney(p.tendered)}, change ${fmtMoney(p.change)})` : ''}${p.reference ? ' · ref ' + esc(p.reference) : ''}</div>`).join('') || '<div class="text-light">No payment recorded.</div>'}
     </div>
@@ -801,11 +806,12 @@ async function openOwnerRefund(bundle, kind){
             transaction_date: shopTodayKey(), notes: `${isVoid ? 'Void' : 'Refund'}${l.kind === 'modifier' ? ' option "' + (l.label || '') + '"' : ''} of ${sale.transaction_number} (Back Office)`, created_at: now}));
         }));
         ops.push(Ops.update('sales', {id: sale.id, status: newStatus, updated_at: now}));
+        // Visits and stamps are worked out by the server from the sales (release 1.2 triggers),
+        // so only the money total is changed here.
         if(sale.customer_id){
           try{
             const c = ((await cloud.select('customers', {eq: {id: sale.customer_id}, limit: 1})) || [])[0];
-            if(c) ops.push(Ops.update('customers', {id: c.id, total_spent: Math.max(0, num(c.total_spent) - amount),
-              visit_count: refund.type === 'VOID' || refund.type === 'FULL_REFUND' ? Math.max(0, num(c.visit_count) - 1) : num(c.visit_count), updated_at: now}));
+            if(c) ops.push(Ops.update('customers', {id: c.id, total_spent: Math.max(0, num(c.total_spent) - amount), updated_at: now}));
           }catch(e){ /* customer totals are a nicety */ }
         }
         ops.push(Ops.audit(isVoid ? 'Sale voided' : 'Refund', `${sale.transaction_number} — ${fmtMoney(amount)} — ${reason} (Back Office)`, sale.id));
@@ -863,7 +869,7 @@ function drawQrOrders(){
   wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Placed</th><th>Customer</th><th>Table</th><th class="num">Items</th><th class="num">Total</th><th>Paid</th><th>Status</th></tr></thead><tbody>
     ${list.map(o => `<tr class="clickable" data-order="${esc(o.id)}"><td><b>${esc(o.order_number)}</b></td><td>${esc(fmtShopDateTime(o.created_at))}</td>
       <td>${esc(o.customer_nickname || '—')}</td><td>${esc(o.table_label || '')} ${o.order_type === 'TAKEAWAY' ? '<span class="badge badge-gray">Takeaway</span>' : ''}</td>
-      <td class="num">${(o.items || []).reduce((s, i) => s + num(i.quantity), 0)}</td><td class="num">${fmtMoney(o.total)}</td><td>${o.paid_at ? '✓' : '—'}</td><td>${qrStatusBadge(o.status)}</td></tr>`).join('')}
+      <td class="num">${(o.items || []).reduce((s, i) => s + num(i.quantity), 0)}</td><td class="num">${fmtMoney(o.total)}</td><td>${o.paid_at ? icon('check', {size: 18, label: 'Paid'}) : '—'}</td><td>${qrStatusBadge(o.status)}</td></tr>`).join('')}
   </tbody></table></div>`;
   wrap.querySelectorAll('[data-order]').forEach(tr => tr.onclick = () => openQrOrderModal(QR_DATA.qrOrders.find(o => o.id === tr.dataset.order)));
 }
@@ -896,10 +902,31 @@ function formatPhone(p){
   const m = /^\+63(9\d{2})(\d{3})(\d{4})$/.exec(s);
   return m ? `0${m[1]} ${m[2]} ${m[3]}` : s;
 }
+let REDEMPTIONS = [];
 async function loadCustomers(){
-  CUSTOMERS = await cloud.selectAll('customers', {is: {merged_into: null}, order: 'last_seen_at.desc'});
+  const [list, red] = await Promise.all([
+    cloud.selectAll('customers', {is: {merged_into: null}, order: 'last_seen_at.desc'}),
+    // rewards used (release 1.2); an older database without the table just shows none
+    cloud.selectAll('loyalty_redemptions', {order: 'created_at.desc'}).catch(() => []),
+  ]);
+  CUSTOMERS = list;
+  REDEMPTIONS = red || [];
   BO.counts.customer_count = CUSTOMERS.length;
   return CUSTOMERS;
+}
+/* Stamp card of one customer for the Back Office lists, from the copies the server keeps on
+   customers (stamps = drink + food stamps) and the rewards used (loyalty_redemptions), with the
+   card maths of the database contract (card_no = max(ceil(T/S), 1), reward m of card c reached
+   when T >= (c-1)S + m). Shaped like the server's summary, so loyaltyCardView() reads it. */
+function customerLoyalty(c){
+  const cfg = loyaltyConfig();
+  const S = cfg.card_size, T = Math.max(0, Math.round(num(c.stamps)));
+  const cardNo = Math.max(Math.ceil(T / S), 1);
+  const used = new Set(REDEMPTIONS.filter(r => r.customer_id === c.id && !r.released_at && !r.merged_from).map(r => r.card_no + ':' + r.milestone));
+  const milestones = cfg.rewards.map(r => Object.assign({}, r, {status: used.has(cardNo + ':' + r.stamp) ? 'redeemed' : (T >= (cardNo - 1) * S + r.stamp ? 'ready' : 'locked')}));
+  const ready = [];
+  for(let k = 1; k <= cardNo; k++) cfg.rewards.forEach(r => { if(T >= (k - 1) * S + r.stamp && !used.has(k + ':' + r.stamp)) ready.push(Object.assign({card_no: k}, r)); });
+  return loyaltyCardView({total_stamps: T, card: {card_size: S, card_no: cardNo, stamps_on_card: T - (cardNo - 1) * S, milestones}, ready_rewards: ready}, cfg);
 }
 async function renderCustomers(){
   if(state.route !== 'customers') return;      // a save finished after the owner moved on
@@ -923,7 +950,7 @@ async function renderCustomers(){
       <select class="filter" id="cust-sort" aria-label="Sort">
         ${[['last', 'Sort: last seen'], ['visits', 'Sort: most visits'], ['spent', 'Sort: most spent'], ['new', 'Sort: newest']].map(([v, l]) => `<option value="${v}" ${custFilter.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
-    </div><div class="text-light" style="font-size:13px;">${loyalty ? `Loyalty is on: ${esc(state.settings.stamps_per_reward)} stamps = 1 reward.` : 'Personal data: keep it private (Data Privacy Act).'}</div></div>
+    </div><div class="text-light" style="font-size:13px;">${loyalty ? `Stamp card is on: ${esc(loyaltyConfig().card_size)} stamps a card. One stamp for a drink and one for food, each day.` : 'Personal data: keep it private (Data Privacy Act).'}</div></div>
     <div id="cust-wrap"></div>`;
   content.querySelector('#cust-search').oninput = debounce((e) => { custFilter.search = e.target.value; drawCustomers(); }, 120);
   content.querySelector('#cust-sort').onchange = (e) => { custFilter.sort = e.target.value; drawCustomers(); };
@@ -944,10 +971,10 @@ function drawCustomers(){
   list.sort(sorters[custFilter.sort] || sorters.last);
   if(!list.length){ wrap.innerHTML = emptyBlock(CUSTOMERS.length ? 'No customer matches that search.' : 'No customers yet. They appear here when someone enters a nickname on the QR order page, or is added at the counter.'); return; }
   const loyalty = !!state.settings.loyalty_enabled;
-  wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Nickname</th><th>Mobile</th><th class="num">Visits</th>${loyalty ? '<th class="num">Stamps</th>' : ''}<th class="num">Total spent</th><th>Last order</th><th>Joined</th><th>From</th></tr></thead><tbody>
-    ${list.slice(0, 600).map(c => `<tr class="clickable" data-cust="${esc(c.id)}"><td><b>${esc(c.nickname)}</b></td><td>${c.phone ? esc(formatPhone(c.phone)) : '<span class="text-light">—</span>'}</td>
-      <td class="num">${num(c.visit_count)}</td>${loyalty ? `<td class="num">${num(c.stamps)}</td>` : ''}<td class="num">${fmtMoney(c.total_spent)}</td>
-      <td>${c.last_order_at ? esc(fmtShopDate(c.last_order_at)) : '—'}</td><td>${esc(fmtShopDate(c.first_seen_at || c.created_at))}</td><td>${esc(c.source === 'COUNTER' ? 'Counter' : 'QR')}</td></tr>`).join('')}
+  wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Nickname</th><th>Mobile</th><th class="num" title="Days with a paid order">Visits (days)</th>${loyalty ? '<th class="num">Stamps on card</th><th>Ready rewards</th>' : ''}<th class="num">Total spent</th><th>Last order</th><th>Joined</th><th>From</th></tr></thead><tbody>
+    ${list.slice(0, 600).map(c => { const L = loyalty ? customerLoyalty(c) : null; return `<tr class="clickable" data-cust="${esc(c.id)}"><td><b>${esc(c.nickname)}</b></td><td class="nowrap">${c.phone ? esc(formatPhone(c.phone)) : '<span class="text-light">—</span>'}</td>
+      <td class="num">${num(c.visit_count)}</td>${L ? `<td class="num">${L.stamps_on_card} / ${L.card_size}${L.card_no > 1 ? `<div class="sub-line">card ${L.card_no}</div>` : ''}</td><td>${L.ready.length ? L.ready.map(r => `<span class="ready-pill">${esc(r.label)}</span>`).join('') : '<span class="text-light">—</span>'}</td>` : ''}<td class="num">${fmtMoney(c.total_spent)}</td>
+      <td>${c.last_order_at ? esc(fmtShopDate(c.last_order_at)) : '—'}</td><td>${esc(fmtShopDate(c.first_seen_at || c.created_at))}</td><td>${esc(c.source === 'COUNTER' ? 'Counter' : 'QR')}</td></tr>`; }).join('')}
   </tbody></table></div>${list.length > 600 ? '<p class="hint">Showing the first 600. Search to find others.</p>' : ''}`;
   wrap.querySelectorAll('[data-cust]').forEach(tr => tr.onclick = () => openCustomerModal(tr.dataset.cust));
 }
@@ -960,6 +987,13 @@ async function exportCustomersCSV(){
       list.map(c => [c.nickname, c.phone ? formatPhone(c.phone) : '', num(c.visit_count), num(c.stamps), num(c.total_spent).toFixed(2), dayKeyOf(c.first_seen_at || c.created_at), c.last_order_at ? dayKeyOf(c.last_order_at) : '', c.source || '', c.notes || ''])), 'text/csv');
     applyChanges([Ops.audit('Customer list downloaded', `${list.length} customers`)]).catch(() => {});
   }catch(e){ toast(friendlyError(e), 'error'); }
+}
+function ordinal(n){ n = Number(n); const s = (n % 100 >= 11 && n % 100 <= 13) ? 'th' : ({1: 'st', 2: 'nd', 3: 'rd'})[n % 10] || 'th'; return n + s; }
+function redemptionLabel(r){
+  const cfg = loyaltyConfig();
+  const m = cfg.rewards.find(x => x.stamp === Number(r.milestone));
+  const what = r.reward_type === 'FREE_ITEM' ? 'Free ' + ((state.recipes.find(x => x.id === r.recipe_id) || {}).name || 'item') : (m ? rewardLabel(m) : 'Amount off');
+  return `${what} (card ${r.card_no}, stamp ${r.milestone})`;
 }
 async function openCustomerModal(id){
   const c = (CUSTOMERS || []).find(x => x.id === id);
@@ -974,8 +1008,15 @@ async function openCustomerModal(id){
   sales = (sales || []).filter(s => s.status !== 'HELD');
   const others = (CUSTOMERS || []).filter(x => x.id !== id).sort((a, b) => String(a.nickname).localeCompare(String(b.nickname)));
   const loyalty = !!state.settings.loyalty_enabled;
+  const L = loyalty ? customerLoyalty(c) : null;
+  const myRed = REDEMPTIONS.filter(r => r.customer_id === id || r.merged_from === id);
   openModal({title: esc(c.nickname), wide: true, body: `
-    <div class="grid grid-4 kpi-sans" style="margin-bottom:14px;">${statCard('Visits', num(c.visit_count), 'paid orders')}${statCard('Total spent', fmtMoney(c.total_spent), 'after refunds')}${loyalty ? statCard('Stamps', num(c.stamps), `${esc(state.settings.stamps_per_reward)} = 1 reward`) : statCard('QR orders', (orders || []).length, 'latest 50')}${statCard('Customer since', esc(fmtShopDate(c.first_seen_at || c.created_at)), c.source === 'COUNTER' ? 'added at the counter' : 'signed up by QR')}</div>
+    <div class="grid grid-4 kpi-sans" style="margin-bottom:14px;">${statCard('Visits', num(c.visit_count), 'days with a paid order')}${statCard('Total spent', fmtMoney(c.total_spent), 'after refunds')}${L ? statCard('Stamps', `${L.stamps_on_card} / ${L.card_size}`, `card ${L.card_no} · ${num(c.drink_stamps)} drink, ${num(c.food_stamps)} food stamps in all`) : statCard('QR orders', (orders || []).length, 'latest 50')}${statCard('Customer since', esc(fmtShopDate(c.first_seen_at || c.created_at)), c.source === 'COUNTER' ? 'added at the counter' : 'signed up by QR')}</div>
+    ${L ? `<div class="card soft-card" style="margin-bottom:14px;"><div class="section-title" style="font-size:22px;margin:0 0 4px;">Stamp card</div>
+      <p class="hint" style="margin:0 0 4px;">Card ${L.card_no} · ${L.stamps_on_card} of ${L.card_size}. One stamp for a drink and one for food, each day.</p>
+      ${stampCardHtml(loyaltyConfig(), L.stamps_on_card)}
+      <div class="rw-list">${L.milestones.map(m => `<div><span class="rtag ${m.status}">${m.status === 'ready' ? 'Ready' : m.status === 'redeemed' ? 'Used' : esc(m.to_go) + ' to go'}</span>${esc(ordinal(m.stamp))} stamp: ${esc(m.label)}</div>`).join('')}</div>
+      ${L.ready.length ? `<p style="margin:10px 0 0;font-size:14px;"><b>Ready to use:</b> ${L.ready.map(r => `<span class="ready-pill">${esc(r.label)}${r.card_no !== L.card_no ? ' (card ' + esc(r.card_no) + ')' : ''}</span>`).join('')}</p>` : ''}</div>` : ''}
     <div class="form-grid">
       <div class="form-row"><label for="cu-nick">Nickname</label><input id="cu-nick" maxlength="30" value="${esc(c.nickname)}"></div>
       <div class="form-row"><label for="cu-phone">Mobile number</label><input id="cu-phone" inputmode="tel" maxlength="20" value="${esc(c.phone ? formatPhone(c.phone) : '')}" placeholder="0917 123 4567"></div>
@@ -983,6 +1024,7 @@ async function openCustomerModal(id){
     <div class="form-row"><label for="cu-notes">Notes (staff only)</label><textarea id="cu-notes" rows="2" placeholder="e.g. Likes oat milk">${esc(c.notes || '')}</textarea></div>
     <div class="section-title" style="font-size:15px;">Purchases</div>
     ${sales.length ? `<div class="table-wrap" style="box-shadow:none;max-height:240px;"><table><thead><tr><th>Date</th><th>Receipt #</th><th class="num">Total</th><th>Status</th></tr></thead><tbody>${sales.map(s => `<tr class="clickable" data-sale="${esc(s.id)}"><td>${esc(fmtShopDateTime(s.transaction_date))}</td><td>${esc(s.transaction_number || '')}</td><td class="num">${fmtMoney(s.grand_total)}</td><td>${saleStatusBadge(s.status)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">No purchases linked yet.</p>'}
+    ${myRed.length ? `<div class="section-title" style="font-size:15px;">Rewards used</div><div class="table-wrap" style="box-shadow:none;max-height:200px;"><table><thead><tr><th>Used on</th><th>Reward</th><th>Sale</th><th class="num">Amount</th><th>Status</th></tr></thead><tbody>${myRed.map(r => `<tr${r.sale_id ? ` class="clickable" data-sale="${esc(r.sale_id)}"` : ''}><td>${esc(fmtShopDateTime(r.created_at))}</td><td>${esc(redemptionLabel(r))}</td><td>${esc((sales.find(x => x.id === r.sale_id) || {}).transaction_number || '')}</td><td class="num">${fmtMoney(r.amount)}</td><td>${r.released_at ? '<span class="badge badge-gray" title="The sale was voided or fully refunded, so the reward can be used again">Given back</span>' : r.merged_from ? '<span class="badge badge-gray">From a merged record</span>' : '<span class="badge badge-green">Used</span>'}</td></tr>`).join('')}</tbody></table></div>` : ''}
     ${(orders || []).length ? `<div class="section-title" style="font-size:15px;">QR orders</div><div class="table-wrap" style="box-shadow:none;max-height:200px;"><table><thead><tr><th>Placed</th><th>Order</th><th>Table</th><th class="num">Total</th><th>Status</th></tr></thead><tbody>${orders.map(o => `<tr><td>${esc(fmtShopDateTime(o.created_at))}</td><td>${esc(o.order_number)}</td><td>${esc(o.table_label || '')}</td><td class="num">${fmtMoney(o.total)}</td><td>${qrStatusBadge(o.status)}</td></tr>`).join('')}</tbody></table></div>` : ''}
     <div class="section-title" style="font-size:15px;">Same person twice?</div>
     <p class="hint">If this person signed up twice (new phone, cleared browser), merge the other record into this one. Visits, spending, orders and phone links move here; the other record is closed.</p>

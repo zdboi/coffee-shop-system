@@ -88,11 +88,9 @@ const BASE = H.BASE, SHOTS = require('path').join(H.SHOTS, 'bo-' + H.sizeTag() +
   await page.selectOption('#set-costing', 'latest'); await page.click('#save-general'); await page.waitForTimeout(1500);
   const latest = await page.evaluate((id) => ingredientCosting(id).current, beans);
   ok(Math.abs(avg - 1.2) < 1e-9 && latest === 1.5, `costing: weighted average ₱${avg}/g ((900+1500)/2000) → latest purchase ₱${latest}/g`);
-  await page.selectOption('#set-costing', 'weighted_average'); await page.click('label:has(#set-dark) .slider-tog'); await page.click('#save-general'); await page.waitForTimeout(1500);
-  ok(await page.evaluate(() => document.body.classList.contains('dark')) && sql(`select theme from settings where business_id='${biz}'`) === 'dark', 'dark theme saved and applied');
-  await go(page, 'dashboard'); await page.waitForTimeout(800);
-  await page.screenshot({path: SHOTS + 'f-dark-dashboard.png'});
-  await go(page, 'settings'); await page.click('[data-tab="general"]'); await page.click('label:has(#set-dark) .slider-tog'); await page.click('#save-general'); await page.waitForTimeout(1200);
+  // 1.2: dark mode is dropped (theme is 'CCCC' | 'CUSTOM'); a general settings save keeps the theme 'CCCC'
+  await page.selectOption('#set-costing', 'weighted_average'); await page.click('#save-general'); await page.waitForTimeout(1500);
+  ok(sql(`select theme from settings where business_id='${biz}'`) === 'CCCC', 'theme stays CCCC after a general settings save');
 
   // logo upload (stored in the shop's folder, shown in the sidebar)
   const LOGO = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAKklEQVR4nGP8z4AKGBkYGP6jCjAyMDAwMDAyMjIyMjAyMDAwMDIyAgAAMgAJ7Ivd4gAAAABJRU5ErkJggg==', 'base64');

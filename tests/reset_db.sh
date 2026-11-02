@@ -1,15 +1,15 @@
 #!/bin/bash
 # Build a throw-away test database:
 #   Supabase stand-in (00) + reconstruction of the LIVE schema (01, incl. the live CHECK rules)
-#   + the scripts the owner ran on live, in the live order: 004, then 005, then 006, then 007 (batch 1, not yet on live).
+#   + the scripts the owner ran on live, in the live order: 004, then 005, then 006, then 007 (batch 1, not yet on live), then 008 (release 1.2, not yet on live).
 # Usage: tests/reset_db.sh [path/to/migration.sql] [database-name]
-#   no migration (or ""): 004 + 005 + 006 (what live has) + 007   default database: cccc
+#   no migration (or ""): 004 + 005 + 006 (what live has) + 007 + 008   default database: cccc
 #   a migration path:     ONLY that script on top of 01 (e.g. to try a single script)
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"; REPO="$(dirname "$DIR")"
 SUP="$REPO/cccc/supabase"
 if [ -n "${1:-}" ]; then MIGS=("$1")
-else MIGS=("$SUP/004_cccc_online_qr.sql" "$SUP/005_live_fixes.sql" "$SUP/006_live_fix_sync_operations.sql" "$SUP/007_batch1.sql"); fi
+else MIGS=("$SUP/004_cccc_online_qr.sql" "$SUP/005_live_fixes.sql" "$SUP/006_live_fix_sync_operations.sql" "$SUP/007_batch1.sql" "$SUP/008_release_1_2.sql"); fi
 DB="${2:-cccc}"
 if ! [[ "$DB" =~ ^[a-z_][a-z0-9_]*$ ]] || [[ "$DB" =~ ^(postgres|template0|template1)$ ]]; then
   echo "reset_db: bad database name '$DB' (lowercase letters, digits, _; not a system database)" >&2; exit 1

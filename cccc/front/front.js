@@ -25,13 +25,16 @@ const posState = {
   cart: [],              // [{lineId, recipe_id, name, unit_price, quantity, modifiers:[{group,label,price_delta,ingredient_id,ingredient_qty_delta}], notes}]
   discount: null,        // {type:'percent'|'fixed', value, appliedBy, approvedById}
   currentUser: null,     // {id, name, role, offline}
-  customer: null,        // {id, nickname}
+  customer: null,        // {id, nickname, phone (masked), visits, summary (stamp card), summaryOffline, summaryAt}
   qrOrder: null,         // QR order being paid
   route: 'pos', routeParam: null,
   resumingHeldSaleId: null,
   catFilter: 'ALL', searchTerm: '',
   lastBootstrapAt: 0,
   qrSince: null, qrSeen: new Set(),
+  reward: null,          // stamp reward on this order: {reward:{card_no, stamp, type, amount, label}, customer_id, recipe_id, offline}
+  usedRewardKeys: new Set(),   // "customer:card:stamp" of rewards used in sales still waiting to upload (or refused and not dismissed): not offered meanwhile
+  qrView: null,          // 'plan' | 'list' (QR orders board)
   todaySales: null,
   shiftCheckOk: null,    // did the last server check of the open shift succeed? (null = not asked yet)
   loginExpiresAt: null,  // when the signed-in person's server login ends (a manager's login also approves their own actions)
@@ -54,6 +57,8 @@ cloud.onNetwork((up)=>{
   updateSyncPill();
   if(up){ setTimeout(()=>{ Sync.run(); pollQrOrders(); }, 200); }
   if(posState.route==='qr') renderQrBoard();
+  if(posState.route==='customers' && !!document.querySelector('.offline-panel') === up) renderCustomersScreen();
+  if(posState.route==='pos') renderCartPanel();
 });
 function show(id, on){ const n = document.getElementById(id); if(n) n.style.display = on ? (id==='app'?'flex':'flex') : 'none'; }
 
@@ -134,6 +139,8 @@ async function applyBootstrap(d){
   state.refunds = d.refunds || [];
   state.cashMovements = d.cash_movements || [];
   state.tables = d.tables || [];
+  state.floorShapes = d.floor_shapes || [];
+  floorPlanAt = Date.now();
   state.qrOrders = d.qr_orders || [];
   state.qrOrders.forEach(o => posState.qrSeen.add(o.id));
   posState.qrSince = state.qrOrders.reduce((m,o)=> (!m || o.updated_at > m) ? o.updated_at : m, null) || d.server_time || null;
@@ -141,14 +148,24 @@ async function applyBootstrap(d){
   // Operations still waiting to upload are re-applied so they don't vanish from the screen.
   const pending = await LocalDB.outboxAll();
   pending.forEach(op => applyOpLocally(op, true));
+  await rebuildUsedRewardKeys();
   await prunePinVerifiers();
 }
 
 /* ---- snapshot of the current state, for offline restarts ---- */
-let snapshotTimer = null;
-function saveSnapshotSoon(){
-  clearTimeout(snapshotTimer);
+// Throttled, not debounced: busy selling must never keep pushing the save back (a reload would
+// then lose things that already left the upload queue, e.g. an uploaded "start shift").
+// delay 0 = save now (used right after uploads leave the queue).
+let snapshotTimer = null, snapshotDue = 0;
+function saveSnapshotSoon(delay){
+  const d = (delay === undefined || delay === null) ? 3000 : Math.max(0, Number(delay) || 0);
+  if(snapshotTimer){
+    if(Date.now() + d >= snapshotDue) return;          // a save is already coming soon enough
+    clearTimeout(snapshotTimer);
+  }
+  snapshotDue = Date.now() + d;
   snapshotTimer = setTimeout(async ()=>{
+    snapshotTimer = null;
     if(!state.device) return;
     try{
       await LocalDB.set('fo.snapshot', {
@@ -158,11 +175,11 @@ function saveSnapshotSoon(){
         stock: Object.keys(state.stock).map(k=>({ingredient_id:k, stock: state.stock[k]})),
         shifts: state.shifts.filter(s=>s.status==='ACTIVE'),
         sales: state.sales, sale_items: state.saleItems, payments: state.payments, refunds: state.refunds,
-        cash_movements: state.cashMovements, tables: state.tables,
+        cash_movements: state.cashMovements, tables: state.tables, floor_shapes: state.floorShapes || [],
         qr_orders: state.qrOrders.filter(o=>['PENDING','PREPARING','READY'].includes(o.status)),
       });
     }catch(e){ console.warn('snapshot failed', e); }
-  }, 3000);
+  }, d);
 }
 
 /* ---- transaction / shift numbering (per counter, per year) ---- */
@@ -200,7 +217,7 @@ function showSetup(prefillCode, message){
   wrap.style.display = 'flex';
   wrap.innerHTML = `
     <div class="auth-card setup-card">
-      <div class="pin-logo">☕</div>
+      <div class="pin-logo">${brandLogoHtml('mark', {className: 'setup-mark'})}</div>
       <h2>Set up this counter</h2>
       <p class="text-light" style="margin:4px 0 16px;">Connect this tablet or computer to your shop once. After that, staff just enter their PIN.</p>
       ${message?`<div class="notice warn">${escapeHtml(message)}</div>`:''}
@@ -292,25 +309,27 @@ function showPinError(msg){ document.getElementById('pin-error').textContent = m
 function showPinGate(mode){
   pinMode = mode || 'login';
   pinBuffer = ''; renderPinDisplay(); showPinError(''); hidePinChoice();
-  const logo =state.settings.logo_url ? `<img src="${escapeHtml(state.settings.logo_url)}" alt="" style="width:46px;height:46px;object-fit:contain;">` : '☕';
-  document.getElementById('pin-logo').innerHTML = logo;
+  document.getElementById('pin-logo').innerHTML = brandLogoHtml('mark', {className: 'pin-mark'});
   const foot = document.getElementById('pin-foot');
+  const title = document.getElementById('pin-title');
+  title.classList.toggle('is-wordmark', pinMode === 'login');
   if(pinMode === 'login'){
-    document.getElementById('pin-title').textContent = businessName() || 'Enter PIN';
+    // The shop name is the Brunson wordmark image (alt text = the name), never typed in the display font.
+    title.innerHTML = brandWordmarkHtml('cream', {className: 'pin-wordmark'});
     const noPins = !state.staff.some(s=>s.active!==false && s.has_pin);
     document.getElementById('pin-sub').innerHTML = noPins
       ? 'No staff PINs yet. The owner sets them in <b>Back Office → Staff</b>.'
       : `Enter your PIN · ${escapeHtml(state.device ? state.device.device_name : '')}`;
-    foot.innerHTML = `<a href="../back/" class="pin-link">Back Office →</a>`;
+    foot.innerHTML = `<a href="../back/" class="pin-link">Back Office ${icon('chevron-right', {size: 16})}</a>`;
     // Offline and paused after too many wrong PINs: say so (and until when) straight away.
     const pausedUntil = isOnline() ? 0 : offlinePinLockedUntil();
     if(pausedUntil) showPinError(offlinePinLockText(pausedUntil));
   } else {
-    document.getElementById('pin-title').textContent = `${pinOverrideMinRole.charAt(0)+pinOverrideMinRole.slice(1).toLowerCase()} PIN required`;
+    title.textContent = `${pinOverrideMinRole.charAt(0)+pinOverrideMinRole.slice(1).toLowerCase()} PIN required`;
     document.getElementById('pin-sub').textContent = hasRole(pinOverrideMinRole) && !shortPinUser()
       ? 'Enter your PIN again to approve. This needs internet.'
       : 'Ask a manager to enter their PIN to approve. This needs internet.';
-    foot.innerHTML = `<a href="#" class="pin-link" id="pin-cancel">← Cancel</a>`;
+    foot.innerHTML = `<a href="#" class="pin-link" id="pin-cancel">${icon('chevron-left', {size: 16})} Cancel</a>`;
     document.getElementById('pin-cancel').onclick = (e)=>{ e.preventDefault(); finishOverride(null); };
   }
   document.getElementById('pin-gate').style.display='flex';
@@ -586,7 +605,13 @@ function lockSession(){
   cloud.setStaffToken(null);
   try{ sessionStorage.removeItem(STAFF_SESSION_STORAGE); }catch(e){}
   posState.currentUser = null; posState.loginExpiresAt = null;
-  posState.cart = []; posState.discount = null; posState.customer = null; posState.qrOrder = null; posState.resumingHeldSaleId = null;
+  posState.cart = []; posState.discount = null; posState.customer = null; posState.qrOrder = null; posState.resumingHeldSaleId = null; posState.reward = null;
+  // Customers screen: forget what was shown (a manager's money view must not stay after locking);
+  // answers still on their way are thrown away.
+  custView.list = null; custView.detail = null; custView.selected = null; custView.q = '';
+  custView.listSeq += 1; custView.detailSeq += 1;
+  const content = document.getElementById('content'); if(content){ content.innerHTML = ''; content.className = ''; }
+  document.getElementById('topbar-actions').innerHTML = '';
   show('app', false);
   showPinGate('login');
   if(token) endStaffLogin(token, tokenEnds).catch(e=>console.warn('could not end the staff login', e));
@@ -768,6 +793,7 @@ function applyOpLocally(op, replay){
       state.saleItems = state.saleItems.filter(i=>i.sale_id!==sale.id).concat(d.items||[]);
       state.payments = state.payments.filter(p=>p.sale_id!==sale.id).concat(d.payment ? [d.payment] : []);
       if(sale.status==='COMPLETED'){
+        if(sale.loyalty_reward && sale.loyalty_reward.customer_id) posState.usedRewardKeys.add(usedRewardKey(sale.loyalty_reward.customer_id, sale.loyalty_reward));
         applyStockDeltas((d.inventory||[]).map(t=>Object.assign({transaction_type:'SALE_USAGE'}, t)));
         if(sale.qr_order_id){
           const o = state.qrOrders.find(x=>x.id===sale.qr_order_id);
@@ -783,6 +809,11 @@ function applyOpLocally(op, replay){
       break;
     case 'refund': {
       noteTouchedSale(d.refund.sale_id);
+      // A void / full refund gives the sale's stamp reward back (the server sets released_at).
+      if(d.refund.type === 'VOID' || d.refund.type === 'FULL_REFUND'){
+        const rs = state.sales.find(x=>x.id===d.refund.sale_id);
+        if(rs && rs.loyalty_reward && rs.loyalty_reward.customer_id) posState.usedRewardKeys.delete(usedRewardKey(rs.loyalty_reward.customer_id, rs.loyalty_reward));
+      }
       if(state.refunds.some(r=>r.id===d.refund.id)) break;
       state.refunds.push(d.refund);
       applyStockDeltas((d.inventory||[]).map(t=>Object.assign({transaction_type:'SALE_REVERSAL'}, t)));
@@ -805,6 +836,7 @@ const Sync = {
     const op = {op_id: uid(), type, data};
     applyOpLocally(op, false);
     await LocalDB.outboxAdd(op);
+    if(type === 'sale' || type === 'refund') rebuildUsedRewardKeys();
     this.pending += 1;
     updateSyncPill();
     updateApprovalBanner();
@@ -821,6 +853,7 @@ const Sync = {
   async _run(){
     if(navigator.onLine === false){ await this.refreshCounts(); return; }
     this.busy = true;
+    let uploaded = 0;
     try{
       for(let guard = 0; guard < 40; guard++){
         const all = await LocalDB.outboxAll();
@@ -853,12 +886,14 @@ const Sync = {
           done.push(o.seq);
         }
         await LocalDB.outboxRemove(done);
+        uploaded += done.length;
         if(done.length < batch.length) break;
       }
     }finally{
       this.busy = false;
       await this.refreshCounts();
-      saveSnapshotSoon();
+      saveSnapshotSoon(uploaded ? 0 : undefined);
+      if(uploaded) rebuildUsedRewardKeys();     // uploaded ops left the queue: keep them in the saved copy now
       finishPendingLogouts();          // staff logins that were waiting for these uploads
     }
   },
@@ -881,7 +916,7 @@ function updateSyncPill(){
   const online = isOnline();
   const banner = document.getElementById('offline-banner');
   if(banner && !banner.dataset.sticky){
-    if(!online){ banner.style.display='block'; banner.className='offline-banner'; banner.textContent = `Offline — keep selling. ${Sync.pending ? Sync.pending+' item(s) will upload when the internet is back.' : ''} QR orders pause until you're back online.`; }
+    if(!online){ banner.style.display='block'; banner.className='offline-banner'; banner.innerHTML = `<span class="banner-line">${icon('wifi-off', {size: 18})}<span>${escapeHtml(`Offline — keep selling. ${Sync.pending ? Sync.pending+' item(s) will upload when the internet is back.' : ''} QR orders and the Customers screen pause until you're back online.`)}</span></span>`; }
     else banner.style.display='none';
   }
   if(!pill) return;
@@ -939,9 +974,11 @@ async function updateApprovalBanner(){
     if(!n || soonest - Date.now() > APPROVAL_WARN_MS){ box.style.display = 'none'; return; }
     const them = n === 1 ? 'it' : 'them';
     const waiting = n === 1 ? '1 approved action is' : n + ' approved actions are';
-    box.textContent = soonest > Date.now()
-      ? `⏰ ${waiting} waiting to upload. ${who}'s sign-in ends at ${fmtTime(soonest)}. Reconnect to the internet before then, or the server will refuse ${them}.`
-      : `⚠ ${waiting} waiting to upload, but ${who}'s sign-in ended at ${fmtTime(soonest)}. Reconnect to the internet now. If the server refuses ${them}, tell the owner (they can be redone in Back Office).`;
+    const soon = soonest > Date.now();
+    const text = soon
+      ? `${waiting} waiting to upload. ${who}'s sign-in ends at ${fmtTime(soonest)}. Reconnect to the internet before then, or the server will refuse ${them}.`
+      : `${waiting} waiting to upload, but ${who}'s sign-in ended at ${fmtTime(soonest)}. Reconnect to the internet now. If the server refuses ${them}, tell the owner (they can be redone in Back Office).`;
+    box.innerHTML = `<span class="banner-line">${icon(soon ? 'clock' : 'alert', {size: 18})}<span>${escapeHtml(text)}</span></span>`;
     box.style.display = 'block';
   }catch(e){ /* the warning is a help, never a blocker */ }
 }
@@ -963,8 +1000,8 @@ async function renderAlerts(){
   if(!list.length){ box.style.display = 'none'; box.innerHTML = ''; return; }
   const a = list[0];
   box.className = a.kind === 'note' ? 'offline-banner' : 'offline-banner error';     // 'note' = a gentle reminder
-  box.innerHTML = `<b>${escapeHtml(a.title)}</b> ${escapeHtml(a.text)}
-    <button class="btn btn-outline" id="alert-ok" style="margin-left:10px;">Got it${list.length>1?` (${list.length-1} more)`:''}</button>`;
+  box.innerHTML = `<span class="banner-line">${icon(a.kind === 'note' ? 'info' : 'alert', {size: 18})}<span><b>${escapeHtml(a.title)}</b> ${escapeHtml(a.text)}</span>
+    <button class="btn btn-outline btn-sm" id="alert-ok">Got it${list.length>1?` (${list.length-1} more)`:''}</button></span>`;
   box.style.display = 'block';
   document.getElementById('alert-ok').onclick = async ()=>{ try{ await LocalDB.set(ALERTS_KEY, list.slice(1)); }catch(e){} renderAlerts(); };
 }
@@ -981,7 +1018,7 @@ async function showFailedOps(){
     <div class="table-wrap"><table><thead><tr><th>When</th><th>Type</th><th>Reason</th><th></th></tr></thead><tbody>
     ${list.map(f=>`<tr><td>${fmtDateTime(f.queued_at)}</td><td>${escapeHtml(opTypeLabel(f.type))}</td><td class="text-light">${escapeHtml(friendlyError({message:f.error}))}</td>
       <td style="white-space:nowrap;"><button class="btn btn-sm btn-outline" data-retry="${f.seq}">Retry</button> <button class="btn btn-sm btn-ghost" data-drop="${f.seq}">Dismiss</button></td></tr>`).join('')}
-    </tbody></table></div>` : '<p>Nothing failed. 👍</p>',
+    </tbody></table></div>` : '<p>Nothing failed. Everything uploaded.</p>',
     foot: `${list.length?'<button class="btn btn-outline" id="fo-dl-failed">Download details</button>':''}<button class="btn btn-primary" data-close>Close</button>`,
     onMount:(root)=>{
       root.querySelector('[data-close]').onclick = closeModal;
@@ -999,6 +1036,7 @@ async function showFailedOps(){
         const ok = await confirmDialog('Dismiss this item? It will not be uploaded. (Download the details first if you need them.)', 'Dismiss');
         if(!ok){ showFailedOps(); return; }
         await LocalDB.failedRemove(Number(b.dataset.drop));
+        await rebuildUsedRewardKeys();
         await Sync.refreshCounts(); showFailedOps();
       });
     }});
@@ -1036,7 +1074,7 @@ async function pollQrOrders(){
     if(rows && rows.length){
       updateQrBadge();
       if(posState.route==='qr') renderQrBoard();
-      if(newOnes){ chime(); toast(`📱 ${newOnes} new QR order${newOnes>1?'s':''}`, 'warn'); }
+      if(newOnes){ chime(); toast(`${newOnes} new QR order${newOnes>1?'s':''}`, 'warn'); }
     }
   }catch(e){ if(!e.offline) console.warn('QR poll failed', e.message); }
   finally{ pollBusy = false; }
@@ -1242,30 +1280,39 @@ async function refreshSaleRefunds(sale, dataset){
 /* =====================================================================
    SHELL & NAVIGATION
    ===================================================================== */
+// The route id 'pos' stays (tests and saved state use it); the screen is called "Orders" (1.2).
 const POS_NAV_ITEMS = [
-  {id:'pos', label:'Sell', ic:'🛒'},
-  {id:'qr', label:'QR Orders', ic:'📱', badge:true},
-  {id:'sales', label:'Sales', ic:'🧾'},
-  {id:'shift', label:'Shift & Cash', ic:'🕐'},
+  {id:'pos', label:'Orders', ic:'orders'},
+  {id:'qr', label:'QR orders', ic:'qr', badge:true},
+  {id:'customers', label:'Customers', ic:'users'},
+  {id:'sales', label:'Sales', ic:'receipt'},
+  {id:'shift', label:'Shift & cash', ic:'clock'},
 ];
-const POS_ROUTE_TITLES = { pos:'Point of Sale', qr:'QR Orders', sales:'Sales', shift:'Shift & Cash', saleDetail:'Transaction Detail' };
+const POS_ROUTE_TITLES = { pos:'Orders', qr:'QR orders', customers:'Customers', sales:'Sales', shift:'Shift & cash', saleDetail:'Transaction' };
+const ROLE_WORDS = {CASHIER:'Cashier', MANAGER:'Manager', ADMIN:'Admin'};
 
 function renderShell(){
-  const logo = state.settings.logo_url ? `<img src="${escapeHtml(state.settings.logo_url)}" alt="logo" style="width:26px;height:26px;object-fit:contain;border-radius:6px;vertical-align:middle;margin-right:2px;">` : '☕';
   const u = posState.currentUser;
+  const role = u ? (ROLE_WORDS[u.role] || u.role) : '';
   document.getElementById('sidebar').innerHTML = `
-    <div class="brand">${logo} <span>${escapeHtml(businessName()||appDisplayName())}</span><small>Front Office · ${escapeHtml(state.device?state.device.device_name:'')}</small></div>
-    <div id="nav">${POS_NAV_ITEMS.map(n=>`<div class="nav-item" data-route="${n.id}"><span class="ic">${n.ic}</span><span class="label">${n.label}</span>${n.badge?'<span class="nav-badge" data-qr-badge style="display:none;">0</span>':''}</div>`).join('')}
-      ${u && u.role==='ADMIN' ? `<div class="nav-spacer" aria-hidden="true"></div><a class="nav-item nav-back-office" href="../back/" title="Back Office" aria-label="Back Office"><span class="ic">🗂</span><span class="label">Back Office</span></a>` : ''}
+    <div class="brand">${brandLogoHtml('mark', {className: 'mark'})}
+      <div class="brand-text">${brandWordmarkHtml('dark', {className: 'wm'})}<small>${escapeHtml(state.device?state.device.device_name:'')}</small></div></div>
+    <div id="nav">${POS_NAV_ITEMS.map(n=>`<div class="nav-item" data-route="${n.id}" role="button" tabindex="0" title="${escapeHtml(n.label)}"><span class="ic">${icon(n.ic)}</span><span class="label">${escapeHtml(n.label)}</span>${n.badge?'<span class="nav-badge" data-qr-badge style="display:none;">0</span>':''}</div>`).join('')}
+      ${u && u.role==='ADMIN' ? `<div class="nav-spacer" aria-hidden="true"></div><a class="nav-item nav-back-office" href="../back/" title="Back Office" aria-label="Back Office"><span class="ic">${icon('settings')}</span><span class="label">Back Office</span></a>` : ''}
     </div>
     <div id="sidebar-foot">
-      <div style="margin-bottom:8px;"><span class="role-badge" title="${escapeHtml(u?`${u.name} · ${u.role}`:'')}">👤 ${escapeHtml(u?u.name:'')} · ${u?u.role:''}${u&&u.offline?' · offline':''}</span></div>
+      <div class="who-row"><span class="role-badge" title="${escapeHtml(u?`${u.name} · ${u.role}`:'')}"><b>${escapeHtml(u?u.name:'')}</b><small>${escapeHtml(role)}${u&&u.offline?' · offline':''}</small></span></div>
       <button class="sync-status online" id="sync-pill" title="Upload status — tap for details"><span class="dot"></span> Online</button>
-      <button class="btn btn-ghost btn-sm" id="lock-btn" aria-label="Lock / Switch User" style="margin-top:8px;width:100%;">🔒 Lock / Switch User</button>
+      <button class="btn btn-ghost btn-sm" id="lock-btn" aria-label="Lock / Switch User">${icon('lock', {size: 18})}<span>Lock / switch user</span></button>
     </div>`;
-  document.getElementById('nav').addEventListener('click', (e)=>{
+  const nav = document.getElementById('nav');
+  nav.addEventListener('click', (e)=>{
     const item = e.target.closest('.nav-item[data-route]');
     if(item) navigatePOS(item.dataset.route);
+  });
+  nav.addEventListener('keydown', (e)=>{
+    const item = e.target.closest('.nav-item[data-route]');
+    if(item && (e.key === 'Enter' || e.key === ' ')){ e.preventDefault(); navigatePOS(item.dataset.route); }
   });
   document.getElementById('lock-btn').onclick = lockSession;
   document.getElementById('sync-pill').onclick = ()=>{ Sync.run(); showFailedOps(); };
@@ -1275,12 +1322,13 @@ function renderShell(){
 
 function navigatePOS(route, param=null){
   posState.route = route; posState.routeParam = param;
-  document.querySelectorAll('.nav-item').forEach(n=> n.classList.toggle('active', n.dataset.route===route));
+  document.querySelectorAll('.nav-item').forEach(n=> n.classList.toggle('active', n.dataset.route===route || (route==='saleDetail' && n.dataset.route==='sales')));
   document.getElementById('topbar-title').textContent = POS_ROUTE_TITLES[route] || '';
   document.getElementById('topbar-actions').innerHTML = '';
   const content = document.getElementById('content');
   content.className = '';
-  const renderers = { pos: renderPOSScreen, qr: renderQrBoard, sales: renderSalesScreen, shift: renderShiftScreen, saleDetail: ()=>renderSaleDetail(param) };
+  content.scrollTop = 0;
+  const renderers = { pos: renderPOSScreen, qr: renderQrBoard, customers: renderCustomersScreen, sales: renderSalesScreen, shift: renderShiftScreen, saleDetail: ()=>renderSaleDetail(param) };
   (renderers[route]||renderPOSScreen)();
   if(route==='pos') maybeRefreshMenu();
 }
@@ -1308,12 +1356,9 @@ function renderPOSScreen(){
   if(!shift){ renderStartShiftGate(); return; }
 
   const held = state.sales.filter(s=>s.status==='HELD');
-  const pendingQr = state.qrOrders.filter(o=>o.status==='PENDING').length;
   document.getElementById('topbar-actions').innerHTML = `
-    <span class="shift-badge" title="Opened ${fmtDateTime(shift.opened_at)} by ${escapeHtml(shift.cashier_name)}">🕐 ${escapeHtml(shift.shift_number||'')} · ${shiftDuration(shift)}</span>
-    <button class="btn btn-outline" id="qr-jump">📱 QR Orders <span class="nav-badge" data-qr-badge style="display:${pendingQr?'inline-flex':'none'};">${pendingQr}</span></button>
-    ${held.length? `<button class="btn btn-outline" id="held-orders-btn">📥 Held (${held.length})</button>` : ''}`;
-  document.getElementById('qr-jump').onclick = ()=>navigatePOS('qr');
+    <span class="shift-badge" title="Opened ${fmtDateTime(shift.opened_at)} by ${escapeHtml(shift.cashier_name)}">${escapeHtml(shift.shift_number||'')} · ${shiftDuration(shift)}</span>
+    ${held.length? `<button class="btn btn-outline" id="held-orders-btn">${icon('inbox')} Held (${held.length})</button>` : ''}`;
   if(held.length) document.getElementById('held-orders-btn').onclick = showHeldOrders;
 
   const content = document.getElementById('content');
@@ -1323,38 +1368,67 @@ function renderPOSScreen(){
   content.className = 'pos-layout';
   content.innerHTML = `
     <div class="pos-left">
-      <div class="pos-search"><input type="text" id="pos-search" placeholder="🔍 Search products..." value="${escapeHtml(posState.searchTerm)}"></div>
-      <div class="pos-cats" id="pos-cats">${cats.map(c=>`<button class="pos-cat-btn ${posState.catFilter===c?'active':''}" data-cat="${escapeHtml(c)}">${c==='ALL'?'All':escapeHtml(c)}</button>`).join('')}</div>
+      <label class="pos-search">${icon('search')}<input type="search" id="pos-search" placeholder="Search the menu" aria-label="Search the menu" autocomplete="off" value="${escapeHtml(posState.searchTerm)}"></label>
+      <div class="pos-cats" id="pos-cats" role="tablist" aria-label="Sub-categories">${cats.map(c=>`<button class="pos-cat-btn ${posState.catFilter===c?'active':''}" data-cat="${escapeHtml(c)}" aria-pressed="${posState.catFilter===c}">${c==='ALL'?'All':escapeHtml(c)}</button>`).join('')}</div>
       <div class="pos-product-grid" id="pos-product-grid"></div>
     </div>
-    <div class="pos-cart" id="pos-cart-panel"></div>`;
+    <div class="pos-cart" id="pos-cart-panel"></div>
+    <button class="cart-jump" id="cart-jump" hidden></button>`;
+  document.getElementById('cart-jump').onclick = ()=>{ const c = document.getElementById('pos-cart-panel'); if(c) c.scrollIntoView({behavior: 'smooth', block: 'start'}); };
   document.getElementById('pos-search').oninput = (e)=>{ posState.searchTerm = e.target.value; renderProductGrid(); };
   document.getElementById('pos-cats').addEventListener('click', (e)=>{
     const btn = e.target.closest('[data-cat]'); if(!btn) return;
     posState.catFilter = btn.dataset.cat;
     renderProductGrid();
-    document.querySelectorAll('.pos-cat-btn').forEach(b=> b.classList.toggle('active', b.dataset.cat===posState.catFilter));
+    document.querySelectorAll('.pos-cat-btn').forEach(b=>{ const on = b.dataset.cat===posState.catFilter; b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on)); });
   });
   renderProductGrid();
   renderCartPanel();
 }
 
+// Tiles grouped under their sub-category (posCategoryOf), groups A to Z, items in their
+// menu order (sort_order, then name) inside each group. A chip shows one group; a search
+// shows the matching items, still grouped. Returns [{name, items}].
+function groupedMenu(){
+  let list = sellableRecipes();
+  if(posState.catFilter!=='ALL') list = list.filter(r=> posCategoryOf(r)===posState.catFilter);
+  const term = String(posState.searchTerm || '').trim().toLowerCase();
+  if(term) list = list.filter(r=> String(r.name||'').toLowerCase().includes(term));
+  const groups = new Map();
+  list.forEach(r=>{ const g = posCategoryOf(r); if(!groups.has(g)) groups.set(g, []); groups.get(g).push(r); });
+  return [...groups.keys()].sort((a,b)=> a.localeCompare(b)).map(name=>({
+    name, items: groups.get(name).sort((a,b)=> (Number(a.sort_order)||0)-(Number(b.sort_order)||0) || String(a.name).localeCompare(String(b.name))),
+  }));
+}
+function productTileHtml(r, colorKey){
+  const avail = recipeAvailability(r);
+  const sold = !!r.sold_out;
+  const low = !sold && avail<=2;
+  const style = colorKey ? tileStyleVars(colorKey) : '';
+  const cls = ['pos-product-card', colorKey ? 'tile-colored' : 'tile-plain', colorKey && TILE_COLORS[colorKey].light ? 'tile-light' : '', (sold||avail<=0) ? 'unavailable' : ''].filter(Boolean).join(' ');
+  const tag = sold ? '<span class="tile-tag">Sold out</span>' : (low ? `<span class="tile-tag">${avail<=0?'Out of stock':'Low stock'}</span>` : '');
+  return `<button type="button" class="${cls}" data-recipe="${escapeHtml(r.id)}" ${style?`style="${style}"`:''}>
+      ${tag}<span class="pname">${escapeHtml(r.name)}</span>
+      <span class="pprice">${fmtMoney(r.selling_price)}</span>
+    </button>`;
+}
 function renderProductGrid(){
   const grid = document.getElementById('pos-product-grid');
   if(!grid) return;
-  let list = sellableRecipes();
-  if(posState.catFilter!=='ALL') list = list.filter(r=> posCategoryOf(r)===posState.catFilter);
-  if(posState.searchTerm) list = list.filter(r=> r.name.toLowerCase().includes(posState.searchTerm.toLowerCase()));
-  list.sort((a,b)=> (Number(a.sort_order)||0)-(Number(b.sort_order)||0) || a.name.localeCompare(b.name));
-  if(list.length===0){ grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;">No products found. Add sellable recipes (with a selling price) in Back Office → Recipes.</div>`; return; }
-  grid.innerHTML = list.map(r=>{
-    const avail = recipeAvailability(r);
-    const sold = !!r.sold_out;
-    const low = !sold && avail<=2;
-    return `<div class="pos-product-card ${(sold||avail<=0)?'unavailable':''}" data-recipe="${r.id}">
-      <div><div class="ptag">${escapeHtml(posCategoryOf(r))}</div><div class="pname">${escapeHtml(r.name)}</div></div>
-      <div class="pprice">${fmtMoney(r.selling_price)}${sold?` <span class="stock-note">· sold out</span>`:(low?` <span class="stock-note">·${avail<=0?' out':' low'}</span>`:'')}</div>
-    </div>`;
+  const groups = groupedMenu();
+  if(groups.length===0){
+    grid.innerHTML = posState.searchTerm
+      ? `<div class="empty-state">${icon('search', {size: 32})}<p>Nothing on the menu matches “${escapeHtml(posState.searchTerm)}”.</p></div>`
+      : `<div class="empty-state">${icon('cup', {size: 32})}<p>No products yet. Add sellable recipes (with a selling price) in Back Office → Recipes.</p></div>`;
+    return;
+  }
+  grid.innerHTML = groups.map(g=>{
+    const key = tileColorKeyFor(g.name);
+    const n = g.items.length;
+    return `<section class="pos-group" data-group="${escapeHtml(g.name)}">
+      <div class="pos-group-head"><h2 class="pos-group-title">${escapeHtml(g.name)}</h2><span class="pos-group-count">${n} item${n===1?'':'s'}</span></div>
+      <div class="pos-group-grid">${g.items.map(r=>productTileHtml(r, key)).join('')}</div>
+    </section>`;
   }).join('');
   grid.querySelectorAll('[data-recipe]').forEach(card=> card.onclick = ()=> onProductTap(card.dataset.recipe));
 }
@@ -1451,52 +1525,284 @@ function addToCart(recipe, qty, modifiers, selections, notes){
   toast(`Added ${recipe.name}`, 'success');
 }
 function cartLineTotal(line){ return line.unit_price * line.quantity; }
+function cartLogicLines(){ return posState.cart.map(l=>({recipe_id: l.recipe_id, unit_price: l.unit_price, quantity: l.quantity})); }
+// Totals always come from the shared maths, with the stamp reward (if one is applied) worked
+// out again from the cart as it is now.
 function currentCartTotals(){
-  return computeSaleTotals(posState.cart.map(l=>({unit_price:l.unit_price, quantity:l.quantity})), posState.discount);
+  return computeSaleTotals(cartLogicLines(), posState.discount, undefined, rewardAmountNow());
 }
 function clearCart(){
-  posState.cart = []; posState.discount = null; posState.resumingHeldSaleId = null; posState.customer = null; posState.qrOrder = null;
+  posState.cart = []; posState.discount = null; posState.resumingHeldSaleId = null; posState.customer = null; posState.qrOrder = null; posState.reward = null;
+}
+
+/* ================= Stamp card rewards at checkout (release 1.2) =================
+   The server decides which rewards are ready (fo_customer_detail / fo_customer_list) and checks
+   the one used when the sale uploads (REWARD_NOT_AVAILABLE / REWARD_AMOUNT_MISMATCH refuse the
+   whole sale; it then waits under "Uploads that need attention"). One reward per sale.
+   Offline: only rewards the last online answer showed as ready, and the screen says they are
+   checked when the internet is back. A reward used in a sale that is still waiting to upload
+   is not offered again on this counter (posState.usedRewardKeys). */
+function loyaltyOn(){ return !!(state.settings && state.settings.loyalty_enabled); }
+function usedRewardKey(customerId, r){ return customerId + ':' + rewardKey(r); }
+// Rebuilds the blocked rewards from what is still on this counter: finished sales with a reward that are
+// waiting to upload, or were refused and not dismissed yet, unless a void / full refund of that sale is
+// queued too. Everything else follows the server's answer (a released reward is offered again).
+async function rebuildUsedRewardKeys(){
+  try{
+    const ops = (await LocalDB.outboxAll()).concat(await LocalDB.failedAll());
+    const released = new Set(ops.filter(o => o.type === 'refund' && o.data && o.data.refund && (o.data.refund.type === 'VOID' || o.data.refund.type === 'FULL_REFUND')).map(o => o.data.refund.sale_id));
+    const keys = new Set();
+    ops.forEach(o => {
+      const sale = o.type === 'sale' && o.data && o.data.sale;
+      const lr = sale && sale.status === 'COMPLETED' && sale.loyalty_reward;
+      if(lr && lr.customer_id && !released.has(sale.id)) keys.add(usedRewardKey(lr.customer_id, lr));
+    });
+    posState.usedRewardKeys = keys;
+    if(posState.route === 'pos') renderCartPanel();
+  }catch(e){}
+}
+function usableRewards(){
+  const c = posState.customer;
+  if(!c || !c.summary || !loyaltyOn() || savedCardTooOldForRewards(c)) return [];
+  return readyRewards(c.summary).filter(r => !posState.usedRewardKeys.has(usedRewardKey(c.id, r)));
+}
+// Cart lines a free-item reward can go on: a drink / pastry / food line with a whole quantity of 1 or more.
+function freeItemLines(){
+  return rewardEligibleLines(posState.cart).filter(l => Number.isInteger(Number(l.quantity)) && Number(l.quantity) >= 1);
+}
+function rewardAmountNow(){
+  const a = posState.reward;
+  if(!a) return 0;
+  if(a.reward.type === 'FREE_ITEM' && !freeItemLines().some(l => l.recipe_id === a.recipe_id)) return 0;
+  return loyaltyRewardAmount(a.reward, cartLogicLines(), posState.discount, a.recipe_id);
+}
+function rewardLineName(a){
+  if(!a) return '';
+  if(a.reward.type === 'FREE_ITEM'){
+    const line = posState.cart.find(l => l.recipe_id === a.recipe_id);
+    return 'Free ' + (line ? line.name : 'item');
+  }
+  return rewardLabel(a.reward);
+}
+// Drops a reward that no longer fits the cart (customer removed or changed, free item taken out).
+function checkAppliedReward(){
+  const a = posState.reward;
+  if(!a) return;
+  const c = posState.customer;
+  let why = '';
+  if(!c || c.id !== a.customer_id) why = 'The customer was removed, so the stamp reward was taken off.';
+  else if(!loyaltyOn()) why = 'The stamp card is switched off, so the reward was taken off.';
+  else if(!usableRewards().some(r => rewardKey(r) === rewardKey(a.reward))) why = 'That stamp reward is no longer available, so it was taken off.';
+  else if(a.reward.type === 'FREE_ITEM' && !freeItemLines().some(l => l.recipe_id === a.recipe_id)) why = 'The free item is no longer in the order, so the stamp reward was taken off.';
+  if(why){ posState.reward = null; toast(why, 'warn'); }
+}
+function applyReward(key){
+  const c = posState.customer;
+  const r = usableRewards().find(x => rewardKey(x) === key);
+  if(!c || !r) return;
+  if(!posState.cart.length){ toast('Add items to the order first, then apply the reward.', 'warn'); return; }
+  const set = (recipeId)=>{
+    posState.reward = {reward: r, customer_id: c.id, recipe_id: recipeId || null, offline: !!c.summaryOffline};
+    renderCartPanel();
+    toast(`Stamp reward applied: ${r.type === 'FREE_ITEM' ? rewardLineName(posState.reward) : rewardLabel(r)}`);
+  };
+  if(r.type !== 'FREE_ITEM'){ set(null); return; }
+  const lines = freeItemLines();
+  // One choice per item (the dearest line of an item counts, as on the server).
+  const byRecipe = new Map();
+  lines.forEach(l => { const was = byRecipe.get(l.recipe_id); if(!was || Number(l.unit_price) > Number(was.unit_price)) byRecipe.set(l.recipe_id, l); });
+  const choices = [...byRecipe.values()];
+  if(!choices.length){ toast('Add a drink or food item to the order first. The free item reward takes one of them off.', 'warn'); return; }
+  if(choices.length === 1){ set(choices[0].recipe_id); return; }
+  openModal({title: 'Which item is free?', body: `
+    <p class="hint" style="margin-top:0;">One of the chosen item is free (its price with the options picked).</p>
+    <div class="free-pick">${choices.map(l => `<button class="free-pick-btn" data-free="${escapeHtml(l.recipe_id)}"><b>${escapeHtml(l.name)}</b>${l.modifiers && l.modifiers.length ? `<small>${l.modifiers.map(m=>escapeHtml(m.label)).join(', ')}</small>` : ''}<span>${fmtMoney(l.unit_price)}</span></button>`).join('')}</div>`,
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button>`,
+    onMount: (root)=>{
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      root.querySelectorAll('[data-free]').forEach(b => b.onclick = ()=>{ closeModal(); set(b.dataset.free); });
+    }});
+}
+
+/* ---- The customer on this order (and their stamp card) ---- */
+const CUSTOMER_CARDS_KEY = 'fo.customerCards';
+const CUSTOMER_CARDS_MAX = 300;
+const CUSTOMER_CARD_KEEP_MS = 30*24*3600*1000;      // saved copies older than 30 days are deleted
+const CUSTOMER_CARD_REWARD_MS = 48*3600*1000;       // offline, rewards only from copies saved in the last 48 hours
+// Saved stamp cards (for offline use). Copies older than 30 days are removed whenever the list is read.
+async function loadCustomerCards(){
+  let m;
+  try{ m = await LocalDB.get(CUSTOMER_CARDS_KEY); }catch(e){ return {}; }
+  if(!m || typeof m !== 'object' || Array.isArray(m)) return {};
+  const cutoff = Date.now() - CUSTOMER_CARD_KEEP_MS;
+  let changed = false;
+  Object.keys(m).forEach(id => { const t = m[id] && m[id].at ? new Date(m[id].at).getTime() : NaN; if(!(t >= cutoff)){ delete m[id]; changed = true; } });
+  if(changed){ try{ await LocalDB.set(CUSTOMER_CARDS_KEY, m); }catch(e){} }
+  return m;
+}
+// The customer was erased or merged on the server (NOT_FOUND): nothing of them stays on this counter.
+async function forgetCustomerCard(id){
+  try{
+    const m = await loadCustomerCards();
+    if(m[id]){ delete m[id]; await LocalDB.set(CUSTOMER_CARDS_KEY, m); }
+  }catch(e){}
+}
+function savedCardTooOldForRewards(c){
+  if(!c || !c.summaryOffline) return false;
+  const t = c.summaryAt ? new Date(c.summaryAt).getTime() : NaN;
+  return !(Date.now() - t <= CUSTOMER_CARD_REWARD_MS);
+}
+// Only what the counter needs offline: name, masked phone, visits and the stamp card. Never money.
+function customerCardCopy(c){
+  return {id: c.id, nickname: c.nickname, phone: c.phone || null, visits: c.visits, last_visit_at: c.last_visit_at || null,
+    total_stamps: c.total_stamps, drink_stamps_earned: c.drink_stamps_earned, food_stamps_earned: c.food_stamps_earned,
+    card: c.card || null, ready_rewards: Array.isArray(c.ready_rewards) ? c.ready_rewards : []};
+}
+async function saveCustomerCard(c){
+  if(!c || !c.id) return;
+  try{
+    const m = await loadCustomerCards();
+    m[c.id] = {c: customerCardCopy(c), at: new Date().toISOString()};
+    const ids = Object.keys(m);
+    if(ids.length > CUSTOMER_CARDS_MAX) ids.sort((a,b)=> String(m[a].at).localeCompare(String(m[b].at))).slice(0, ids.length - CUSTOMER_CARDS_MAX).forEach(id => delete m[id]);
+    await LocalDB.set(CUSTOMER_CARDS_KEY, m);
+  }catch(e){ console.warn('could not save the stamp card on this counter', e); }
+}
+// A reward used in a sale on this counter: take it off the saved card too (so offline it is not offered again).
+async function forgetUsedReward(customerId, reward){
+  try{
+    const m = await loadCustomerCards();
+    const e = m[customerId];
+    if(!e || !e.c) return;
+    e.c.ready_rewards = (e.c.ready_rewards || []).filter(r => rewardKey(r) !== rewardKey(reward));
+    await LocalDB.set(CUSTOMER_CARDS_KEY, m);
+  }catch(e){}
+}
+function hasLoyaltyData(c){ return !!(c && (c.card || Array.isArray(c.ready_rewards))); }
+function setCustomerSummary(c, offline, at){
+  const cur = posState.customer;
+  if(!cur || cur.id !== c.id) return;
+  if(c.nickname) cur.nickname = c.nickname;
+  if(c.phone !== undefined) cur.phone = c.phone;
+  if(c.visits !== undefined && c.visits !== null) cur.visits = Number(c.visits) || 0;
+  if(hasLoyaltyData(c)){ cur.summary = customerCardCopy(c); cur.summaryOffline = !!offline; cur.summaryAt = at || new Date().toISOString(); }
+}
+// Put a customer on this order. c: {id, nickname, phone?, visits? | visit_count?, card?, ready_rewards?}.
+function attachCustomer(c){
+  if(!c || !c.id) return;
+  const same = posState.customer && posState.customer.id === c.id;
+  if(!same){
+    posState.reward = null;
+    posState.customer = {id: c.id, nickname: c.nickname || 'Customer', phone: c.phone || null,
+      visits: c.visits != null ? Number(c.visits) || 0 : (c.visit_count != null ? Number(c.visit_count) || 0 : null),
+      summary: null, summaryOffline: false, summaryAt: null};
+  }
+  if(hasLoyaltyData(c)) setCustomerSummary(c, false);
+  renderCartPanel();
+  if(!hasLoyaltyData(c)) refreshCustomerCard(c.id);
+  else saveCustomerCard(c);
+}
+let customerCardRuns = {};
+async function refreshCustomerCard(id){
+  if(!id || customerCardRuns[id]) return;
+  customerCardRuns[id] = true;
+  try{
+    // The saved copy is used ONLY when the server can't be reached. Any server answer wins:
+    // NOT_FOUND (erased / merged) deletes the saved copy; other refusals just show no stamp card.
+    if(isOnline()){
+      try{
+        const r = await cloud.rpc('fo_customer_detail', {p_customer_id: id, p_staff_token: null}, {timeout: 8000});
+        if(r && r.customer){
+          await saveCustomerCard(r.customer);
+          setCustomerSummary(r.customer, false);
+          renderCartPanel();
+          return;
+        }
+        if(r && r.error === 'NOT_FOUND') await forgetCustomerCard(id);
+        return;
+      }catch(e){
+        if(!e.offline){ console.warn('could not load the stamp card', e.message); return; }
+      }
+    }
+    const saved = (await loadCustomerCards())[id];
+    if(saved && saved.c && posState.customer && posState.customer.id === id && !posState.customer.summary){
+      setCustomerSummary(saved.c, true, saved.at);
+      renderCartPanel();
+    }
+  }finally{ delete customerCardRuns[id]; }
+}
+function initialOf(name){ const t = String(name || '').trim(); return t ? t.charAt(0).toUpperCase() : '?'; }
+function visitsText(n){ n = Number(n) || 0; return `${n} visit${n===1?'':'s'}`; }
+function cartCustomerHtml(){
+  const c = posState.customer;
+  if(!c) return `<button class="btn btn-outline cart-add-cust" id="cust-add">${icon('user')} Add customer (stamp card)</button>`;
+  const view = c.summary && loyaltyOn() ? loyaltyCardView(c.summary) : null;
+  const sub = [c.phone ? escapeHtml(c.phone) : '', c.visits != null ? visitsText(c.visits) : ''].filter(Boolean).join(' · ');
+  const applied = posState.reward;
+  const rewards = view ? usableRewards() : [];
+  let rewardRow = '';
+  if(view && rewards.length){
+    rewardRow = `<div class="cart-rewards">${rewards.map(r=>{
+      const on = applied && rewardKey(applied.reward) === rewardKey(r);
+      return `<button class="reward-chip ${on?'on':''}" data-reward="${escapeHtml(rewardKey(r))}" aria-pressed="${on}">${icon(on?'check':'gift', {size: 16})}${escapeHtml(rewardLabel(r))} ${on?'applied':'ready'}</button>`;
+    }).join('')}</div>`;
+  }
+  let note = '';
+  if(view && c.summaryOffline && savedCardTooOldForRewards(c)) note = `<div class="cart-cust-note">${icon('wifi-off', {size: 16})}<span>The stamp card saved on this counter is more than 2 days old, so rewards can be used only when the counter is online. Stamps still count when the sale uploads.</span></div>`;
+  else if(view && c.summaryOffline) note = `<div class="cart-cust-note">${icon('wifi-off', {size: 16})}<span>Stamp card saved ${escapeHtml(timeAgo(c.summaryAt))}. Rewards will be checked when online.</span></div>`;
+  else if(!c.summary && loyaltyOn() && !isOnline()) note = `<div class="cart-cust-note">${icon('wifi-off', {size: 16})}<span>No saved stamp card for this customer on this counter. Stamps still count when the sale uploads.</span></div>`;
+  return `<div class="customer-chip cart-cust">
+      <span class="cust-av" aria-hidden="true">${escapeHtml(initialOf(c.nickname))}</span>
+      <span class="cust-info"><b>${escapeHtml(c.nickname)}</b>${sub?`<small>${sub}</small>`:''}</span>
+      ${view ? `<span class="stamp-chip" title="Stamps on this card">${view.stamps_on_card} / ${view.card_size}</span>` : ''}
+      <button class="icon-btn" id="cust-remove" aria-label="Remove customer" title="Remove customer">${icon('x', {size: 18})}</button>
+    </div>${rewardRow}${note}`;
 }
 
 function renderCartPanel(){
   const panel = document.getElementById('pos-cart-panel');
   if(!panel) return;
+  checkAppliedReward();
   const totals = currentCartTotals();
   const q = posState.qrOrder;
+  const a = posState.reward;
+  const free = totals.grandTotal <= 0 && posState.cart.length > 0;
   panel.innerHTML = `
-    <div class="pos-cart-head"><h3>${q?`QR ${escapeHtml(q.order_number)}`:'Current Order'}</h3>${posState.cart.length?`<button class="btn btn-ghost btn-sm" id="clear-cart">Clear</button>`:''}</div>
-    ${q?`<div class="cart-qr-banner">📱 ${escapeHtml(q.table_label||'')} · ${escapeHtml(q.order_type==='TAKEAWAY'?'Takeaway':'Dine-in')}${q.customer_note?`<div class="text-light">“${escapeHtml(q.customer_note)}”</div>`:''}</div>`:''}
-    <div class="cart-customer">${posState.customer
-      ? `<span class="customer-chip">👤 ${escapeHtml(posState.customer.nickname)} <button class="linklike-btn" id="cust-remove" title="Remove customer">✕</button></span>`
-      : `<button class="btn btn-ghost btn-sm" id="cust-add">👤 Add customer (loyalty)</button>`}</div>
+    <div class="pos-cart-head"><h3>${q?`QR ${escapeHtml(q.order_number)}`:'Current order'}</h3>${posState.cart.length?`<button class="btn btn-ghost btn-sm" id="clear-cart">${icon('trash', {size: 18})} Clear</button>`:''}</div>
+    ${q?`<div class="cart-qr-banner">${icon('qr', {size: 18})}<span>${escapeHtml(q.table_label||'')} · ${escapeHtml(q.order_type==='TAKEAWAY'?'Takeaway':'Dine-in')}${q.customer_note?`<span class="text-light"> · “${escapeHtml(q.customer_note)}”</span>`:''}</span></div>`:''}
+    <div class="cart-customer">${cartCustomerHtml()}</div>
     <div class="pos-cart-items" id="cart-items">
-      ${posState.cart.length===0 ? `<div class="cart-empty">🧺<br>No items yet.<br>Tap a product to add it.</div>` :
+      ${posState.cart.length===0 ? `<div class="cart-empty">${icon('cup', {size: 36})}<p>No items yet.<br>Tap a product to add it.</p></div>` :
       posState.cart.map(line=>`
         <div class="cart-line" data-line="${line.lineId}">
           <div class="cart-line-top">
-            <div><div class="cart-line-name">${escapeHtml(line.name)}</div>
-              ${line.modifiers.length?`<div class="cart-line-mods">${line.modifiers.map(m=>escapeHtml(m.label)).join(', ')}</div>`:''}
-              ${line.notes?`<div class="cart-line-mods">“${escapeHtml(line.notes)}”</div>`:''}</div>
+            <div class="cart-line-main"><div class="cart-line-name">${escapeHtml(line.name)}</div>
+              ${line.modifiers.length?`<div class="cart-line-mods">${line.modifiers.map(m=>escapeHtml(m.label)).join(' · ')}</div>`:''}
+              ${line.notes?`<div class="cart-line-mods">“${escapeHtml(line.notes)}”</div>`:''}
+              ${a && a.reward.type==='FREE_ITEM' && a.recipe_id===line.recipe_id && posState.cart.find(l=>l.recipe_id===a.recipe_id)===line ? `<div class="cart-line-free">${icon('gift', {size: 14})} One free (stamp reward)</div>` : ''}</div>
             <div class="cart-line-price">${fmtMoney(cartLineTotal(line))}</div>
           </div>
           <div class="cart-line-controls">
-            <button class="qty-btn" data-dec="${line.lineId}">−</button><span>${line.quantity}</span><button class="qty-btn" data-inc="${line.lineId}">+</button>
-            <button class="btn btn-ghost btn-sm" data-edit-line="${line.lineId}" style="margin-left:auto;">Edit</button>
-            <button class="btn btn-ghost btn-sm" data-remove="${line.lineId}">✕</button>
+            <button class="qty-btn" data-dec="${line.lineId}" aria-label="One less ${escapeHtml(line.name)}">${icon('minus', {size: 18})}</button><span class="qty-val">${line.quantity}</span><button class="qty-btn" data-inc="${line.lineId}" aria-label="One more ${escapeHtml(line.name)}">${icon('plus', {size: 18})}</button>
+            <button class="btn btn-ghost btn-sm" data-edit-line="${line.lineId}" style="margin-left:auto;">${icon('edit', {size: 18})} Edit</button>
+            <button class="btn btn-ghost btn-sm icon-only" data-remove="${line.lineId}" aria-label="Remove ${escapeHtml(line.name)}">${icon('trash', {size: 18})}</button>
           </div>
         </div>`).join('')}
     </div>
     <div class="pos-cart-summary">
       <div class="row"><span>Subtotal</span><span>${fmtMoney(totals.subtotal)}</span></div>
       <div class="row"><span>Discount ${posState.discount?`(${posState.discount.type==='percent'?posState.discount.value+'%':fmtMoney(posState.discount.value)})`:''}</span>
-        <span>${totals.discountAmt>0?'-'+fmtMoney(totals.discountAmt):fmtMoney(0)} ${!posState.discount?`<a class="linklike" id="add-discount-link" style="font-size:11.5px;">add</a>`:`<a class="linklike" id="remove-discount-link" style="font-size:11.5px;">remove</a>`}</span></div>
+        <span>${totals.discountAmt>0?'-'+fmtMoney(totals.discountAmt):fmtMoney(0)} ${!posState.discount?`<a class="linklike" id="add-discount-link" role="button" tabindex="0">add</a>`:`<a class="linklike" id="remove-discount-link" role="button" tabindex="0">remove</a>`}</span></div>
+      ${a?`<div class="row reward" id="reward-row"><span class="rw-label">${icon('gift', {size: 16})}<span>Stamp reward · ${escapeHtml(rewardLineName(a))}${a.offline?' <small>(checked when online)</small>':''}</span></span>
+        <span class="rw-amt">-${fmtMoney(totals.loyaltyDiscount)} <a class="linklike" id="reward-remove" role="button" tabindex="0">remove</a></span></div>`:''}
       ${state.settings.tax_pct>0?`<div class="row"><span>Tax (${state.settings.tax_pct}%${state.settings.tax_inclusive?' incl.':''})</span><span>${fmtMoney(totals.tax)}</span></div>`:''}
-      ${state.settings.service_charge_pct>0?`<div class="row"><span>Service Charge (${state.settings.service_charge_pct}%)</span><span>${fmtMoney(totals.serviceCharge)}</span></div>`:''}
-      <div class="row total"><span>Total</span><span>${fmtMoney(totals.grandTotal)}</span></div>
+      ${state.settings.service_charge_pct>0?`<div class="row"><span>Service charge (${state.settings.service_charge_pct}%)</span><span>${fmtMoney(totals.serviceCharge)}</span></div>`:''}
+      <div class="row total"><span class="total-label">Total</span><span class="total-amount">${fmtMoney(totals.grandTotal)}</span></div>
     </div>
     <div class="pos-cart-foot">
-      <button class="btn-hold" id="hold-order-btn" ${posState.cart.length===0||q?'disabled':''}>Hold</button>
-      <button class="btn-checkout" id="checkout-btn" ${posState.cart.length===0?'disabled':''}>CHECKOUT / PAY</button>
+      <button class="btn-hold" id="hold-order-btn" ${posState.cart.length===0||q?'disabled':''}>${icon('inbox', {size: 20})} Hold</button>
+      <button class="btn-disc" id="cart-discount-btn" ${posState.cart.length===0?'disabled':''}>${posState.discount?'Remove discount':'Discount'}</button>
+      <button class="btn-checkout" id="checkout-btn" ${posState.cart.length===0?'disabled':''}>${posState.cart.length===0 ? 'Charge' : free ? 'Complete sale (nothing to pay)' : 'Charge ' + fmtMoney(totals.grandTotal)}</button>
     </div>`;
   panel.querySelectorAll('[data-inc]').forEach(b=> b.onclick = ()=>{ const l=posState.cart.find(x=>x.lineId===b.dataset.inc); l.quantity++; renderCartPanel(); });
   panel.querySelectorAll('[data-dec]').forEach(b=> b.onclick = ()=>{ const l=posState.cart.find(x=>x.lineId===b.dataset.dec); l.quantity--; if(l.quantity<=0) posState.cart=posState.cart.filter(x=>x.lineId!==l.lineId); renderCartPanel(); });
@@ -1507,14 +1813,30 @@ function renderCartPanel(){
     if(recipe && (recipe.modifier_groups||[]).length && line.selections) openModifierPicker(recipe, line);
     else editLineNote(line);
   });
+  panel.querySelectorAll('[data-reward]').forEach(b=> b.onclick = ()=>{
+    const on = posState.reward && rewardKey(posState.reward.reward) === b.dataset.reward;
+    if(on){ posState.reward = null; renderCartPanel(); toast('Stamp reward removed'); }
+    else applyReward(b.dataset.reward);
+  });
+  const clickish = (el, fn)=>{ if(!el) return; el.onclick = fn; el.onkeydown = (e)=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); fn(); } }; };
   const clearBtn = document.getElementById('clear-cart');
   if(clearBtn) clearBtn.onclick = async ()=>{ const ok = await confirmDialog(q?'Close this QR order without taking payment? (It stays on the QR board.)':'Clear the current order?'); if(ok){ clearCart(); renderCartPanel(); } };
-  const addDisc = document.getElementById('add-discount-link'); if(addDisc) addDisc.onclick = openDiscountPicker;
-  const rmDisc = document.getElementById('remove-discount-link'); if(rmDisc) rmDisc.onclick = ()=>{ posState.discount=null; renderCartPanel(); };
-  const custAdd = document.getElementById('cust-add'); if(custAdd) custAdd.onclick = openCustomerPicker;
+  clickish(document.getElementById('add-discount-link'), openDiscountPicker);
+  clickish(document.getElementById('remove-discount-link'), ()=>{ posState.discount=null; renderCartPanel(); });
+  clickish(document.getElementById('reward-remove'), ()=>{ posState.reward = null; renderCartPanel(); toast('Stamp reward removed'); });
+  const discBtn = document.getElementById('cart-discount-btn');
+  if(discBtn) discBtn.onclick = ()=>{ if(posState.discount){ posState.discount = null; renderCartPanel(); } else openDiscountPicker(); };
+  const custAdd = document.getElementById('cust-add'); if(custAdd) custAdd.onclick = ()=>openCustomerPicker();
   const custRm = document.getElementById('cust-remove'); if(custRm) custRm.onclick = ()=>{ posState.customer = null; renderCartPanel(); };
   const holdBtn = document.getElementById('hold-order-btn'); if(holdBtn) holdBtn.onclick = holdCurrentOrder;
   const checkoutBtn = document.getElementById('checkout-btn'); if(checkoutBtn) checkoutBtn.onclick = openCheckout;
+  // Phone-size screens: the order sits below the menu, so a bar at the bottom jumps to it.
+  const jump = document.getElementById('cart-jump');
+  if(jump){
+    const n = posState.cart.reduce((s,l)=> s + (Number(l.quantity)||0), 0);
+    jump.hidden = !n;
+    jump.innerHTML = `<span>View order · ${n} item${n===1?'':'s'}</span><span>${fmtMoney(totals.grandTotal)}</span>`;
+  }
 }
 function editLineNote(line){
   openModal({title:`Note — ${escapeHtml(line.name)}`, body:`<div class="form-row"><label>Note</label><input id="ln-note" maxlength="140" value="${escapeHtml(line.notes||'')}"></div>`,
@@ -1546,26 +1868,33 @@ async function openDiscountPicker(){
 }
 
 /* ================= Customers (loyalty) ================= */
-function openCustomerPicker(){
-  if(!isOnline()){ toast('Finding customers needs the internet. You can still finish the sale without one.', 'warn'); return; }
+// opts.onPick(customer): what happens with the chosen / new customer (default: put them on this order).
+// opts.newOnly: open straight on the "New customer" form (Customers screen → Add customer).
+function openCustomerPicker(opts){
+  opts = opts || {};
+  if(!isOnline()){ toast(opts.newOnly ? 'Adding a customer needs the internet.' : 'Finding customers needs the internet. You can still finish the sale without one.', 'warn'); return; }
   const SEARCH_HINT = 'Name, last 4 digits or full number';
-  openModal({title:'Add customer', body:`
-    <div class="form-row"><label for="cp-q">Find a customer</label><input id="cp-q" placeholder="${SEARCH_HINT}" autocomplete="off"></div>
-    <div id="cp-results" class="cp-results"><p class="hint">${SEARCH_HINT}.</p></div>
-    <details class="cp-new"><summary>+ New customer</summary>
+  openModal({title: opts.newOnly ? 'New customer' : 'Add customer', body:`
+    <div class="form-row" ${opts.newOnly?'hidden':''}><label for="cp-q">Find a customer</label><input id="cp-q" placeholder="${SEARCH_HINT}" autocomplete="off"></div>
+    <div id="cp-results" class="cp-results" ${opts.newOnly?'hidden':''}><p class="hint">${SEARCH_HINT}.</p></div>
+    <details class="cp-new" ${opts.newOnly?'open':''}><summary>${icon('plus', {size: 18})} New customer</summary>
       <div class="form-grid" style="margin-top:10px;">
         <div class="form-row"><label>Nickname</label><input id="cp-name" maxlength="30"></div>
         <div class="form-row"><label>Mobile (optional)</label><input id="cp-phone" inputmode="tel" placeholder="0917 123 4567"></div>
       </div>
       <p class="hint">Ask the customer first: “Can we save your name and number for your rewards?”</p>
       <label class="cp-consent" for="cp-consent"><input type="checkbox" id="cp-consent"> <span>The customer agreed to be added to our loyalty list</span></label>
-      <button class="btn btn-primary btn-sm" id="cp-create">Save customer</button>
+      <button class="btn btn-primary" id="cp-create">Save customer</button>
     </details>`,
   foot:`<button class="btn btn-outline" data-cancel>Close</button>`,
   onMount:(root)=>{
     root.querySelector('[data-cancel]').onclick = closeModal;
     const results = root.querySelector('#cp-results');
-    const pick = (c)=>{ posState.customer = {id:c.id, nickname:c.nickname}; closeModal(); renderCartPanel(); toast(`${c.nickname} added to this sale`); };
+    const pick = (c)=>{
+      closeModal();
+      if(opts.onPick){ opts.onPick(c); return; }
+      attachCustomer(c); toast(`${c.nickname} added to this sale`);
+    };
     // Too many look-ups by phone number from this counter (the server limits them so
     // hidden digits can't be guessed): searching by name still works.
     const isLimited = (code)=> /TOO_MANY_ATTEMPTS/.test(String(code||''));
@@ -1579,7 +1908,7 @@ function openCustomerPicker(){
         if(q !== lastQ) return;                                 // a newer search is on its way
         if(!list || !list.length){ results.innerHTML = '<p class="hint">No match. Add them as a new customer below.</p>'; return; }
         // Phone numbers come from the server already masked (e.g. 0917 ••• 4567); shown as received.
-        results.innerHTML = list.map(c=>`<button class="cp-row" data-id="${escapeHtml(c.id)}"><b>${escapeHtml(c.nickname)}</b><span class="text-light">${c.phone?escapeHtml(c.phone):'no phone'} · ${Number(c.visit_count)||0} visit${Number(c.visit_count)===1?'':'s'}</span></button>`).join('');
+        results.innerHTML = list.map(c=>`<button class="cp-row" data-id="${escapeHtml(c.id)}"><b>${escapeHtml(c.nickname)}</b><span class="text-light">${c.phone?escapeHtml(c.phone):'no phone'} · ${visitsText(c.visit_count)}</span></button>`).join('');
         results.querySelectorAll('[data-id]').forEach(b=> b.onclick = ()=> pick(list.find(c=>c.id===b.dataset.id)));
       }catch(e){
         if(q !== lastQ) return;
@@ -1609,13 +1938,18 @@ function openCustomerPicker(){
         toast(e.offline ? 'Saving a customer needs internet. You can still finish the sale without one.' : friendlyError(e), 'error');
       }finally{ btn.disabled = false; }
     };
-    setTimeout(()=>root.querySelector('#cp-q').focus(), 50);
+    setTimeout(()=>root.querySelector(opts.newOnly ? '#cp-name' : '#cp-q').focus(), 50);
   }});
 }
 
 /* ================= Held orders ================= */
 async function holdCurrentOrder(){
   if(posState.cart.length===0 || posState.qrOrder) return;
+  // A held order never keeps a stamp reward (the server ignores it on a held sale): say so, and drop it.
+  if(posState.reward){
+    posState.reward = null;
+    toast('Held orders don\'t keep a stamp reward. Apply it again when you finish this order.', 'warn');
+  }
   const now = new Date().toISOString();
   const saleId = posState.resumingHeldSaleId || uid();
   const existing = state.sales.find(s=>s.id===saleId);
@@ -1635,7 +1969,7 @@ async function holdCurrentOrder(){
 }
 function showHeldOrders(){
   const held = state.sales.filter(s=>s.status==='HELD').sort((a,b)=> new Date(b.transaction_date)-new Date(a.transaction_date));
-  openModal({title:'Held Orders', body: held.length? `<div class="grid grid-2">${held.map(s=>{
+  openModal({title:'Held orders', body: held.length? `<div class="grid grid-2">${held.map(s=>{
       const items = state.saleItems.filter(i=>i.sale_id===s.id);
       return `<div class="card"><b>${escapeHtml(s.transaction_number)}</b><div class="text-light" style="font-size:12px;">${fmtDateTime(s.transaction_date)} · ${escapeHtml(s.cashier_name||'')}</div>
       <div style="font-size:12.5px;margin-top:6px;">${items.map(i=>`${Number(i.quantity)}× ${escapeHtml(i.name)}`).join(', ')||'—'}</div>
@@ -1650,8 +1984,9 @@ function showHeldOrders(){
         posState.cart = state.saleItems.filter(i=>i.sale_id===saleId).map(it=>({lineId: uid(), recipe_id: it.recipe_id, name: it.name,
           unit_price: Number(it.unit_price), quantity: Number(it.quantity), modifiers: it.modifiers||[], notes: it.notes||''}));
         posState.resumingHeldSaleId = saleId;
-        posState.customer = s && s.customer_id ? {id: s.customer_id, nickname: 'Customer'} : null;
+        posState.customer = null; posState.reward = null;
         closeModal(); navigatePOS('pos');
+        if(s && s.customer_id) attachCustomer({id: s.customer_id, nickname: 'Customer'});
       });
       root.querySelectorAll('[data-cancel-hold]').forEach(b=> b.onclick = async ()=>{
         const ok = await confirmDialog('Cancel this held order? It will be removed.');
@@ -1665,19 +2000,25 @@ function showHeldOrders(){
 }
 
 /* ================= Checkout ================= */
+const PAY_METHOD_ICONS = {CASH:'cash', GCASH:'phone', MAYA:'phone', CARD:'card', OTHER:'receipt'};
 function openCheckout(){
   if(posState.cart.length===0) return;
+  checkAppliedReward();
   const totals = currentCartTotals();
+  // The stamp reward covers everything: nothing to pay, one tap finishes the sale.
+  if(totals.grandTotal <= 0){ openFreeCheckout(totals); return; }
   let method = 'CASH';
   let tendered = 0;
+  const a = posState.reward;
   const body = `
-    <div style="text-align:center;margin-bottom:14px;"><div class="text-light" style="font-size:12px;text-transform:uppercase;font-weight:700;">Total Due</div>
-      <div style="font-family:var(--font-display);font-size:34px;font-weight:700;">${fmtMoney(totals.grandTotal)}</div></div>
+    <div class="checkout-due"><div class="lbl">Total due</div>
+      <div class="val">${fmtMoney(totals.grandTotal)}</div>
+      ${a?`<div class="checkout-reward">${icon('gift', {size: 16})} Stamp reward: -${fmtMoney(totals.loyaltyDiscount)} (${escapeHtml(rewardLineName(a))})</div>`:''}</div>
     <div class="pay-methods five" id="pay-methods">
-      ${PAYMENT_METHODS.map((m,i)=>`<button class="pay-method-btn ${i===0?'selected':''}" data-method="${m.id}">${m.ic}<br>${m.label}</button>`).join('')}
+      ${PAYMENT_METHODS.map((m,i)=>`<button class="pay-method-btn ${i===0?'selected':''}" data-method="${m.id}">${icon(PAY_METHOD_ICONS[m.id] || 'receipt', {size: 26})}<span>${escapeHtml(m.label)}</span></button>`).join('')}
     </div>
     <div id="pay-detail"></div>`;
-  const foot = `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="complete-sale-btn">Complete Sale</button>`;
+  const foot = `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="complete-sale-btn">Complete sale</button>`;
   openModal({title:'Checkout', body, foot, onMount:(root)=>{
     root.querySelector('[data-cancel]').onclick = closeModal;
     const detailWrap = root.querySelector('#pay-detail');
@@ -1685,7 +2026,7 @@ function openCheckout(){
       if(method==='CASH'){
         const quick = [...new Set([totals.grandTotal, 100, 200, 500, 1000].filter(v=>v>=totals.grandTotal || v===totals.grandTotal))].slice(0,5);
         detailWrap.innerHTML = `
-          <div class="form-row"><label>Cash Received</label><input type="number" step="any" inputmode="decimal" id="cash-tendered" placeholder="0.00"></div>
+          <div class="form-row"><label>Cash received</label><input type="number" step="any" inputmode="decimal" id="cash-tendered" placeholder="0.00"></div>
           <div class="quick-cash">${quick.map(v=>`<button data-quick="${v}">${v===totals.grandTotal?'Exact':fmtMoney(v)}</button>`).join('')}</div>
           <div class="change-display"><div class="lbl">Change</div><div class="val" id="change-val">₱0.00</div></div>`;
         const input = detailWrap.querySelector('#cash-tendered');
@@ -1743,10 +2084,48 @@ function openCheckout(){
   }});
 }
 
-// Recomputes totals fresh from the cart + discount + settings (never trusts earlier UI numbers).
+// Nothing to pay (the stamp reward covers the whole order): confirm and finish, no payment step.
+function openFreeCheckout(totals){
+  // Only a reward that actually takes something off "covers" the order; any other ₱0 total
+  // (e.g. a 100% approved discount) gets neutral words.
+  const a = posState.reward && totals.loyaltyDiscount > 0 ? posState.reward : null;
+  openModal({title: 'Nothing to pay', body: `
+    <div class="checkout-due"><div class="lbl">Total due</div><div class="val">${fmtMoney(0)}</div>
+      ${a?`<div class="checkout-reward">${icon('gift', {size: 16})} Stamp reward: -${fmtMoney(totals.loyaltyDiscount)} (${escapeHtml(rewardLineName(a))})</div>`:''}</div>
+    <p>${a ? `The stamp reward covers this whole order, so the customer pays nothing.${a.offline ? ' The reward will be checked when the counter is online.' : ''}` : 'The total is ₱0.00, so the customer pays nothing.'}</p>`,
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary btn-big" id="complete-sale-btn">Complete sale</button>`,
+    onMount: (root)=>{
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      root.querySelector('#complete-sale-btn').onclick = async (ev)=>{
+        ev.currentTarget.disabled = true;
+        if(posState.qrOrder && await qrOrderPaidOnServer(posState.qrOrder)){
+          const paidOrder = posState.qrOrder;
+          closeModal(); clearCart(); navigatePOS('qr');
+          await showQrAlreadyPaid(paidOrder);
+          return;
+        }
+        const done = await completeSale({method: 'OTHER', amount: 0, tendered: null, change: null, reference: a ? 'Stamp reward (nothing to pay)' : 'Nothing to pay'});
+        closeModal();
+        if(done) showReceipt(done.sale.id, {autoPrint:false, customerName: done.customerName});
+      };
+    }});
+}
+// The words for the stamp reward a sale used (for its receipt), from the shop's stamp card.
+function saleRewardLabel(sale){
+  const lr = sale && sale.loyalty_reward;
+  if(!lr || !(Number(sale.loyalty_discount) > 0)) return '';
+  const r = loyaltyConfig().rewards.find(x => Number(x.stamp) === Number(lr.milestone));
+  return r ? rewardLabel(r) : '';
+}
+
+// Recomputes totals fresh from the cart + discount + reward + settings (never trusts earlier UI numbers).
 async function completeSale(paymentInfo){
   const now = new Date().toISOString();
-  const totals = currentCartTotals();
+  checkAppliedReward();
+  let totals = currentCartTotals();
+  // A reward that takes nothing off (e.g. a 100% discount) is not used up.
+  if(posState.reward && !(totals.loyaltyDiscount > 0)){ posState.reward = null; totals = currentCartTotals(); }
+  const applied = posState.reward;
   const saleId = posState.resumingHeldSaleId || uid();
   const existing = state.sales.find(s=>s.id===saleId);
   const shift = activeShift();
@@ -1767,6 +2146,9 @@ async function completeSale(paymentInfo){
     offline: !isOnline(),
     created_at: (existing && existing.created_at) || now, updated_at: now,
   };
+  // Stamp reward (contract D): {loyalty_reward:{customer_id, card_no, milestone, recipe_id}, loyalty_discount}.
+  // Without one: loyalty_discount 0. The server checks it and refuses the whole sale if it doesn't fit.
+  Object.assign(sale, saleLoyaltyFields(applied ? applied.reward : null, applied ? sale.customer_id : null, totals.loyaltyDiscount, applied ? applied.recipe_id : null));
   const items = posState.cart.map(line=>({
     id: uid(), sale_id: saleId, recipe_id: line.recipe_id, name: line.name, quantity: line.quantity,
     unit_price: line.unit_price, modifiers: line.modifiers, line_total: cartLineTotal(line), notes: line.notes||null, created_at: now,
@@ -1786,10 +2168,14 @@ async function completeSale(paymentInfo){
   await Sync.queue('sale', saleOp);
   queueAudit('Sale completed', `${sale.transaction_number} — ${fmtMoney(sale.grand_total)} (${paymentInfo.method})${q?' · QR '+q.order_number:''}`, saleId);
   const customerName = posState.customer ? posState.customer.nickname : null;
+  if(applied && sale.loyalty_reward){
+    forgetUsedReward(sale.customer_id, applied.reward);
+    if(posState.customer && posState.customer.summary) posState.customer.summary.ready_rewards = (posState.customer.summary.ready_rewards || []).filter(r => rewardKey(r) !== rewardKey(applied.reward));
+  }
   clearCart();
   navigatePOS(q ? 'qr' : 'pos');
   toast(`Sale ${sale.transaction_number} completed`, 'success');
-  return {sale, customerName, qrOrder: q};
+  return {sale, customerName, qrOrder: q, rewardLabel: applied ? rewardLabel(applied.reward) : ''};
 }
 
 /* ================= Receipt ================= */
@@ -1801,80 +2187,233 @@ function showReceipt(saleId, opts, dataset){
   const payments = dataset.payments.filter(p=>p.sale_id===saleId);
   const qr = sale.qr_order_id ? state.qrOrders.find(o=>o.id===sale.qr_order_id) : null;
   const customerName = (opts && opts.customerName) || (qr ? qr.customer_nickname : null);
-  openPrintWindow(receiptHtml(sale, items, payments, {qrOrder: qr, customerName}), opts && opts.autoPrint);
+  openPrintWindow(receiptHtml(sale, items, payments, {qrOrder: qr, customerName, rewardLabel: saleRewardLabel(sale)}), opts && opts.autoPrint);
 }
 
 /* =====================================================================
-   QR ORDERS BOARD
+   QR ORDERS BOARD (list or floor plan)
+   Floor plan (release 1.2): the owner draws it in Back Office → Tables (a 1000 x 1000 grid;
+   pos_x / pos_y = top-left corner, rotation turns an item around its centre). The counter reads
+   it with fo_bootstrap / fo_floor_plan() (never the dining_tables table: no QR codes on counters).
+   Each table is coloured by its open QR orders:
+     wait  (terracotta) = an order not paid yet ("Waiting for payment")
+     serve (butter)     = paid, being made or ready, not served yet
+     free  (paper)      = no open order
    ===================================================================== */
+const QR_VIEW_KEY = 'cccc.qr.view';
+const FLOOR_REFRESH_MS = 60*1000;
+let floorPlanAt = 0, floorPlanRun = null;
+function activeTables(){ return (state.tables || []).filter(t => t && t.active !== false); }
+function isPlaced(t){ return t && t.pos_x !== null && t.pos_x !== undefined && t.pos_x !== '' && t.pos_y !== null && t.pos_y !== undefined && t.pos_y !== ''; }
+function placedTables(){ return activeTables().filter(isPlaced); }
+function qrViewMode(){
+  if(posState.qrView === 'plan' || posState.qrView === 'list') return posState.qrView;
+  let saved = null; try{ saved = localStorage.getItem(QR_VIEW_KEY); }catch(e){}
+  if(saved === 'plan' || saved === 'list') return saved;
+  return placedTables().length ? 'plan' : 'list';
+}
+function setQrView(mode){
+  posState.qrView = mode;
+  try{ localStorage.setItem(QR_VIEW_KEY, mode); }catch(e){}
+  renderQrBoard();
+}
+// A fresh floor plan from the server (the owner may have moved tables). Quietly keeps the last one offline.
+function refreshFloorPlan(force){
+  if(!isOnline() || !cloud.session) return Promise.resolve(false);
+  if(!force && Date.now() - floorPlanAt < FLOOR_REFRESH_MS) return Promise.resolve(false);
+  if(floorPlanRun) return floorPlanRun;
+  floorPlanRun = (async ()=>{
+    try{
+      const r = await cloud.rpc('fo_floor_plan', {}, {timeout: 8000});
+      if(r && Array.isArray(r.tables)){
+        state.tables = r.tables;
+        state.floorShapes = Array.isArray(r.shapes) ? r.shapes : [];
+        floorPlanAt = Date.now();
+        saveSnapshotSoon();
+        if(posState.route === 'qr') renderQrBoard();
+        return true;
+      }
+    }catch(e){ if(!e.offline) console.warn('could not load the floor plan', e.message); }
+    return false;
+  })().finally(()=>{ floorPlanRun = null; });
+  return floorPlanRun;
+}
+function tableOrders(t){ return openQrOrders().filter(o => o.table_id === t.id).sort((a,b)=> new Date(a.created_at)-new Date(b.created_at)); }
+function tableState(orders){
+  if(!orders.length) return 'free';
+  return orders.some(o => !o.paid_at) ? 'wait' : 'serve';
+}
+const TABLE_STATE_WORDS = {wait: 'Waiting for payment', serve: 'Being made', free: 'Free'};
+// [main line, second line] shown on a table: free -> seats; busy -> "Waiting · ₱475.00" + order number(s).
+function tableStatusLines(t, orders){
+  const st = tableState(orders);
+  if(st === 'free') return [t.seats ? `${Number(t.seats)} seat${Number(t.seats)===1?'':'s'}` : 'Free', ''];
+  const total = orders.reduce((s,o)=> s + (Number(o.total)||0), 0);
+  const what = orders.length === 1 ? orders[0].order_number : `${orders.length} orders`;
+  const word = st === 'wait' ? 'Waiting' : (orders.every(o=>o.status==='READY') ? 'Ready' : 'Being made');
+  return [`${word} · ${fmtMoney(total)}`, what];
+}
+function floorBox(tables, shapes){
+  const items = tables.map(t=>({x: Number(t.pos_x)||0, y: Number(t.pos_y)||0, w: Number(t.width)||80, h: Number(t.height)||80}))
+    .concat(shapes.map(f=>({x: Number(f.pos_x)||0, y: Number(f.pos_y)||0, w: Number(f.width)||100, h: Number(f.height)||100})));
+  if(!items.length) return {x: 0, y: 0, w: 1000, h: 1000};
+  const PAD = 30, MIN = 240;
+  let x0 = Math.min(...items.map(i=>i.x)) - PAD, y0 = Math.min(...items.map(i=>i.y)) - PAD;
+  let x1 = Math.max(...items.map(i=>i.x + i.w)) + PAD, y1 = Math.max(...items.map(i=>i.y + i.h)) + PAD;
+  x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(1000, x1); y1 = Math.min(1000, y1);
+  if(x1 - x0 < MIN){ const c = (x0 + x1) / 2; x0 = Math.max(0, c - MIN/2); x1 = Math.min(1000, x0 + MIN); }
+  if(y1 - y0 < MIN){ const c = (y0 + y1) / 2; y0 = Math.max(0, c - MIN/2); y1 = Math.min(1000, y0 + MIN); }
+  return {x: x0, y: y0, w: x1 - x0, h: y1 - y0};
+}
+function boxStyle(box, d, defW, defH){
+  const pct = (v)=> (Math.round(v * 1000) / 1000) + '%';
+  const w = Number(d.width) || defW, h = Number(d.height) || defH;
+  const rot = Math.round(Number(d.rotation) || 0) % 360;
+  return `left:${pct((Number(d.pos_x) - box.x) / box.w * 100)};top:${pct((Number(d.pos_y) - box.y) / box.h * 100)};`
+    + `width:${pct(w / box.w * 100)};height:${pct(h / box.h * 100)};` + (rot ? `transform:rotate(${rot}deg);--unrot:rotate(${-rot}deg);` : '');
+}
+function floorTableHtml(t, box){
+  const orders = tableOrders(t);
+  const st = tableState(orders);
+  const shape = t.shape === 'ROUND' ? 'round' : 'square';
+  const label = t.label || 'Table';
+  const [line1, line2] = tableStatusLines(t, orders);
+  return `<button type="button" class="fp-table ${shape} st-${st}" data-table="${escapeHtml(t.id)}" style="${box ? boxStyle(box, t, 80, 80) : ''}"
+      aria-label="${escapeHtml(label + ': ' + TABLE_STATE_WORDS[st] + (orders.length ? ', ' + line1 + ', ' + line2 : ''))}">
+      <span class="fp-in"><span class="fp-lb">${escapeHtml(label)}</span><small>${escapeHtml(line1)}</small>${line2?`<small class="fp-no">${escapeHtml(line2)}</small>`:''}</span></button>`;
+}
+function floorShapeHtml(f, box){
+  const kind = String(f.kind || 'OTHER').toLowerCase().replace(/[^a-z]/g, '');
+  return `<div class="fp-shape k-${kind}${f.shape==='ROUND'?' round':''}" style="${boxStyle(box, f, 100, 100)}" aria-hidden="true"><span class="fp-in">${escapeHtml(f.label || '')}</span></div>`;
+}
+function floorPlanHtml(){
+  const placed = placedTables();
+  const unplaced = activeTables().filter(t => !isPlaced(t));
+  const shapes = state.floorShapes || [];
+  if(!placed.length && !shapes.length){
+    return `<div class="floor-empty">${icon('map', {size: 36})}<p><b>No floor plan yet.</b> The owner can draw the tables in Back Office → Tables, then they show here coloured by their QR orders.</p>
+      ${unplaced.length?`<div class="fp-unplaced"><span class="fp-unplaced-lbl">Tables</span>${unplaced.map(t=>floorTableHtml(t, null)).join('')}</div>`:''}</div>`;
+  }
+  const box = floorBox(placed, shapes);
+  return `<div class="floor-wrap">
+      <div class="floor-plan" style="--ar:${(box.w / box.h).toFixed(4)};">
+        ${shapes.slice().sort((a,b)=>(Number(a.sort_order)||0)-(Number(b.sort_order)||0)).map(f=>floorShapeHtml(f, box)).join('')}
+        ${placed.map(t=>floorTableHtml(t, box)).join('')}
+      </div>
+      <div class="fp-foot">
+        <div class="fp-legend"><span><i class="lg-wait"></i>Waiting for payment</span><span><i class="lg-serve"></i>Being made</span><span><i class="lg-free"></i>Free</span></div>
+        ${unplaced.length?`<div class="fp-unplaced"><span class="fp-unplaced-lbl">Not placed</span>${unplaced.map(t=>floorTableHtml(t, null)).join('')}</div>`:''}
+      </div>
+    </div>`;
+}
+function openTableOrders(tableId){
+  const t = (state.tables || []).find(x => x.id === tableId);
+  if(!t) return;
+  const orders = tableOrders(t);
+  if(!orders.length){ toast(`${t.label || 'This table'} is free: no open QR orders.`); return; }
+  openModal({title: escapeHtml(t.label || 'Table'), wide: orders.length > 1,
+    body: `<div class="table-orders">${orders.map(qrCard).join('')}</div>`,
+    foot: `<button class="btn btn-outline" data-close>Close</button>`,
+    onMount: (root)=>{
+      root.querySelector('[data-close]').onclick = closeModal;
+      root.querySelectorAll('[data-qr-act]').forEach(b=> b.onclick = ()=>{ closeModal(); qrAction(b.dataset.id, b.dataset.qrAct); });
+    }});
+}
+
 function renderQrBoard(){
   const content = document.getElementById('content');
   if(posState.route!=='qr') return;
   const scrollTop = content.scrollTop;
-  const cols = [
-    {status:'PENDING', title:'New', hint:'Accept or reject'},
-    {status:'PREPARING', title:'Preparing', hint:'Mark ready when done'},
-    {status:'READY', title:'Ready', hint:'Hand over / serve'},
-  ];
-  const doneToday = state.qrOrders.filter(o=>['COMPLETED','REJECTED','CANCELLED'].includes(o.status))
-    .sort((a,b)=> new Date(b.updated_at)-new Date(a.updated_at)).slice(0,20);
+  const view = qrViewMode();
+  const open = openQrOrders();
+  const waiting = open.filter(o=>!o.paid_at).length, making = open.length - waiting;
   document.getElementById('topbar-actions').innerHTML = `
-    <label class="inline-check"><input type="checkbox" id="qr-auto-ticket" ${localStorage.getItem('cccc.qr.autoTicket')==='1'?'checked':''}> Print ticket on accept</label>
-    <button class="btn btn-outline" id="qr-refresh">↻ Refresh</button>
-    <button class="btn btn-outline" id="qr-soldout">🚫 Sold-out items</button>`;
+    <div class="seg" role="group" aria-label="Show as"><button class="seg-btn ${view==='plan'?'active':''}" id="qr-view-plan" aria-pressed="${view==='plan'}">${icon('map', {size: 18})} Floor plan</button><button class="seg-btn ${view==='list'?'active':''}" id="qr-view-list" aria-pressed="${view==='list'}">${icon('grid', {size: 18})} List</button></div>
+    <span class="shift-badge qr-count">${waiting} waiting · ${making} being made</span>`;
+  const tools = `<div class="qr-tools">
+    <label class="inline-check qr-auto"><input type="checkbox" id="qr-auto-ticket" ${localStorage.getItem('cccc.qr.autoTicket')==='1'?'checked':''}> Print ticket on accept</label>
+    <button class="btn btn-outline btn-sm" id="qr-refresh">${icon('refresh', {size: 18})} Refresh</button>
+    <button class="btn btn-outline btn-sm" id="qr-soldout">${icon('x', {size: 18})} Sold-out items</button></div>`;
+  const wireTools = ()=>{
+  document.getElementById('qr-view-plan').onclick = ()=> setQrView('plan');
+  document.getElementById('qr-view-list').onclick = ()=> setQrView('list');
   document.getElementById('qr-auto-ticket').onchange = (e)=>{ try{ localStorage.setItem('cccc.qr.autoTicket', e.target.checked?'1':'0'); }catch(err){} };
-  document.getElementById('qr-refresh').onclick = ()=>{ pollQrOrders(); toast('Checking for new orders…'); };
+  document.getElementById('qr-refresh').onclick = ()=>{ pollQrOrders(); refreshFloorPlan(true); toast('Checking for new orders…'); };
   document.getElementById('qr-soldout').onclick = openSoldOutManager;
+  };
   const offline = !isOnline();
-  content.innerHTML = `
-    ${offline?`<div class="notice warn">Offline: new QR orders can't arrive and statuses can't change until the internet is back.</div>`:''}
-    ${!state.settings.qr_ordering_enabled?`<div class="notice warn">QR ordering is switched OFF in Back Office → Settings → QR Ordering.</div>`:''}
-    <div class="qr-board">
-      ${cols.map(c=>{
-        const list = state.qrOrders.filter(o=>o.status===c.status).sort((a,b)=> new Date(a.created_at)-new Date(b.created_at));
-        return `<div class="qr-col"><div class="qr-col-head"><b>${c.title}</b> <span class="badge badge-gray">${list.length}</span><span class="text-light" style="font-size:11.5px;margin-left:auto;">${c.hint}</span></div>
-          <div class="qr-col-body">${list.length ? list.map(qrCard).join('') : `<div class="qr-empty">Nothing here</div>`}</div></div>`;
-      }).join('')}
-    </div>
-    <div class="section-title">Finished in the last few hours</div>
-    ${doneToday.length?`<div class="table-wrap"><table><thead><tr><th>Order</th><th>Table</th><th>Customer</th><th>Status</th><th>Total</th><th>Updated</th></tr></thead><tbody>
-      ${doneToday.map(o=>`<tr><td><b>${escapeHtml(o.order_number)}</b></td><td>${escapeHtml(o.table_label||'')}</td><td>${escapeHtml(o.customer_nickname||'')}</td>
-        <td>${qrStatusBadge(o)}</td><td>${fmtMoney(o.total)}</td><td>${fmtTime(o.updated_at)}</td></tr>`).join('')}</tbody></table></div>` : emptyBlock('No finished QR orders yet.')}`;
+  const notices = `
+    ${offline?`<div class="notice warn notice-icon">${icon('wifi-off', {size: 18})}<span>Offline: new QR orders can't arrive and statuses can't change until the internet is back.</span></div>`:''}
+    ${!state.settings.qr_ordering_enabled?`<div class="notice warn notice-icon">${icon('info', {size: 18})}<span>QR ordering is switched OFF in Back Office → Settings → QR Ordering.</span></div>`:''}`;
+  if(view === 'plan'){
+    const side = open.slice().sort((a,b)=> (a.status==='PENDING'?0:1)-(b.status==='PENDING'?0:1) || new Date(a.created_at)-new Date(b.created_at));
+    content.className = 'qr-plan-content';
+    content.innerHTML = `${notices}${tools}
+      <div class="qr-plan-layout">
+        <div class="qr-plan-main">${floorPlanHtml()}</div>
+        <div class="qr-side" aria-label="Open QR orders">${side.length ? side.map(qrCard).join('') : `<div class="qr-empty">${icon('qr', {size: 28})}<p>No open QR orders.</p></div>`}</div>
+      </div>`;
+    content.querySelectorAll('[data-table]').forEach(b=> b.onclick = ()=> openTableOrders(b.dataset.table));
+  } else {
+    content.className = '';
+    const cols = [
+      {status:'PENDING', title:'New', hint:'Accept or reject'},
+      {status:'PREPARING', title:'Preparing', hint:'Mark ready when done'},
+      {status:'READY', title:'Ready', hint:'Hand over / serve'},
+    ];
+    const doneToday = state.qrOrders.filter(o=>['COMPLETED','REJECTED','CANCELLED'].includes(o.status))
+      .sort((a,b)=> new Date(b.updated_at)-new Date(a.updated_at)).slice(0,20);
+    content.innerHTML = `${notices}${tools}
+      <div class="qr-board">
+        ${cols.map(c=>{
+          const list = state.qrOrders.filter(o=>o.status===c.status).sort((a,b)=> new Date(a.created_at)-new Date(b.created_at));
+          return `<div class="qr-col"><div class="qr-col-head"><h2>${c.title}</h2> <span class="badge badge-gray">${list.length}</span><span class="qr-col-hint">${c.hint}</span></div>
+            <div class="qr-col-body">${list.length ? list.map(qrCard).join('') : `<div class="qr-empty">Nothing here</div>`}</div></div>`;
+        }).join('')}
+      </div>
+      <div class="section-title">Finished in the last few hours</div>
+      ${doneToday.length?`<div class="table-wrap"><table><thead><tr><th>Order</th><th>Table</th><th>Customer</th><th>Status</th><th>Total</th><th>Updated</th></tr></thead><tbody>
+        ${doneToday.map(o=>`<tr><td><b>${escapeHtml(o.order_number)}</b></td><td>${escapeHtml(o.table_label||'')}</td><td>${escapeHtml(o.customer_nickname||'')}</td>
+          <td>${qrStatusBadge(o)}</td><td>${fmtMoney(o.total)}</td><td>${fmtTime(o.updated_at)}</td></tr>`).join('')}</tbody></table></div>` : emptyBlock('No finished QR orders yet.')}`;
+  }
+  wireTools();
   content.scrollTop = scrollTop;
   content.querySelectorAll('[data-qr-act]').forEach(b=> b.onclick = ()=> qrAction(b.dataset.id, b.dataset.qrAct));
   updateQrBadge();
+  refreshFloorPlan(false);
 }
 function qrStatusBadge(o){
   const map = {PENDING:'badge-yellow', PREPARING:'badge-gray', READY:'badge-green', COMPLETED:'badge-green', REJECTED:'badge-red', CANCELLED:'badge-red'};
-  return `<span class="badge ${map[o.status]||'badge-gray'}">${o.status.charAt(0)+o.status.slice(1).toLowerCase()}</span>`;
+  return `<span class="badge ${map[o.status]||'badge-gray'}">${escapeHtml(o.status.charAt(0)+o.status.slice(1).toLowerCase())}</span>`;
 }
 function qrCard(o){
   const paid = !!o.paid_at;
   const offline = !isOnline();
   const dis = offline ? 'disabled' : '';
+  const id = escapeHtml(o.id);
   const btns = [];
   if(o.status==='PENDING'){
-    btns.push(`<button class="btn btn-sm btn-primary" data-qr-act="ACCEPT" data-id="${o.id}" ${dis}>Accept</button>`);
-    if(!paid) btns.push(`<button class="btn btn-sm btn-amber" data-qr-act="PAY" data-id="${o.id}">Take payment</button>`);
-    btns.push(`<button class="btn btn-sm btn-danger" data-qr-act="REJECT" data-id="${o.id}" ${dis}>Reject</button>`);
+    btns.push(`<button class="btn btn-sm btn-primary" data-qr-act="ACCEPT" data-id="${id}" ${dis}>Accept</button>`);
+    if(!paid) btns.push(`<button class="btn btn-sm btn-amber" data-qr-act="PAY" data-id="${id}">Take payment</button>`);
+    btns.push(`<button class="btn btn-sm btn-danger" data-qr-act="REJECT" data-id="${id}" ${dis}>Reject</button>`);
   } else if(o.status==='PREPARING'){
-    btns.push(`<button class="btn btn-sm btn-primary" data-qr-act="READY" data-id="${o.id}" ${dis}>Ready</button>`);
-    if(!paid) btns.push(`<button class="btn btn-sm btn-amber" data-qr-act="PAY" data-id="${o.id}">Take payment</button>`);
+    btns.push(`<button class="btn btn-sm btn-primary" data-qr-act="READY" data-id="${id}" ${dis}>Ready</button>`);
+    if(!paid) btns.push(`<button class="btn btn-sm btn-amber" data-qr-act="PAY" data-id="${id}">Take payment</button>`);
   } else if(o.status==='READY'){
-    if(!paid) btns.push(`<button class="btn btn-sm btn-amber" data-qr-act="PAY" data-id="${o.id}">Take payment</button>`);
-    btns.push(`<button class="btn btn-sm btn-primary" data-qr-act="COMPLETE" data-id="${o.id}" ${dis||(!paid?'disabled':'')}>Served / picked up</button>`);
+    if(!paid) btns.push(`<button class="btn btn-sm btn-amber" data-qr-act="PAY" data-id="${id}">Take payment</button>`);
+    btns.push(`<button class="btn btn-sm btn-primary" data-qr-act="COMPLETE" data-id="${id}" ${dis||(!paid?'disabled':'')}>Served / picked up</button>`);
   }
-  btns.push(`<button class="btn btn-sm btn-ghost" data-qr-act="TICKET" data-id="${o.id}">🖨 Ticket</button>`);
-  return `<div class="qr-card ${o.status==='PENDING'?'is-new':''}">
-    <div class="qr-card-top"><span class="qr-no">${escapeHtml(o.order_number)}</span>
-      <span class="qr-table">${escapeHtml(o.table_label||'')}${o.order_type==='TAKEAWAY'?' · Takeaway':''}</span>
-      ${paid?'<span class="badge badge-green">PAID</span>':'<span class="badge badge-yellow">Unpaid</span>'}</div>
-    <div class="qr-cust">👤 ${escapeHtml(o.customer_nickname||'Guest')} · <span class="text-light">${timeAgo(o.created_at)}</span></div>
-    <ul class="qr-items">${(o.items||[]).map(it=>`<li><b>${Number(it.quantity)}×</b> ${escapeHtml(it.name)}
-      ${(it.modifiers||[]).length?`<div class="text-light">${it.modifiers.map(m=>escapeHtml(m.label)).join(', ')}</div>`:''}
+  btns.push(`<button class="btn btn-sm btn-ghost" data-qr-act="TICKET" data-id="${id}">${icon('printer', {size: 18})} Ticket</button>`);
+  const stateTag = o.status==='PENDING' ? '<span class="tag">New</span>' : (o.status==='READY' ? '<span class="tag ok">Ready</span>' : '<span class="tag soft">Being made</span>');
+  return `<div class="qr-card ${o.status==='PENDING'?'is-new':''} ${paid?'':'unpaid'}">
+    <div class="qr-card-top"><span class="qr-no">${escapeHtml(o.order_number)}</span>${stateTag}
+      ${paid?'<span class="badge badge-green">PAID</span>':'<span class="badge badge-yellow">Unpaid</span>'}
+      <span class="qr-total">${fmtMoney(o.total)}</span></div>
+    <div class="qr-meta">${escapeHtml(o.table_label||'')}${o.order_type==='TAKEAWAY'?' · Takeaway':' · Dine in'} · ${icon('user', {size: 14})} ${escapeHtml(o.customer_nickname||'Guest')} · ${escapeHtml(timeAgo(o.created_at))}</div>
+    <ul class="qr-items">${(o.items||[]).map(it=>`<li><b>${Number(it.quantity)} ×</b> ${escapeHtml(it.name)}
+      ${(it.modifiers||[]).length?`<span class="text-light">(${it.modifiers.map(m=>escapeHtml(m.label)).join(', ')})</span>`:''}
       ${it.notes?`<div class="qr-note">“${escapeHtml(it.notes)}”</div>`:''}</li>`).join('')}</ul>
     ${o.customer_note?`<div class="qr-note">Note: “${escapeHtml(o.customer_note)}”</div>`:''}
-    <div class="qr-total">${fmtMoney(o.total)}</div>
     <div class="qr-actions">${btns.join('')}</div>
   </div>`;
 }
@@ -1939,7 +2478,7 @@ async function qrAction(orderId, action){
   if(!o) return;
   if(action==='TICKET'){ printKitchenTicket(o); return; }
   if(action==='PAY'){
-    if(!activeShift()){ toast('Start a shift first (Sell screen).', 'error'); navigatePOS('pos'); return; }
+    if(!activeShift()){ toast('Start a shift first (Orders screen).', 'error'); navigatePOS('pos'); return; }
     // Online: make sure another counter hasn't taken payment for this order already.
     if(await qrOrderPaidOnServer(o)){ renderQrBoard(); await showQrAlreadyPaid(o); return; }
     if(posState.cart.length && !posState.qrOrder){
@@ -1950,8 +2489,8 @@ async function qrAction(orderId, action){
     posState.cart = (o.items||[]).map(it=>({lineId: uid(), recipe_id: it.recipe_id, name: it.name, unit_price: Number(it.unit_price),
       quantity: Number(it.quantity), modifiers: it.modifiers||[], notes: it.notes||''}));
     posState.qrOrder = o;
-    posState.customer = o.customer_id ? {id: o.customer_id, nickname: o.customer_nickname} : null;
     navigatePOS('pos');
+    if(o.customer_id) attachCustomer({id: o.customer_id, nickname: o.customer_nickname});
     return;
   }
   let reason = null;
@@ -2011,21 +2550,227 @@ function openSoldOutManager(){
 }
 
 /* =====================================================================
+   CUSTOMERS (release 1.2) — needs internet
+   fo_customer_list / fo_customer_detail (paired counters only, rate-limited by the server).
+   Phones always come masked. Money (total spent, order totals) is sent by the server ONLY
+   with the sign-in (LOGIN) token of the manager / admin who is signed in on this counter;
+   everyone else sees "Managers only" (never zeros). The token is never an approval: viewing
+   doesn't use anything up.
+   ===================================================================== */
+const custView = {q: '', selected: null, listSeq: 0, detailSeq: 0, list: null, detail: null};
+// The signed-in manager's own sign-in token, for showing money. Cashiers (and managers whose
+// PIN is too short) send none.
+function customerMoneyToken(){
+  const me = posState.currentUser;
+  if(!me || !hasRole('MANAGER') || shortPinUser() || me.offline) return null;
+  return ownLoginToken();
+}
+function manilaDay(d){ try{ return new Date(d).toLocaleDateString('en-CA', {timeZone: 'Asia/Manila'}); }catch(e){ return todayISO(new Date(d)); } }
+function daysAgo(d){
+  if(!d) return null;
+  const a = new Date(manilaDay(d) + 'T00:00:00Z'), b = new Date(manilaDay(new Date()) + 'T00:00:00Z');
+  return Math.round((b - a) / 86400000);
+}
+function lastVisitText(d){
+  const n = daysAgo(d);
+  if(n === null || isNaN(n)) return 'no visits yet';
+  if(n <= 0) return 'last visit today';
+  if(n === 1) return 'last visit yesterday';
+  if(n < 14) return `last visit ${n} days ago`;
+  return 'last visit ' + fmtDate(d);
+}
+function orderWhenText(d){
+  const n = daysAgo(d);
+  if(n === null || isNaN(n)) return '—';
+  if(n <= 0) return 'Today ' + fmtTime(d);
+  if(n === 1) return 'Yesterday ' + fmtTime(d);
+  if(n < 7){ let wd = ''; try{ wd = new Date(d).toLocaleDateString('en-PH', {weekday: 'short', timeZone: 'Asia/Manila'}); }catch(e){} return wd + ' ' + fmtTime(d); }
+  return fmtDate(d);
+}
+function ordinal(n){ const s = ['th','st','nd','rd'], v = n % 100; return n + (s[(v-20)%10] || s[v] || s[0]); }
+function managersOnlyHtml(reason){
+  return `<span class="lock-note">${icon('lock', {size: 14})} Managers only</span>${reason ? `<span class="lock-why">${escapeHtml(reason)}</span>` : ''}`;
+}
+function moneyRefusedText(r){
+  if(!r || !r.money_refused || !hasRole('MANAGER')) return '';
+  if(r.money_refused === 'PIN_UPDATE_NEEDED') return friendlyError('PIN_UPDATE_NEEDED');
+  return 'Lock and sign in again (online) to see amounts.';
+}
+
+function renderCustomersScreen(){
+  const content = document.getElementById('content');
+  document.getElementById('topbar-actions').innerHTML = `<button class="btn btn-primary" id="cust-new-btn">${icon('plus')} Add customer</button>`;
+  document.getElementById('cust-new-btn').onclick = ()=> openCustomerPicker({newOnly: true, onPick: (c)=>{
+    toast(`${c.nickname} saved`);
+    custView.selected = c.id; custView.q = ''; renderCustomersScreen();
+  }});
+  if(!isOnline()){
+    content.className = '';
+    content.innerHTML = `<div class="offline-panel">${icon('wifi-off', {size: 40})}
+      <h2>Customers needs the internet</h2>
+      <p>The customer list and stamp cards come from the server, so this screen works only online. You can keep selling: sales without a customer upload as usual.</p></div>`;
+    return;
+  }
+  content.className = 'cust-content';
+  content.innerHTML = `
+    <div class="cust-layout">
+      <div class="cust-list-col">
+        <label class="cust-search">${icon('search')}<input type="search" id="cust-search" placeholder="Search by nickname" aria-label="Search customers by nickname" autocomplete="off" maxlength="30" value="${escapeHtml(custView.q)}"></label>
+        <div id="cust-list" class="cust-list" aria-live="polite"><p class="hint cust-pad">Loading customers…</p></div>
+      </div>
+      <div id="cust-detail" class="cust-detail">${custView.selected ? '<div class="card"><p class="hint">Loading…</p></div>' : customerPickHint()}</div>
+    </div>`;
+  const search = debounce(()=> loadCustomerList(), 300);
+  document.getElementById('cust-search').oninput = (e)=>{ custView.q = e.target.value.trim(); search(); };
+  loadCustomerList();
+  if(custView.selected) loadCustomerDetail(custView.selected);
+}
+function customerPickHint(){
+  return `<div class="card cust-hint">${icon('users', {size: 32})}<p>Choose a customer to see their visits, stamp card and favourites.</p></div>`;
+}
+async function loadCustomerList(){
+  const box = document.getElementById('cust-list');
+  if(!box) return;
+  const seq = ++custView.listSeq;
+  try{
+    const r = await cloud.rpc('fo_customer_list', {p_search: custView.q || '', p_limit: 30, p_staff_token: customerMoneyToken()}, {timeout: 10000});
+    if(seq !== custView.listSeq || posState.route !== 'customers') return;
+    if(r && r.error){ box.innerHTML = `<p class="hint cust-pad">${escapeHtml(friendlyError(r))}</p>`; return; }
+    const list = (r && r.customers) || [];
+    custView.list = r;
+    if(!list.length){
+      box.innerHTML = `<p class="hint cust-pad">${custView.q ? `No customer called “${escapeHtml(custView.q)}”. Search uses nicknames only.` : 'No customers yet. Tap “Add customer” to save one (with their permission).'}</p>`;
+      return;
+    }
+    box.innerHTML = list.map(c=>`<button class="cust-row ${c.id===custView.selected?'on':''}" data-cust="${escapeHtml(c.id)}" aria-pressed="${c.id===custView.selected}">
+        <span class="cust-av" aria-hidden="true">${escapeHtml(initialOf(c.nickname))}</span>
+        <span class="cust-row-main"><b>${escapeHtml(c.nickname)}</b><small>${c.phone ? escapeHtml(c.phone) : 'No phone'} · ${escapeHtml(lastVisitText(c.last_visit_at))}</small></span>
+        ${r.loyalty_enabled && c.ready_rewards && c.ready_rewards.length ? `<span class="reward-dot" title="Reward ready">${icon('gift', {size: 16, label: 'Reward ready'})}</span>` : ''}
+      </button>`).join('');
+    box.querySelectorAll('[data-cust]').forEach(b=> b.onclick = ()=>{
+      custView.selected = b.dataset.cust;
+      box.querySelectorAll('[data-cust]').forEach(x=>{ const on = x.dataset.cust === custView.selected; x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on)); });
+      loadCustomerDetail(custView.selected, true);
+    });
+  }catch(e){
+    if(seq !== custView.listSeq) return;
+    box.innerHTML = `<p class="hint cust-pad">${escapeHtml(e.offline ? 'No internet. The customer list needs the internet.' : friendlyError(e))}</p>`;
+  }
+}
+async function loadCustomerDetail(id, scroll){
+  const box = document.getElementById('cust-detail');
+  if(!box) return;
+  const seq = ++custView.detailSeq;
+  box.innerHTML = '<div class="card"><p class="hint">Loading…</p></div>';
+  try{
+    const r = await cloud.rpc('fo_customer_detail', {p_customer_id: id, p_staff_token: customerMoneyToken()}, {timeout: 10000});
+    if(seq !== custView.detailSeq || posState.route !== 'customers') return;
+    if(r && r.error){
+      if(r.error === 'NOT_FOUND') forgetCustomerCard(id);
+      box.innerHTML = `<div class="card"><p>${escapeHtml(r.error === 'NOT_FOUND' ? 'This customer is no longer on the list (they may have been merged or removed).' : friendlyError(r))}</p></div>`;
+      return;
+    }
+    custView.detail = r;
+    if(r.customer) saveCustomerCard(r.customer);
+    box.innerHTML = customerDetailHtml(r);
+    const use = document.getElementById('cust-use');
+    if(use) use.onclick = ()=> useCustomerForOrder(r.customer);
+    if(scroll && window.matchMedia('(max-width: 820px)').matches) box.scrollIntoView({behavior: 'smooth', block: 'start'});
+  }catch(e){
+    if(seq !== custView.detailSeq) return;
+    box.innerHTML = `<div class="card"><p>${escapeHtml(e.offline ? 'No internet. Customer details need the internet.' : friendlyError(e))}</p></div>`;
+  }
+}
+function stampCardHtml(view){
+  const ms = new Map(view.milestones.map(m => [m.stamp, m]));
+  const cells = [];
+  for(let i = 1; i <= view.card_size; i++){
+    const m = ms.get(i);
+    const filled = i <= view.stamps_on_card;
+    if(m){
+      const short = m.type === 'FREE_ITEM' ? 'FREE' : (m.amount != null ? '₱' + (Number(m.amount) % 1 ? Number(m.amount).toFixed(2) : Number(m.amount)) : '');
+      cells.push(`<span class="s15 m st-${m.status} ${filled?'d':''}" title="${escapeHtml(ordinal(i) + ' stamp: ' + m.label)}">${m.status==='redeemed' ? icon('check', {size: 16}) : escapeHtml(short)}</span>`);
+    } else cells.push(`<span class="s15 ${filled?'d':''}" aria-hidden="true"></span>`);
+  }
+  return `<div class="card15" role="img" aria-label="${escapeHtml(view.stamps_on_card + ' of ' + view.card_size + ' stamps')}">${cells.join('')}</div>`;
+}
+function customerDetailHtml(r){
+  const c = r.customer || {};
+  const money = !!r.show_money;
+  const why = moneyRefusedText(r);
+  const view = loyaltyCardView(c, r.loyalty_rewards);
+  const ready = view.ready;
+  const loyalty = !!r.loyalty_enabled;
+  const favs = r.favourites || [];
+  const maxFav = Math.max(1, ...favs.map(f => Number(f.count) || 0));
+  const orders = r.recent_orders || [];
+  const statusWords = {COMPLETED: '', VOIDED: 'Voided', REFUNDED: 'Refunded', PARTIALLY_REFUNDED: 'Part refunded'};
+  return `
+    <div class="cust-head card">
+      <span class="cust-av big" aria-hidden="true">${escapeHtml(initialOf(c.nickname))}</span>
+      <div class="cust-head-main"><h2>${escapeHtml(c.nickname)}</h2>
+        <div class="text-light">${c.phone ? escapeHtml(c.phone) : 'No phone'} · ${escapeHtml(lastVisitText(c.last_visit_at))}${c.first_seen_at ? ' · customer since ' + escapeHtml(fmtDate(c.first_seen_at)) : ''}</div></div>
+      <button class="btn btn-primary" id="cust-use">${icon('orders')} Use for this order</button>
+    </div>
+    <div class="cust-kpis">
+      <div class="card kpi"><small>Visits</small><b>${Number(c.visits) || 0}</b><span class="kpi-sub">Days with a paid order</span></div>
+      <div class="card kpi"><small>Stamps</small><b>${loyalty ? `${view.stamps_on_card} / ${view.card_size}` : '—'}</b><span class="kpi-sub">${loyalty ? `Card ${view.card_no}` : 'Stamp card off'}</span></div>
+      <div class="card kpi"><small>Reward ready</small><b class="${ready.length && loyalty ? 'ok' : ''}">${loyalty && ready.length ? escapeHtml(ready[0].label) : 'None yet'}</b><span class="kpi-sub">${loyalty && ready.length > 1 ? `+${ready.length - 1} more` : ''}</span></div>
+      <div class="card kpi" id="cust-spent"><small>Total spent</small>${money ? `<b>${fmtMoney(c.total_spent)}</b><span class="kpi-sub">After refunds</span>` : `<b class="locked">${icon('lock', {label: 'Hidden'})}</b><span class="lock-note">Managers only</span>${why ? `<span class="lock-why">${escapeHtml(why)}</span>` : ''}`}</div>
+    </div>
+    <div class="cust-cards">
+      <div class="card">
+        <h3 class="card-title">Stamp card</h3>
+        ${loyalty ? `
+          <p class="hint">Card ${view.card_no} · ${view.stamps_on_card} of ${view.card_size}. One stamp for a drink and one for food, each day.</p>
+          ${stampCardHtml(view)}
+          <div class="rw">${view.milestones.map(m=>`<div><span class="rtag ${m.status==='ready'?'ready':m.status==='redeemed'?'used':'lock'}">${m.status==='ready'?'Ready':m.status==='redeemed'?'Used':`${m.to_go} to go`}</span><span>${escapeHtml(ordinal(m.stamp))} stamp: ${escapeHtml(m.label)}</span></div>`).join('')}</div>
+          ${ready.some(x => x.card_no < view.card_no) ? `<p class="hint">Also ready from earlier cards: ${ready.filter(x => x.card_no < view.card_no).map(x => escapeHtml(x.label)).join(', ')}.</p>` : ''}`
+        : `<p class="hint">The stamp card is switched off. The owner can switch it on in Back Office → Settings.</p>`}
+      </div>
+      <div class="card">
+        <h3 class="card-title">Favourites</h3>
+        ${favs.length ? `<div class="fav">${favs.map(f=>`<div class="fav-row"><b>${escapeHtml(f.name)}</b><span class="bar-track"><span class="bar" style="width:${Math.max(6, Math.round((Number(f.count)||0) / maxFav * 100))}%"></span></span><span class="fav-n">${Number(f.count) || 0}×</span></div>`).join('')}</div>`
+          : '<p class="hint">No orders yet.</p>'}
+      </div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Recent orders</h3>
+      ${orders.length ? `<div class="table-scroll"><table class="cust-orders"><thead><tr><th>When</th><th>Order</th><th>Items</th><th class="num">Total</th></tr></thead><tbody>
+        ${orders.map(o=>`<tr>
+          <td>${escapeHtml(orderWhenText(o.transaction_date))}</td>
+          <td><b>${escapeHtml(o.qr_order_number ? 'QR ' + o.qr_order_number : (o.order_number || ''))}</b>${statusWords[o.status] ? ` <span class="badge badge-red">${statusWords[o.status]}</span>` : ''}${o.reward && !o.reward.released ? ` <span class="badge badge-green">Reward used</span>` : ''}</td>
+          <td>${(o.items || []).map(it=>`${Number(it.quantity)} × ${escapeHtml(it.name)}${Number(it.refunded_quantity) > 0 ? ` <span class="text-light">(${Number(it.refunded_quantity)} given back)</span>` : ''}`).join(', ')}</td>
+          <td class="num">${money ? fmtMoney(o.grand_total) : `<span class="lock-cell" title="Managers only">${icon('lock', {size: 16, label: 'Managers only'})}</span>`}</td></tr>`).join('')}
+      </tbody></table></div>` : '<p class="hint">No orders yet.</p>'}
+    </div>`;
+}
+function useCustomerForOrder(c){
+  if(!c) return;
+  if(posState.qrOrder && posState.qrOrder.customer_id && posState.qrOrder.customer_id !== c.id){
+    toast('This QR order already belongs to another customer. Finish or close it first.', 'warn'); return;
+  }
+  attachCustomer(c);
+  toast(`${c.nickname} is on this order`);
+  navigatePOS('pos');
+}
+
+/* =====================================================================
    SHIFT & CASH
    ===================================================================== */
 function renderStartShiftGate(){
   const content = document.getElementById('content');
   content.className = '';
   content.innerHTML = `
-    <div style="max-width:420px;margin:50px auto;text-align:center;">
-      <div style="font-size:44px;margin-bottom:6px;">🕐</div>
-      <h2 style="font-family:var(--font-display);font-size:22px;margin-bottom:6px;">No Active Shift</h2>
+    <div class="start-shift">
+      <div class="start-shift-ic">${icon('clock', {size: 44})}</div>
+      <h2>Start a shift</h2>
       <p class="text-light" style="margin-bottom:20px;">Every sale belongs to a shift so the cash drawer can be balanced at the end. Count the drawer and start one.</p>
       <div class="card" style="text-align:left;">
         <div class="form-row"><label>Cashier</label><input value="${escapeHtml(posState.currentUser.name)}" disabled></div>
-        <div class="form-row"><label>Opening Cash (in the drawer now)</label><input type="number" step="any" inputmode="decimal" id="ss-opening-cash" placeholder="e.g. 2000"></div>
+        <div class="form-row"><label>Opening cash (in the drawer now)</label><input type="number" step="any" inputmode="decimal" id="ss-opening-cash" placeholder="e.g. 2000"></div>
         <div class="form-row"><label>Notes (optional)</label><input id="ss-notes" placeholder="e.g. Morning shift"></div>
-        <button class="btn btn-primary" id="ss-start-btn" style="width:100%;margin-top:6px;justify-content:center;">Start Shift</button>
+        <button class="btn btn-primary btn-big" id="ss-start-btn" style="margin-top:6px;">Start shift</button>
       </div>
     </div>`;
   document.getElementById('ss-start-btn').onclick = async ()=>{
@@ -2063,9 +2808,9 @@ async function renderShiftScreen(opts){
   const m = shiftMetrics(shift);
   const note = shiftFreshNote(posState.shiftCheckOk);
   document.getElementById('topbar-actions').innerHTML = `
-    <button class="btn btn-outline" id="cash-mgmt-btn">💵 Pay In / Pay Out</button>
-    <button class="btn btn-outline" id="xreport-btn">🖨 Print X-Report</button>
-    <button class="btn btn-danger" id="close-shift-btn">Close Shift</button>`;
+    <button class="btn btn-outline" id="cash-mgmt-btn">${icon('cash')} Pay in / pay out</button>
+    <button class="btn btn-outline" id="xreport-btn">${icon('printer')} Print X-report</button>
+    <button class="btn btn-danger" id="close-shift-btn">Close shift</button>`;
   document.getElementById('cash-mgmt-btn').onclick = openCashManagementModal;
   document.getElementById('xreport-btn').onclick = printXReport;
   document.getElementById('close-shift-btn').onclick = openCloseShiftFlow;
@@ -2094,10 +2839,10 @@ function openCashManagementModal(){
   const shift = activeShift();
   if(!shift) return;
   let mode = 'PAY_IN';
-  openModal({title:'Cash Management', body:`
+  openModal({title:'Pay in / pay out', body:`
     <div class="pay-methods" style="grid-template-columns:1fr 1fr;">
-      <button class="pay-method-btn selected" data-mode="PAY_IN">💰<br>Pay In</button>
-      <button class="pay-method-btn" data-mode="PAY_OUT">📤<br>Pay Out</button>
+      <button class="pay-method-btn selected" data-mode="PAY_IN">${icon('plus', {size: 26})}<span>Pay in</span></button>
+      <button class="pay-method-btn" data-mode="PAY_OUT">${icon('minus', {size: 26})}<span>Pay out</span></button>
     </div>
     <div class="form-row" style="margin-top:14px;"><label>Amount</label><input type="number" step="any" inputmode="decimal" id="cm-amount" placeholder="0.00"></div>
     <div class="form-row"><label>Reason</label><input id="cm-reason" placeholder="e.g. Change fund top-up / Bought ice"></div>`,
@@ -2140,7 +2885,7 @@ async function openCloseShiftFlow(){
   const btn = document.getElementById('close-shift-btn');
   if(btn){ btn.disabled = true; btn.textContent = 'Checking…'; }
   const checked = await refreshOpenShift({timeout: SHIFT_CHECK_MS});
-  if(btn){ btn.disabled = false; btn.textContent = 'Close Shift'; }
+  if(btn){ btn.disabled = false; btn.textContent = 'Close shift'; }
   const shift = activeShift();
   if(!shift) return;
   showCloseShiftDialog(shift, closer, closeApprovalToken, checked, {});
@@ -2253,7 +2998,7 @@ function showShiftReport(shiftId){
       <div class="drow total"><span><b>Variance</b></span><b style="color:${Math.abs(shift.cash_variance)<0.005?'var(--green)':'var(--red)'}">${shift.cash_variance>=0?'+':''}${fmtMoney(shift.cash_variance)}</b></div>
     </div>
     ${shift.notes?`<p class="hint" style="margin-top:10px;">${escapeHtml(shift.notes)}</p>`:''}`,
-  foot:`<button class="btn btn-outline" id="sr-print">🖨 Print</button><button class="btn btn-primary" data-done>Done</button>`,
+  foot:`<button class="btn btn-outline" id="sr-print">${icon('printer')} Print</button><button class="btn btn-primary" data-done>Done</button>`,
   onMount:(root)=>{
     root.querySelector('[data-done]').onclick = ()=>{ closeModal(); navigatePOS('pos'); };
     root.querySelector('#sr-print').onclick = ()=> printShiftReport(shift, m, false);
@@ -2344,7 +3089,7 @@ async function renderSalesScreen(){
       <tbody>${list.map(s=>{
         const pay = ds.payments.find(p=>p.sale_id===s.id);
         return `<tr class="clickable" data-id="${s.id}"><td><b>${escapeHtml(s.transaction_number)}</b>${s.source==='QR'?' <span class="badge badge-gray">QR</span>':''}</td>
-          <td>${fmtTime(s.transaction_date)}</td><td>${escapeHtml(s.cashier_name||'')}</td><td>${pay?escapeHtml(pay.method):'—'}</td>
+          <td>${fmtTime(s.transaction_date)}</td><td>${escapeHtml(s.cashier_name||'')}</td><td>${paymentWords(s, pay)}</td>
           <td>${saleStatusBadge(s.status)}</td><td>${fmtMoney(s.grand_total)}</td>
           <td><button class="btn btn-sm btn-ghost" data-reprint="${s.id}">Reprint</button></td></tr>`;
       }).join('')}</tbody></table></div>` : emptyBlock(salesView==='shift' ? 'No sales in this shift yet.' : 'No sales today yet.')}`;
@@ -2352,6 +3097,13 @@ async function renderSalesScreen(){
   content.querySelectorAll('[data-reprint]').forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); showReceipt(b.dataset.reprint, {autoPrint:true}, salesDataset()); });
 }
 
+// "Cash", "GCash"… ; a sale the stamp reward paid in full says so.
+function paymentWords(sale, pay){
+  if(!pay) return '—';
+  if(Number(sale.grand_total) === 0 && Number(sale.loyalty_discount) > 0) return 'Stamp reward';
+  const m = PAYMENT_METHODS.find(x => x.id === pay.method);
+  return escapeHtml(m ? m.label : pay.method);
+}
 function renderSaleDetail(saleId){
   const content = document.getElementById('content');
   const ds = (salesView==='today' && posState.todaySales && posState.todaySales.sales.some(s=>s.id===saleId)) ? posState.todaySales : state;
@@ -2361,20 +3113,20 @@ function renderSaleDetail(saleId){
   const pay = ds.payments.find(p=>p.sale_id===saleId) || {};
   const refunds = ds.refunds.filter(r=>r.sale_id===saleId);
   content.innerHTML = `
-    <a class="linklike" id="back-sh" style="font-size:13px;">← Back to Sales</a>
+    <button class="btn btn-ghost btn-sm" id="back-sh">${icon('chevron-left', {size: 18})} Back to sales</button>
     <div class="ingredient-detail-header" style="margin-top:10px;">
-      <div><h2 style="font-family:var(--font-display);font-size:24px;">${escapeHtml(sale.transaction_number)}</h2>
+      <div><h2 class="detail-title">${escapeHtml(sale.transaction_number)}</h2>
         <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">${saleStatusBadge(sale.status)}<span class="tag-pill">${fmtDateTime(sale.transaction_date)}</span><span class="tag-pill">Cashier: ${escapeHtml(sale.cashier_name||'')}</span>${sale.source==='QR'?'<span class="tag-pill">QR order</span>':''}</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-outline" id="reprint-btn">🖨 Reprint</button>
+        <button class="btn btn-outline" id="reprint-btn">${icon('printer')} Reprint</button>
         ${sale.status==='COMPLETED'?`<button class="btn btn-danger" id="void-btn">Void</button>`:''}
         ${sale.status==='COMPLETED' || sale.status==='PARTIALLY_REFUNDED'?`<button class="btn btn-amber" id="refund-btn">Refund</button>`:''}
       </div>
     </div>
     <div class="grid grid-4" style="margin-top:20px;">
       ${statCard('Total', fmtMoney(sale.grand_total),'')}${statCard('Payment', escapeHtml(pay.method||'—'), pay.reference?('Ref '+escapeHtml(pay.reference)):'')}
-      ${statCard('Discount', Number(sale.discount_amount)>0?fmtMoney(sale.discount_amount):'—', sale.discount_approved_by_name?('by '+escapeHtml(sale.discount_approved_by_name)):'')}
+      ${statCard('Discount', Number(sale.discount_amount)>0?fmtMoney(sale.discount_amount):'—', [sale.discount_approved_by_name?('by '+escapeHtml(sale.discount_approved_by_name)):'', Number(sale.loyalty_discount)>0?('Stamp reward -'+fmtMoney(sale.loyalty_discount)):''].filter(Boolean).join(' · '))}
       ${statCard('Tax + Service', fmtMoney((Number(sale.tax_amount)||0)+(Number(sale.service_charge_amount)||0)),'')}
     </div>
     <div class="section-title">Items</div>

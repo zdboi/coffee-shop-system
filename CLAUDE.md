@@ -27,8 +27,8 @@ plain-language, step-by-step instructions.
 - **The owner ran `cccc/supabase/004_cccc_online_qr.sql` on the live project on 2026-10-20** ("Success").
   It is now **frozen**: every database change goes in a new numbered script, per golden rule 6.
 - The owner also ran **`005_live_fixes.sql`** and **`006_live_fix_sync_operations.sql`** on live (2026-10-20); both
-  are frozen too. **`007_batch1.sql`** (batch 1, release 1.1) is written and security-reviewed but NOT yet run
-  on live — it may still be edited until the owner runs it; then it freezes and the next script is `008_…sql`. The live database has older CHECK rules than our reconstruction:
+  are frozen too. **`007_batch1.sql`** (release 1.1) was run on live on 2026-10-29 and is frozen. The next
+  script is **`008_release_1_2.sql`** (release 1.2); it may be edited until the owner runs it. The live database has older CHECK rules than our reconstruction:
   any new value written to a live column must be checked against the live rule list first.
 
 ## Golden rules (everyone)
@@ -147,7 +147,7 @@ The server answers per op: `ok | duplicate | skipped | error` (+ `message`).
 | `customer-qr-dev` | `cccc/order/**` |
 | `qa-test-engineer` | `tests/**` |
 | `security-reviewer` | nothing (read-only) |
-| lead (C) | `CLAUDE.md`, `.claude/**`, `README.md`, `index.html`, `_config.yml`, `docs/**`, `.gitignore`, `cccc/shared/vendor/**`, `_archive/**` (moves only) |
+| lead (C) | `CLAUDE.md`, `.claude/**`, `README.md`, `index.html`, `_config.yml`, `docs/**`, `.gitignore`, `cccc/shared/vendor/**`, `cccc/shared/brand/**` (logo images, Brunson webfont, `tokens.css`), `_archive/**` (moves only) |
 
 ## How work flows
 1. Lead writes a brief: goal, acceptance checks, files in scope.

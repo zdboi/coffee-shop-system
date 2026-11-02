@@ -16,8 +16,10 @@ const recPicked = new Set();          // recipes ticked on the list (for "Remove
 function renderRecipes(){
   const bar = setTopbarActions(`<button class="btn btn-outline" id="btn-excel-import" type="button">Import from Excel</button>
     <button class="btn btn-outline" id="btn-excel-export" type="button">Export to Excel</button>
+    <button class="btn btn-outline" id="btn-subcat-colors" type="button">Sub-category colours</button>
     <button class="btn btn-primary" id="btn-new-recipe">+ New recipe</button>`);
   bar.querySelector('#btn-new-recipe').onclick = () => openRecipeForm();
+  bar.querySelector('#btn-subcat-colors').onclick = () => openSubcategoryColors();
   const imp = bar.querySelector('#btn-excel-import'), exp = bar.querySelector('#btn-excel-export');
   imp.onclick = () => busy(imp, () => startExcelImport(), 'Opening…');
   exp.onclick = () => busy(exp, () => exportRecipesToExcel(), 'Preparing…');
@@ -79,7 +81,7 @@ function renderRecipesGrid(){
   const list = recShownList();
   refreshPickBar();
   if(!list.length){
-    wrap.innerHTML = `<div class="empty-state"><div class="big">📖</div>No recipes found.<br><br><button class="btn btn-primary" id="empty-add-rec">+ New recipe</button></div>`;
+    wrap.innerHTML = `<div class="empty-state"><div class="big">${icon('cup', {size: 40})}</div>No recipes found.<br><br><button class="btn btn-primary" id="empty-add-rec">+ New recipe</button></div>`;
     wrap.querySelector('#empty-add-rec').onclick = () => openRecipeForm();
     return;
   }
@@ -105,7 +107,7 @@ function renderRecipesGrid(){
         <div style="display:flex;gap:10px;align-items:center;min-width:0;">
           <label class="rec-tick" title="Select for removing"><input type="checkbox" data-pick="${esc(r.id)}" ${recPicked.has(r.id) ? 'checked' : ''} aria-label="Select ${esc(r.name)}"></label>
           ${r.image_url ? `<img class="thumb" src="${esc(r.image_url)}" alt="">` : ''}
-          <div style="min-width:0;"><b style="font-size:16px;">${esc(r.name)}</b><div class="text-light" style="font-size:12px;">${esc(recipeTypeLabel(recipeTypeOf(r)))}${r.category ? ' · ' + esc(r.category) : ''}${(r.modifier_groups || []).length ? ' · ' + plural(r.modifier_groups.length, 'option group') : ''}</div></div>
+          <div style="min-width:0;"><b style="font-size:16px;">${esc(r.name)}</b><div class="text-light" style="font-size:12px;">${tileColorKeyFor(posCategoryOf(r)) ? `<span class="rec-sub-dot" style="${tileStyleVars(tileColorKeyFor(posCategoryOf(r)))}" aria-hidden="true"></span>` : ''}${esc(recipeTypeLabel(recipeTypeOf(r)))}${r.category ? ' · ' + esc(r.category) : ''}${(r.modifier_groups || []).length ? ' · ' + plural(r.modifier_groups.length, 'option group') : ''}</div></div>
         </div>
         <div class="pill-stack" style="justify-content:flex-end;">${flags}</div>
       </div>
@@ -124,6 +126,67 @@ function renderRecipesGrid(){
       refreshPickBar();
     };
   });
+}
+
+/* ---- sub-category tile colours (release 1.2) ----
+   Each sub-category on the counter's menu (recipes.category, else the recipe type's name, the same
+   as the counter's posCategoryOf) can get one of the brand's tile colours. The database keeps only
+   the colour's KEY (settings.subcategory_colors, e.g. {"Iced": "terracotta"}); the full settings
+   save never sends this column, so it is saved here with its own apply_changes update. */
+function subcategoriesInUse(){
+  const seen = new Map();
+  // the items sold at the counter / on the QR menu (active, with a selling price)
+  state.recipes.filter(r => r.active !== false && num(r.selling_price) > 0).forEach(r => {
+    const name = posCategoryOf(r);
+    if(!name) return;
+    const k = name.trim().toLowerCase();
+    if(!seen.has(k)) seen.set(k, {name, count: 0, sample: r});
+    seen.get(k).count++;
+  });
+  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+}
+function subcatTileHtml(name, key, sample){
+  const st = tileStyleVars(key);
+  return `<div class="sc-tile" style="${st}"><span class="n">${esc(sample ? sample.name : name)}</span><span class="p">${sample && num(sample.selling_price) > 0 ? fmtMoney(sample.selling_price) : esc(name)}</span></div>`;
+}
+function openSubcategoryColors(){
+  const list = subcategoriesInUse();
+  const current = Object.assign({}, state.settings.subcategory_colors || {});
+  const draft = {};
+  list.forEach(x => { draft[x.name] = tileColorKeyFor(x.name) || ''; });
+  const swatches = (i, name) => `<fieldset class="sc-swatches"><legend>Colour for ${esc(name)}</legend>
+      <label class="sc-sw"><input type="radio" name="sc-${i}" value="" ${!draft[name] ? 'checked' : ''}><span class="sc-none">Plain</span></label>
+      ${TILE_COLOR_KEYS.map(k => `<label class="sc-sw" title="${esc(TILE_COLORS[k].label)}"><input type="radio" name="sc-${i}" value="${k}" ${draft[name] === k ? 'checked' : ''}><span style="${tileStyleVars(k)}">${esc(TILE_COLORS[k].label)}</span></label>`).join('')}</fieldset>`;
+  openModal({title: 'Sub-category colours', wide: true, body: list.length ? `
+    <p class="hint" style="margin-top:0;margin-bottom:12px;">Pick a colour for each sub-category. Its items get that colour on the counter's menu, so staff find them faster. Every colour is easy to read. "Plain" keeps the normal look.</p>
+    <div class="sc-list">${list.map((x, i) => `<div class="sc-row" data-sc="${i}">
+      <div class="sc-preview" id="sc-prev-${i}">${subcatTileHtml(x.name, draft[x.name], x.sample)}</div>
+      <div><div class="sc-name">${esc(x.name)} <span class="text-light" style="font-weight:600;font-size:12.5px;">(${esc(plural(x.count, 'item'))})</span></div>${swatches(i, x.name)}</div></div>`).join('')}</div>`
+    : emptyLine('No sub-categories yet. Give recipes a sub-category in the recipe form first.'),
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button>${list.length ? '<button class="btn btn-primary" id="sc-save">Save colours</button>' : ''}`,
+    onMount: (root) => {
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      list.forEach((x, i) => root.querySelectorAll(`input[name="sc-${i}"]`).forEach(inp => inp.onchange = () => {
+        draft[x.name] = inp.value;
+        root.querySelector('#sc-prev-' + i).innerHTML = subcatTileHtml(x.name, inp.value, x.sample);
+      }));
+      const save = root.querySelector('#sc-save');
+      if(save) save.onclick = () => busy(save, async () => {
+        // colours of sub-categories not shown here (e.g. only hidden items now) are kept
+        const map = {};
+        const shown = new Set(list.map(x => x.name.trim().toLowerCase()));
+        Object.keys(current).forEach(k => { if(!shown.has(k.trim().toLowerCase()) && isTileColorKey(current[k])) map[k] = current[k]; });
+        list.forEach(x => { if(draft[x.name] && x.name.trim().length <= 40) map[x.name] = draft[x.name]; });
+        const keys = Object.keys(map);
+        if(keys.length > 100){ toast('Up to 100 sub-categories can have a colour', 'error'); return; }
+        const long = list.find(x => draft[x.name] && x.name.trim().length > 40);
+        if(long){ toast(`"${long.name}" is longer than 40 characters, so it can't get a colour. Shorten the sub-category name first.`, 'error'); return; }
+        const named = list.filter(x => draft[x.name]).map(x => `${x.name}: ${TILE_COLORS[draft[x.name]].label}`);
+        const ok = await boSave([Ops.update('settings', {subcategory_colors: map, updated_at: nowISO()}),
+          Ops.audit('Sub-category colours saved', named.join(', ') || 'all plain')], {success: 'Colours saved — counters show them within a few minutes'});
+        if(ok){ closeModal(); if(state.route === 'recipes') renderRecipes(); }
+      });
+    }});
 }
 
 /* ---- remove several recipes at once (owner request #6, 2026-10-25) ----
@@ -271,7 +334,7 @@ function optionsEditor(container, groups){
       <td><select class="mo-ing" aria-label="Uses extra ingredient">${ingOptions(o.ingredient_id || '')}</select></td>
       <td><input class="mo-qty" type="number" step="any" value="${esc(qtyInputValue(shown.qty))}" style="min-width:76px;" aria-label="Extra amount"><div class="hint mo-saved">${esc(ing ? savedAsText(shown.qty, shown.unit, ing.base_unit) : '')}</div></td>
       <td><select class="mo-unit" aria-label="Unit of the extra amount" data-prev="${esc(shown.unit)}" data-base="${esc(ing ? ing.base_unit : '')}" ${units.length < 2 ? 'disabled' : ''}>${ing ? recUnitOptionsHtml(ing.base_unit, shown.unit) : ''}</select></td>
-      <td><button type="button" class="btn btn-sm btn-ghost mo-rm" title="Remove this option" aria-label="Remove this option">✕</button></td></tr>`;
+      <td><button type="button" class="btn btn-sm btn-ghost mo-rm" title="Remove this option" aria-label="Remove this option">${icon('x', {size: 18})}</button></td></tr>`;
   }
   function addGroup(g){
     g = g || {id: uid(), name: '', required: false, multi_select: false, options: []};
@@ -409,7 +472,7 @@ function openRecipeForm(id){
       </div>
       <div class="form-row"><label>Photo (optional)</label>
         <div class="field-inline">
-          <div class="logo-preview" id="r-photo-prev" style="width:56px;height:56px;">${editing && editing.image_url ? `<img src="${esc(editing.image_url)}" alt="">` : '<span>📷</span>'}</div>
+          <div class="logo-preview" id="r-photo-prev" style="width:56px;height:56px;">${editing && editing.image_url ? `<img src="${esc(editing.image_url)}" alt="">` : '<span class="text-light" style="font-size:11px;">No photo</span>'}</div>
           <button class="btn btn-outline btn-sm" type="button" id="r-photo-btn">Choose a photo</button>
           <button class="btn btn-ghost btn-sm" type="button" id="r-photo-rm">Remove photo</button>
           <input type="file" id="r-photo" accept="image/*" style="display:none;">
@@ -449,7 +512,7 @@ function openRecipeForm(id){
     // photo: shrunk now, uploaded when saving
     let photo = {url: editing ? (editing.image_url || null) : null, blob: null};
     root.querySelector('#r-photo-btn').onclick = () => root.querySelector('#r-photo').click();
-    root.querySelector('#r-photo-rm').onclick = () => { photo = {url: null, blob: null}; root.querySelector('#r-photo-prev').innerHTML = '<span>📷</span>'; };
+    root.querySelector('#r-photo-rm').onclick = () => { photo = {url: null, blob: null}; root.querySelector('#r-photo-prev').innerHTML = '<span class="text-light" style="font-size:11px;">No photo</span>'; };
     root.querySelector('#r-photo').onchange = async (e) => {
       const f = e.target.files[0]; if(!f) return;
       try{
@@ -471,7 +534,7 @@ function openRecipeForm(id){
         <td><select class="ri-unit" aria-label="Unit"></select></td>
         <td class="ri-unitcost text-light">—</td>
         <td class="ri-totalcost"><b>—</b></td>
-        <td><button class="btn btn-sm btn-ghost ri-remove" type="button" aria-label="Remove ingredient">✕</button></td></tr>`);
+        <td><button class="btn btn-sm btn-ghost ri-remove" type="button" aria-label="Remove ingredient">${icon('x', {size: 18})}</button></td></tr>`);
       tbody.appendChild(tr);
       const ingSel = tr.querySelector('.ri-ing'), qtyInput = tr.querySelector('.ri-qty'), unitSel = tr.querySelector('.ri-unit');
       fillUnitSelect(unitSel, lineIng, shown.unit);

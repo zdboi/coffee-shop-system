@@ -27,6 +27,8 @@
 
   /* ---------------- helpers ---------------- */
   const $ = (sel, root) => (root || document).querySelector(sel);
+  // Line icons from ../shared/ui.js (inline SVG, decorative unless labelled). '' if that file didn't load.
+  function ico(name, opts){ try{ return typeof window.icon === 'function' ? window.icon(name, opts) : ''; }catch(e){ return ''; } }
   function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   function money(n){ return '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
   function shop(){ return S.menu ? S.menu.business.name : 'the shop'; }
@@ -74,9 +76,9 @@
     // The optional "are you a person" check before a new phone's first sign-in (Captcha).
     CAPTCHA_FAILED: 'We couldn\'t confirm you\'re a person. Check your internet and try again.',
   };
-  // This page does not load cccc/shared/ui.js (that file's wording is written for staff at the
-  // counter, e.g. its NOT_SIGNED_IN talks about "this tablet's counter login"). Every message a
-  // customer can see comes from MSG below. A code we don't know, or a raw server/network message,
+  // This page loads cccc/shared/ui.js only for its icons and brand logo helpers. Its error wording
+  // (friendlyError / ERROR_TEXT) is written for staff and is NOT used here: every message a
+  // customer can see comes from MSG above. A code we don't know, or a raw server/network message,
   // is never shown as-is: the customer gets the plain fallback.
   const FALLBACK = 'Something went wrong. Please try again.';
   // The error code at the start of a server answer: "BAD_PHONE" or "BAD_PHONE: more text".
@@ -115,15 +117,49 @@
   }
 
   /* ---------------- theme from the shop's settings ---------------- */
+  // theme.theme === 'CUSTOM': the shop's saved colours, logo and name (as text).
+  // Anything else ('CCCC', missing, old values): the CCCC brand tokens, tile icon and wordmark image;
+  // the saved colours are ignored. The brand helpers come from ../shared/ui.js.
+  const HEX = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+  function hexMix(hex, toward, pct){   // toward: 0 = black, 255 = white
+    let h = hex.slice(1); if(h.length === 3) h = h.split('').map(c => c + c).join('');
+    const n = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16));
+    return '#' + n.map(v => Math.round(v + (toward - v) * pct / 100).toString(16).padStart(2, '0')).join('');
+  }
+  function isCustomTheme(menu){ return !!(menu && menu.theme && String(menu.theme.theme || '').toUpperCase() === 'CUSTOM'); }
   function applyTheme(menu){
     const t = menu.theme || {};
-    const map = {primary_color:'--ink', secondary_color:'--leaf', accent_color:'--crema', background_color:'--paper', card_color:'--sheet', text_color:'--text'};
-    Object.keys(map).forEach(k => { if(t[k] && /^#[0-9a-fA-F]{3,8}$/.test(t[k])) document.documentElement.style.setProperty(map[k], t[k]); });
-    const meta = document.querySelector('meta[name="theme-color"]'); if(meta && t.primary_color) meta.setAttribute('content', t.primary_color);
-    $('#brand-name').textContent = menu.business.name;
-    if(menu.business.logo_url) $('#brand-logo').innerHTML = `<img src="${esc(menu.business.logo_url)}" alt="">`;
+    const custom = isCustomTheme(menu);
+    const root = document.documentElement.style;
+    ['--cc-terracotta','--cc-terracotta-deep','--cc-terracotta-tint','--cc-butter','--cc-paper','--cc-cream','--cc-card','--cc-ink','--qr-dark']
+      .forEach(v => root.removeProperty(v));
+    const ok = (v) => typeof v === 'string' && HEX.test(v);
+    if(custom){
+      if(ok(t.secondary_color)){   // "Second": header and main buttons
+        root.setProperty('--cc-terracotta', t.secondary_color);
+        root.setProperty('--cc-terracotta-deep', hexMix(t.secondary_color, 0, 22));
+        root.setProperty('--cc-terracotta-tint', hexMix(t.secondary_color, 255, 85));
+      }
+      if(ok(t.primary_color)) root.setProperty('--qr-dark', t.primary_color);     // "Main": stamp card head, order bar
+      if(ok(t.accent_color)) root.setProperty('--cc-butter', t.accent_color);     // "Accent": text on dark, header text
+      if(ok(t.background_color)){ root.setProperty('--cc-paper', t.background_color); root.setProperty('--cc-cream', hexMix(t.background_color, 0, 4)); }
+      if(ok(t.card_color)) root.setProperty('--cc-card', t.card_color);
+      if(ok(t.text_color)) root.setProperty('--cc-ink', t.text_color);
+    }
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if(meta) meta.setAttribute('content', custom && ok(t.secondary_color) ? t.secondary_color : '#B5432B');
+    const settings = {theme: custom ? 'CUSTOM' : 'CCCC', business_name: menu.business.name, logo_url: menu.business.logo_url};
+    const name = menu.business.name || 'Cavite City Coffee Club';
+    const mark = window.brandLogo ? brandLogo('mark', settings) : null;
+    const word = window.brandWordmark ? brandWordmark('terracotta', settings) : null;
+    // Custom theme: the shop's own logo, or none (never the CCCC tile for another shop).
+    $('#brand-logo').innerHTML = (mark && (!custom || mark.custom))
+      ? `<img src="${esc(mark.src)}" alt="" width="44" height="44" decoding="async">` : '';
+    $('#brand-name').innerHTML = (word && word.src)
+      ? `<img class="brand-wordmark" src="${esc(word.src)}" alt="" width="95" height="40" decoding="async"><span class="sr-only">${esc(word.alt)}</span>`
+      : `<span class="brand-name-text">${esc(name)}</span>`;
     $('#table-tag').textContent = menu.table.label;
-    document.title = 'Order — ' + menu.business.name;
+    document.title = 'Order — ' + name;
   }
 
   /* ---------------- cart (kept on this phone between reloads) ---------------- */
@@ -251,12 +287,17 @@
   async function loadOrders(){
     try{
       const r = await cloud.rpc('qr_my_orders', {p_token: token});
-      const before = new Map(S.orders.map(o => [o.id, o.status]));
+      const before = new Map(S.orders.map(o => [o.id, o.status + '|' + (o.paid_at ? 1 : 0)]));
       S.orders = (r && r.orders) || [];
+      let paidNow = false;
       S.orders.forEach(o => {
         const was = before.get(o.id);
-        if(was && was !== o.status) onStatusChange(o);
+        if(!was) return;
+        const [st, paid] = was.split('|');
+        if(st !== o.status) onStatusChange(o);
+        if((o.paid_at && paid !== '1') || (o.status === 'COMPLETED' && st !== 'COMPLETED')) paidNow = true;
       });
+      if(paidNow && S.customer && S.menu && S.menu.loyalty_enabled) refreshCustomer();
     }catch(e){ /* keep what we have */ }
   }
   function onStatusChange(o){
@@ -282,8 +323,8 @@
 
   /* ---------------- rendering ---------------- */
   function renderEmpty(title, text, retry){
-    $('#main').innerHTML = `<div class="empty"><h1>${esc(title)}</h1><p>${esc(text)}</p>
-      ${retry ? '<p style="margin-top:18px;"><button class="btn btn-main" id="retry" style="max-width:240px;">Try again</button></p>' : ''}</div>`;
+    $('#main').innerHTML = `<div class="empty"><h1 class="disp">${esc(title)}</h1><p>${esc(text)}</p>
+      ${retry ? '<p><button class="btn btn-main" id="retry">Try again</button></p>' : ''}</div>`;
     if(retry) $('#retry').onclick = () => location.reload();
     $('#bottom').hidden = true;
   }
@@ -304,34 +345,113 @@
 
   function memberCardHtml(){
     const c = S.customer;
-    const since = new Date(c.first_seen_at).toLocaleDateString('en-PH', {month: 'short', year: 'numeric'});
-    const stamps = S.menu.loyalty_enabled ? `<div><b>${c.stamps} / ${S.menu.stamps_per_reward}</b>stamps</div>` : '';
-    return `<section class="member" aria-label="Your member card">
-      <div class="member-shop">${esc(shop())}</div>
-      <div class="member-hello">${S.justRegistered ? 'Welcome to the club,' : 'Welcome back,'}</div>
-      <div class="member-name">${esc(c.nickname)}!</div>
-      <div class="member-stats">
-        <div><b>${c.visit_count}</b>${c.visit_count === 1 ? 'visit' : 'visits'}</div>
-        <div><b>${esc(since)}</b>member since</div>
-        ${stamps}
-      </div>
+    const d = new Date(c.first_seen_at);
+    const since = isNaN(d) ? '' : d.toLocaleDateString('en-PH', {month: 'short', year: 'numeric', timeZone: 'Asia/Manila'});
+    const visits = Number(c.visit_count) || 0;
+    const meta = [visits ? `${visits} ${visits === 1 ? 'visit' : 'visits'}` : 'New member', since ? `member since ${esc(since)}` : ''].filter(Boolean).join(' · ');
+    return `<section class="hello" aria-label="Your visits">
+      <h1><span class="member-hello">${S.justRegistered ? 'Welcome to the club,' : 'Welcome back,'}</span> <span class="member-name">${esc(c.nickname)}</span>!</h1>
+      <p class="hello-meta"><span>${meta}</span><button class="textlink" id="not-me">Not ${esc(c.nickname)}?</button></p>
     </section>
-    <div class="member-foot"><span class="textlink" style="text-decoration:none;cursor:default;">${S.menu.table.kind === 'TAKEAWAY' ? 'Takeaway / counter' : esc(S.menu.table.label)}</span>
-      <button class="textlink" id="not-me">Not ${esc(c.nickname)}?</button></div>`;
+    ${stampCardHtml(c)}`;
+  }
+
+  /* ---------------- stamp card (release 1.2) ----------------
+     Everything comes from the server (qr_session / qr_register / qr_relink / qr_set_phone):
+     c.card = {card_size, card_no, stamps_on_card, milestones:[{stamp, type, amount, label, status}]},
+     c.ready_rewards = rewards reached and not used yet (this card and earlier ones).
+     The data says how many stamps are on this card, not which were for a drink or for food,
+     so every stamp is drawn the same way (filled, ink). */
+  function peso0(n){ const v = Number(n) || 0; return '₱' + v.toLocaleString('en-PH', {minimumFractionDigits: v % 1 ? 2 : 0, maximumFractionDigits: 2}); }
+  function rewardShort(m){   // inside the circle
+    if(m.type === 'AMOUNT_OFF' && Number(m.amount) > 0) return peso0(m.amount);
+    if(m.type === 'FREE_ITEM') return 'FREE';
+    return String(m.stamp);
+  }
+  function rewardName(m){    // "₱10 off", "a free drink or food"
+    if(m.type === 'AMOUNT_OFF' && Number(m.amount) > 0) return peso0(m.amount) + ' off';
+    if(m.type === 'FREE_ITEM') return 'a free drink or food';
+    return m.label || 'a reward';
+  }
+  function readyPhrase(r){   // "your ₱10-off reward is ready"
+    if(r.type === 'AMOUNT_OFF' && Number(r.amount) > 0) return `your ${peso0(r.amount)}-off reward is ready`;
+    if(r.type === 'FREE_ITEM') return 'your free drink or food is ready';
+    return `your reward (${r.label || 'reward'}) is ready`;
+  }
+  function joinAnd(list){ return list.length < 2 ? list.join('') : list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1]; }
+  // Plain-text lines for the card (escaped by the caller). Returns {line, sr}.
+  function stampText(card, ready){
+    const n = Number(card.stamps_on_card) || 0, size = Number(card.card_size) || 0;
+    const of = `${n} of ${size}`;
+    if(ready.length === 1){
+      const p = readyPhrase(ready[0]);
+      return {line: `${of} · ${p}. Ask at the counter.`, sr: `${of} stamps. ${rewardName(ready[0]).replace(/^a /, 'A ')} is ready. Ask at the counter.`};
+    }
+    if(ready.length > 1){
+      const names = joinAnd(ready.map(rewardName));
+      return {line: `${of} · ${ready.length} rewards are ready: ${names}. Ask at the counter.`, sr: `${of} stamps. ${ready.length} rewards are ready: ${names}.`};
+    }
+    const next = (card.milestones || []).find(m => m.status === 'locked' && m.stamp > n);
+    if(next){
+      const left = next.stamp - n;
+      const txt = n === 0 ? `Get your first stamp with today's order. ${left} to ${rewardName(next)}.`
+        : `${left} more ${left === 1 ? 'stamp' : 'stamps'} to ${rewardName(next)}.`;
+      return {line: `${of} · ${txt}`, sr: `${of} stamps. ${txt}`};
+    }
+    return {line: `${of} · card complete! Your next stamp starts a new card.`, sr: `${of} stamps. Card complete. Your next stamp starts a new card.`};
+  }
+  function stampCardHtml(c){
+    if(!S.menu.loyalty_enabled) return '';
+    const card = c && c.card;
+    if(!card || !(Number(card.card_size) > 0)) return '';
+    const size = Math.min(60, Number(card.card_size));
+    const n = Math.max(0, Math.min(size, Number(card.stamps_on_card) || 0));
+    const ms = {};
+    (card.milestones || []).forEach(m => { ms[m.stamp] = m; });
+    const ready = Array.isArray(c.ready_rewards) ? c.ready_rewards : [];
+    const cells = [];
+    for(let i = 1; i <= size; i++){
+      const m = ms[i];
+      if(m){
+        const st = ['ready', 'redeemed'].includes(m.status) ? m.status : 'locked';
+        const inner = st === 'redeemed' ? ico('check', {size: 18}) : esc(rewardShort(m));
+        cells.push(`<span class="stamp ms ${st}${i <= n ? ' got' : ''}">${inner}</span>`);
+      } else cells.push(`<span class="stamp${i <= n ? ' got' : ''}"></span>`);
+    }
+    const txt = stampText(Object.assign({}, card, {stamps_on_card: n, card_size: size}), ready);
+    const tag = (m) => {
+      if(m.status === 'ready') return '<span class="rtag ready">Ready</span>';
+      if(m.status === 'redeemed') return '<span class="rtag redeemed">Used</span>';
+      const left = m.stamp - n;
+      return `<span class="rtag">${left > 0 ? left + ' to go' : 'Locked'}</span>`;
+    };
+    const ord = (k) => k + (k % 10 === 1 && k % 100 !== 11 ? 'st' : k % 10 === 2 && k % 100 !== 12 ? 'nd' : k % 10 === 3 && k % 100 !== 13 ? 'rd' : 'th');
+    const cardNo = Number(card.card_no) || 1;
+    return `<section class="stampcard" id="stamp-card" aria-labelledby="stamp-title">
+      <div class="stampcard-head"><h2 class="disp sc-title" id="stamp-title">Stamp card</h2><span class="disp">${cardNo > 1 ? 'Card ' + cardNo : 'Bienvenido!'}</span></div>
+      <div class="stampcard-body">
+        <div class="stamps" role="img" aria-label="${esc(txt.sr)}">${cells.join('')}</div>
+        <p class="stamp-line" aria-hidden="true">${esc(txt.line)}</p>
+        <p class="stamp-rule">One stamp for a drink and one for food, each day.</p>
+        <ul class="rewards">${(card.milestones || []).map(m => `<li><span>${esc(ord(m.stamp))} stamp: ${esc(m.label || rewardName(m))}</span>${tag(m)}</li>`).join('')}</ul>
+      </div>
+    </section>`;
+  }
+  // Stamps change when the shop takes payment: fetch the customer again (quietly).
+  async function refreshCustomer(){
+    try{
+      const r = await cloud.rpc('qr_session', {p_token: token});
+      if(r && r.customer){ S.customer = r.customer; render(true); }
+    }catch(e){}
   }
 
   function renderWelcome(){
     // Keep a person check that is still running (its box holds the check's own frame).
     const runningBox = S.signIn === 'pending' ? $('#w-captcha-box') : null;
     $('#main').innerHTML = `
-      <section class="member" aria-hidden="true">
-        <div class="member-shop">${esc(shop())}</div>
-        <div class="member-hello">Welcome to the club,</div>
-        <div class="member-name placeholder" id="w-preview">Your name</div>
-        <div class="member-stats"><div><b>New</b>member</div></div>
-      </section>
+      ${joinCardHtml()}
       <div class="welcome-copy">
-        <h1>What should we call you?</h1>
+        <h1 class="disp">What should we call you?</h1>
         <p>We'll use this name when your order is ready, and greet you by name next time.</p>
       </div>
       <div class="field"><label for="w-name">Name or nickname</label>
@@ -348,12 +468,12 @@
         <div id="w-captcha-fail"></div>
       </div>
       <button class="btn btn-main" id="w-go">Start ordering</button>
-      <p style="text-align:center;margin-top:12px;"><button class="textlink" id="w-relink">I've ordered here before on another phone</button></p>
+      <p class="center"><button class="textlink" id="w-relink">I've ordered here before on another phone</button></p>
       ${menuHtml(true)}`;
     const name = $('#w-name'), preview = $('#w-preview');
     name.oninput = () => {
       const v = name.value.trim();
-      preview.textContent = v || 'Your name';
+      preview.textContent = v || 'there';
       preview.classList.toggle('placeholder', !v);
     };
     $('#w-phone').oninput = () => { $('#w-help').innerHTML = ''; };
@@ -362,6 +482,29 @@
     wireMenu();
     if(runningBox) $('#w-captcha-box').replaceWith(runningBox);
     paintCaptcha();
+  }
+
+  // First visit: a preview of the (empty) stamp card with the name as it's typed.
+  // Decorative only (aria-hidden): the form below says the same in words.
+  function joinCardHtml(){
+    const cfg = S.menu.loyalty_rewards || {};
+    const size = Math.min(60, Number(cfg.card_size) || 0);
+    const rewards = Array.isArray(cfg.rewards) ? cfg.rewards : [];
+    const by = {}; rewards.forEach(r => { by[r.stamp] = r; });
+    const loyalty = S.menu.loyalty_enabled && size > 0;
+    let grid = '', pitch = '';
+    if(loyalty){
+      const cells = [];
+      for(let i = 1; i <= size; i++) cells.push(by[i] ? `<span class="stamp ms locked">${esc(rewardShort(by[i]))}</span>` : '<span class="stamp"></span>');
+      grid = `<div class="stamps">${cells.join('')}</div>`;
+      pitch = `<p class="join-pitch">Join free: ${esc(joinAnd(rewards.map(r => `${rewardName(r)} at ${r.stamp}`)))}. One stamp for a drink and one for food, each day.</p>`;
+    }
+    return `<section class="stampcard" aria-hidden="true">
+      <div class="stampcard-head"><span class="disp sc-title">${loyalty ? 'Stamp card' : 'Welcome'}</span><span class="disp">Bienvenido!</span></div>
+      <div class="stampcard-body">
+        <p class="join-hi">Hi, <span class="member-name placeholder" id="w-preview">there</span>!</p>
+        ${grid ? `<div class="join-grid">${grid}</div>` : ''}${pitch}
+      </div></section>`;
   }
 
   // First visit. qr_register only ever creates a new customer; an existing number answers
@@ -404,19 +547,20 @@
     const counts = {};
     S.cart.forEach(l => { counts[l.recipe_id] = (counts[l.recipe_id] || 0) + l.quantity; });
     return `
-      ${preview ? '<h2 class="welcome-copy" style="margin-top:28px;font-family:var(--display);font-size:20px;color:var(--ink);">On the menu</h2>' : ''}
+      ${preview ? '<h2 class="disp menu-title">On the menu</h2>' : ''}
       <nav class="cats" aria-label="Menu sections">${cats.map((c, i) => `<button class="cat ${i === 0 ? 'on' : ''}" data-cat="${i}">${esc(c)}</button>`).join('')}</nav>
-      ${cats.map((c, i) => `<section class="menu-section" id="cat-${i}"><h2>${esc(c)}</h2>
+      ${cats.map((c, i) => `<section class="menu-section" id="cat-${i}"><h2 class="disp">${esc(c)}</h2><div class="items">
         ${items.filter(it => it.category === c).map(it => `
-          <button class="item ${it.available ? '' : 'off'}" data-item="${it.id}" ${(!it.available || preview || !S.canOrder) ? 'aria-disabled="true"' : ''}>
-            <div class="item-body">
-              <div class="item-name">${esc(it.name)}${counts[it.id] ? `<span class="item-count">${counts[it.id]} in order</span>` : ''}</div>
-              ${it.description ? `<div class="item-desc">${esc(it.description)}</div>` : ''}
-              <div class="item-price">${money(it.price)}</div>
-            </div>
-            ${it.image_url ? `<img class="item-photo" src="${esc(it.image_url)}" alt="" loading="lazy">` : ''}
+          <button class="item ${it.available ? '' : 'off'}" data-item="${esc(it.id)}" ${(!it.available || preview || !S.canOrder) ? 'aria-disabled="true"' : ''}>
+            <span class="item-thumb">${it.image_url ? `<img src="${esc(it.image_url)}" alt="" width="64" height="64" loading="lazy" decoding="async">` : ico('cup', {size: 26})}</span>
+            <span class="item-body">
+              <span class="item-name">${esc(it.name)}${counts[it.id] ? `<span class="item-count">${counts[it.id]} in order</span>` : ''}</span>
+              ${it.description ? `<span class="item-desc">${esc(it.description)}</span>` : ''}
+              <span class="item-price">${money(it.price)}</span>
+            </span>
+            <span class="item-add" aria-hidden="true">${ico('plus', {size: 22})}</span>
           </button>`).join('')}
-      </section>`).join('')}`;
+      </div>      </section>`).join('')}`;
   }
   function wireMenu(){
     document.querySelectorAll('.cat').forEach(b => b.onclick = () => {
@@ -467,7 +611,7 @@
   function openSheet(title, bodyHtml, footHtml, onMount){
     const root = $('#sheet-root');
     root.innerHTML = `<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}">
-      <div class="sheet-head"><h3>${esc(title)}</h3><button class="sheet-close" id="sheet-x" aria-label="Close">✕</button></div>
+      <div class="sheet-head"><h3>${esc(title)}</h3><button class="sheet-close" id="sheet-x" aria-label="Close">${ico('x', {size: 22})}</button></div>
       <div class="sheet-body">${bodyHtml}</div>${footHtml ? `<div class="sheet-foot">${footHtml}</div>` : ''}</div></div>`;
     $('#sheet-x').onclick = closeSheet;
     $('#scrim').addEventListener('click', e => { if(e.target.id === 'scrim') closeSheet(); });
@@ -485,14 +629,14 @@
     const groups = it.modifier_groups || [];
     const body = `
       ${it.image_url ? `<img class="sheet-photo" src="${esc(it.image_url)}" alt="">` : ''}
-      ${it.description ? `<p style="color:var(--muted);">${esc(it.description)}</p>` : ''}
+      ${it.description ? `<p class="sheet-desc">${esc(it.description)}</p>` : ''}
       ${groups.map(g => `<div class="group" data-group="${esc(g.id)}">
         <div class="group-title"><span>${esc(g.name)}</span><small class="${g.required ? 'req' : ''}">${g.required ? 'Choose 1' : (g.multi_select ? 'Optional · any' : 'Optional')}</small></div>
         <div class="opts">${g.options.map(o => `<button class="opt ${g.multi_select ? 'multi' : ''}" aria-pressed="false" data-g="${esc(g.id)}" data-o="${esc(o.id)}">
-          <span class="tick"></span><span>${esc(o.label)}</span>${Number(o.price_delta) ? `<span class="delta">+${money(o.price_delta)}</span>` : ''}</button>`).join('')}</div></div>`).join('')}
-      <div class="field" style="margin-top:18px;"><label for="it-note">Special request (optional)</label>
+          <span class="tick">${ico('check', {size: 14})}</span><span class="opt-label">${esc(o.label)}</span>${Number(o.price_delta) ? `<span class="delta">+${money(o.price_delta)}</span>` : ''}</button>`).join('')}</div></div>`).join('')}
+      <div class="field gap-top"><label for="it-note">Special request (optional)</label>
         <input class="input" id="it-note" maxlength="140" placeholder="e.g. less ice"></div>
-      <div class="qty"><button id="q-minus" aria-label="One less">−</button><span id="q-val" aria-live="polite">1</span><button id="q-plus" aria-label="One more">+</button></div>`;
+      <div class="qty"><button id="q-minus" aria-label="One less">${ico('minus', {size: 22})}</button><span id="q-val" aria-live="polite">1</span><button id="q-plus" aria-label="One more">${ico('plus', {size: 22})}</button></div>`;
     openSheet(it.name, body, `<button class="btn btn-main" id="it-add"></button>`, (sheet) => {
       function refresh(){
         sheet.querySelectorAll('.opt').forEach(b => b.setAttribute('aria-pressed', String(selections.some(s => s.group_id === b.dataset.g && s.option_id === b.dataset.o))));
@@ -545,13 +689,13 @@
         return `<div class="cart-line"><div class="grow"><b>${esc(it.name)}</b>
           ${labels.length ? `<div class="mods">${esc(labels.join(', '))}</div>` : ''}
           ${l.notes ? `<div class="mods">“${esc(l.notes)}”</div>` : ''}
-          <div class="mini-qty"><button data-dec="${l.key}" aria-label="One less">−</button><span>${l.quantity}</span><button data-inc="${l.key}" aria-label="One more">+</button></div></div>
-          <div style="font-weight:700;font-variant-numeric:tabular-nums;">${money(unitPrice(it, l.modifiers) * l.quantity)}</div></div>`;
+          <div class="mini-qty"><button data-dec="${esc(l.key)}" aria-label="One less">${ico('minus', {size: 20})}</button><span>${l.quantity}</span><button data-inc="${esc(l.key)}" aria-label="One more">${ico('plus', {size: 20})}</button></div></div>
+          <div class="line-total">${money(unitPrice(it, l.modifiers) * l.quantity)}</div></div>`;
       }).join('')}
       ${dineInTable ? `<div class="seg" role="group" aria-label="Dine in or take away">
           <button data-type="DINE_IN" aria-pressed="${S.orderType === 'DINE_IN'}">Dine in</button>
           <button data-type="TAKEAWAY" aria-pressed="${S.orderType === 'TAKEAWAY'}">Take away</button></div>` : ''}
-      <div class="field" style="margin-top:14px;"><label for="c-note">Note for the barista (optional)</label>
+      <div class="field gap-top"><label for="c-note">Note for the barista (optional)</label>
         <input class="input" id="c-note" maxlength="200" value="${esc(S.note)}" placeholder="e.g. Please bring water"></div>
       <div class="totals">
         <div><span>Subtotal</span><span>${money(t.subtotal)}</span></div>
@@ -559,8 +703,8 @@
         ${t.tax ? `<div><span>Tax (${S.menu.tax_pct}%)</span><span>${money(t.tax)}</span></div>` : ''}
         <div class="grand"><span>Total</span><span>${money(t.total)}</span></div>
       </div>
-      <p style="color:var(--muted);font-size:14px;margin-top:10px;">${esc(S.menu.payment_note || 'Pay at the counter.')}</p>
-      <div class="form-error" id="c-err" role="alert" style="margin-top:8px;"></div>`;
+      <p class="pay-note">${esc(S.menu.payment_note || 'Pay at the counter.')}</p>
+      <div class="form-error err-after" id="c-err" role="alert"></div>`;
     openSheet('Your order', body, `<button class="btn btn-main" id="c-place">Place order · ${money(t.total)}</button>`, (sheet) => {
       sheet.querySelectorAll('[data-inc],[data-dec]').forEach(b => b.onclick = () => {
         const key = b.dataset.inc || b.dataset.dec;
@@ -620,13 +764,13 @@
     prefill = prefill || {};
     const filled = !!prefill.phone;
     openSheet('Welcome back', `
-      <p style="color:var(--muted);margin-bottom:14px;">${filled
+      <p class="sheet-desc lead">${filled
         ? 'Check the name: use the same one you gave us before. We\'ll connect this phone to your visits.'
         : 'Enter the mobile number and the name you used before. We\'ll connect this phone to your visits.'}</p>
       <div class="field"><label for="r-phone">Mobile number</label><input class="input" id="r-phone" inputmode="tel" autocomplete="tel" placeholder="0917 123 4567"></div>
       <div class="field"><label for="r-name">Name or nickname you used</label><input class="input" id="r-name" maxlength="30" autocomplete="nickname"></div>
       <div class="form-error" id="r-err" role="alert"></div>
-      ${filled ? '' : '<p style="color:var(--muted);font-size:13.5px;">Didn\'t give us a number before? Just start fresh, and ask our staff to join your old visits to the new name.</p>'}`,
+      ${filled ? '' : '<p class="sheet-desc small">Didn\'t give us a number before? Just start fresh, and ask our staff to join your old visits to the new name.</p>'}`,
       `<button class="btn btn-main" id="r-go">Connect this phone</button>`, () => {
         if(prefill.phone) $('#r-phone').value = prefill.phone;
         if(prefill.nickname) $('#r-name').value = prefill.nickname;
@@ -652,8 +796,8 @@
 
   function notMe(){
     const name = S.customer ? S.customer.nickname : '';
-    openSheet(`Not ${name}?`, `<p style="color:var(--muted);">This phone will forget ${esc(name)}. You can then enter your own name. ${esc(name)}'s visits are kept safe.</p>`,
-      `<div class="btn-row"><button class="btn btn-quiet" id="nm-cancel" style="flex:1;">Keep ${esc(name)}</button><button class="btn btn-main" id="nm-go" style="flex:1;">Use my name</button></div>`, () => {
+    openSheet(`Not ${name}?`, `<p class="sheet-desc">This phone will forget ${esc(name)}. You can then enter your own name. ${esc(name)}'s visits are kept safe.</p>`,
+      `<div class="btn-row"><button class="btn btn-quiet" id="nm-cancel">Keep ${esc(name)}</button><button class="btn btn-main" id="nm-go">Use my name</button></div>`, () => {
         $('#nm-cancel').onclick = closeSheet;
         $('#nm-go').onclick = async () => {
           $('#nm-go').disabled = true;
@@ -725,7 +869,7 @@
         </div>
         <div class="perf" aria-hidden="true"></div>
         ${bad ? `<div class="ticket-note">${badNote}</div>`
-          : `<ol class="steps">${steps.map((s, i) => `<li class="step ${stepState(i + 1)}"><span class="dot">${stepState(i + 1) === 'done' ? '✓' : i + 1}</span><div><b>${s.b}</b><span>${s.s}</span></div></li>`).join('')}</ol>`}
+          : `<ol class="steps">${steps.map((s, i) => `<li class="step ${stepState(i + 1)}"><span class="dot">${stepState(i + 1) === 'done' ? ico('check', {size: 16}) : i + 1}</span><div><b>${s.b}</b><span>${s.s}</span></div></li>`).join('')}</ol>`}
         <div class="ticket-pay${payClass}"><span>${payText}</span><b>${money(o.total)}</b></div>
         <ul class="ticket-items">${(o.items || []).map(it => `<li><span>${it.quantity}× ${esc(it.name)}${(it.modifiers || []).length ? `<br><span class="mods">${esc(it.modifiers.map(m => m.label).join(', '))}</span>` : ''}</span><span>${money(it.line_total)}</span></li>`).join('')}</ul>`;
   }
@@ -735,8 +879,8 @@
     if(bad || !S.customer || S.customer.phone_hint) return '';
     return `<div class="card-quiet" id="phone-card"><h4>Keep your visits</h4>
       <p>Add your number so you keep your stamps if you change phones.</p>
-      <div class="inline-form"><input class="input" id="pc-phone" inputmode="tel" autocomplete="tel" placeholder="0917 123 4567" aria-label="Mobile number"><button class="btn btn-main" id="pc-save" style="width:auto;">Save</button></div>
-      <div class="form-error" id="pc-err" role="alert" style="margin:8px 0 0;"></div>
+      <div class="inline-form"><input class="input" id="pc-phone" inputmode="tel" autocomplete="tel" placeholder="0917 123 4567" aria-label="Mobile number"><button class="btn btn-main" id="pc-save">Save</button></div>
+      <div class="form-error err-after" id="pc-err" role="alert"></div>
       <div id="pc-help"></div></div>`;
   }
   function wirePhoneCard(){
