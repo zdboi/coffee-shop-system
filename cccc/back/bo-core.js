@@ -121,9 +121,43 @@ function dayValue(v){ if(!v) return ''; const s = String(v); return /^\d{4}-\d{2
 
 /* ================= loading ================= */
 async function boLoad(){
+  const seq = BO_MODAL_SEQ;
   const d = await cloud.rpc('bo_bootstrap', {}, {timeout: 30000});
   applyBoBootstrap(d || {});
+  boGuardLateClose(seq);
   return d;
+}
+
+/* ---- late "close the window" calls (QA 2026-11-02, bo_modal_race) ----
+   A save writes, reloads the shop data (slow on mobile data), then its screen calls closeModal().
+   If the owner opened ANOTHER window while that was loading (e.g. the confirm dialog had already
+   closed the first one), that late closeModal() must not close the new window.
+   Every window gets a number when it opens. When a save / reload finishes, closeModal() calls made
+   right after it (in the same moment, before anything else can run) only close a window that was
+   already open when the save started; a newer window is left open. Everything else is unchanged:
+   the shared openModal / closeModal from ../shared/ui.js still do the work. */
+let BO_MODAL_SEQ = 0, BO_CLOSE_GUARD = null, BO_MODAL_OPENING = false;
+const boSharedOpenModal = openModal, boSharedCloseModal = closeModal;
+openModal = function(opts){
+  BO_MODAL_OPENING = true;              // openModal first closes the window before it: always allowed
+  try{ boSharedOpenModal(opts); }
+  finally{ BO_MODAL_OPENING = false; }
+  const o = document.getElementById('active-modal-overlay');
+  if(o && !o._boSeq) o._boSeq = ++BO_MODAL_SEQ;
+};
+closeModal = function(){
+  const g = BO_CLOSE_GUARD, o = document.getElementById('active-modal-overlay');
+  if(g && !BO_MODAL_OPENING && o && (o._boSeq || 0) > g.seq){
+    console.info('A window opened during a save was kept open');
+    return;
+  }
+  return boSharedCloseModal();
+};
+// seq = the newest window number when the save / reload started.
+function boGuardLateClose(seq){
+  const g = {seq};
+  BO_CLOSE_GUARD = g;
+  setTimeout(() => { if(BO_CLOSE_GUARD === g) BO_CLOSE_GUARD = null; }, 0);
 }
 function applyBoBootstrap(d){
   state.business = d.business || null;
@@ -341,6 +375,7 @@ async function applyChanges(ops){
 // Saves, shows a plain error if it fails, then reloads the shop data. Returns true when saved.
 async function boSave(ops, opts){
   opts = opts || {};
+  const seq = BO_MODAL_SEQ;
   try{
     await applyChanges(ops);
   }catch(e){
@@ -353,6 +388,7 @@ async function boSave(ops, opts){
   }
   if(opts.dropSales) BO.salesCache.clear();
   if(opts.success) toast(opts.success);
+  boGuardLateClose(seq);       // the window open when this save STARTED may be closed; newer ones stay
   return true;
 }
 
