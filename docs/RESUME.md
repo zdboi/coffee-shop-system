@@ -20,12 +20,21 @@ Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"
 - **QA:** `tests/run_all.sh --runs 2` passes 69/71 suites (4,295 checks). The 2 failures were one counter defect (D1), since fixed and re-tested. The money, stock, cash and brand-FIFO reconciliation (`tests/e2e/money12.e2e.js`) matches to the centavo. **Final run on the finished code (2026-11-02, `run_all.sh --runs 1`): 47 suites, 3,007 checks, 0 failing.**
 - **Security:** 008 passed two review rounds (all findings fixed). The 1.2 screens review found 4 low items, all fixed.
 
-## Next batch: release 1.3 (planned, see `docs/owner-feedback.md`). The owner is adding more revisions before building starts.
-- **QR ordering security (Q1–Q7):** guest vs registered sign-in, unique coffee-themed usernames, max 4 open tickets per table, 1 guest per table, account-switch warning that removes unpaid orders, and a stock check at payment where out-of-stock items must be removed (also for counter sales).
-- **Thermal printing (P1):** the owner's counters are iPad, Android, Windows and Mac; printers are Bluetooth and LAN. Plan: a network printer with a built-in web print service (Epson ePOS / Star WebPRNT), with the print dialog as fallback. Ask the printer brand and model first.
-- **P2:** manager-only "Retry without the reward" for refused reward sales.
-- **Later, plan first:** RPG-style loyalty (levels, perks, promo stamps).
-- **Older items:** T3 cash amount rules (needs the owner's check), T4 large pay-in flag, drop `profiles.pin_hash`, Senior/PWD discount.
+## Next: wait for the owner's go-ahead (owner: "don't proceed with 1.3 unless I say so")
+Full list with decisions: `docs/owner-feedback.md` (sections "Release 1.3 …").
+- **Start fresh (A4):** a one-time clear of test sales, shifts, cash and QR orders before opening day, **Nov 8, 2026**. It keeps the menu, stock setup, staff and customers. It is a separate small update and can ship before 1.3, but needs its own go-ahead.
+- **Release 1.3:**
+  - **QR security (Q1–Q7):** guest (= anonymous, stamp card greyed out) vs registered with a coffee-themed username; max 4 open tickets per table; 1 guest per table; one phone per account with an account-switch warning; out-of-stock items must be removed at payment (counter sales too).
+  - **QR page:**
+    - ticket background by stage: butter = received, olive = preparing, sage = ready (A2);
+    - sub-category tile colours (A3);
+    - a "Ready for pickup at the counter" banner, since every order is picked up (A5);
+    - "Sarado pa po kami!" when no counter has an open shift, with stamps still visible (A7).
+  - **Thermal printing (P1):** Xprinter 58 mm and other ESC/POS printers. Direct Bluetooth from Chrome/Edge on Android, Windows and Mac, found with the browser's printer chooser and reconnected automatically; 58/80 mm, paper cut, cash drawer. **No print helper for now**, so iPad and LAN printers use the print dialog.
+  - **P2:** manager "retry without the reward".
+  - **Optional:** T3, T4, Senior/PWD, drop `profiles.pin_hash`.
+- **Menu photos (A1):** already exist; no change (owner).
+- **Later, plan first:** RPG-style loyalty.
 
 ## How the team works
 Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs/checkpoints.md`.
