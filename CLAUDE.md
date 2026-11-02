@@ -141,7 +141,7 @@ The server answers per op: `ok | duplicate | skipped | error` (+ `message`).
 | Owner | Paths |
 |---|---|
 | `db-security-engineer` | `cccc/supabase/*.sql` |
-| `core-sync-engineer` | `cccc/shared/{cloud,local,logic,ui,config}.js`, `cccc/shared/styles.css`, `cccc/sw.js` |
+| `core-sync-engineer` | `cccc/shared/{cloud,local,logic,ui,config,printer}.js`, `cccc/shared/styles.css`, `cccc/sw.js` |
 | `front-office-dev` | `cccc/front/**` |
 | `back-office-dev` | `cccc/back/**` |
 | `customer-qr-dev` | `cccc/order/**` |
