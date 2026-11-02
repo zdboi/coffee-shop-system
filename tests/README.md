@@ -33,7 +33,7 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 | `sql/40_release_1_4_tests.sql` | 010 / release 1.4 (fresh database → 10 → 11 → 40, like 39; adopted from the database engineer) (112) | — |
 | `conc_checks.sh` | two sessions at the same moment (on the data 32 leaves): two owner refunds of one sale, two counters paying one QR order -> only one passes | — |
 | `unit/core_check.js` | `friendlyError` / `ERROR_TEXT`, `parseAuthRedirect`, `sessionFromUrl`, `updatePassword`, `resetPassword` (node, mocked fetch) | — |
-| `unit/error_codes_check.js` | every error code the database can send to an app has a plain-language text in that app | — |
+| `unit/error_codes_check.js` | every error code the database can send to an app has a plain-language text in that app (1.4: the Back Office row also covers the new 010 functions, from core's `bo14_error_codes_check`) | — |
 | `unit/core_browser.js` | the same auth helpers in a real browser (address bar cleaned, session key) | — |
 | `unit/logic_refund_check.js` | `refundAmountForItems` / `refundLeft` / `refundPriorFor`, `SALES_LABELS`, `salesSummaryRows`, receipt words (96) | — |
 | `unit/email_link_check.js` | email links: only recovery / signup links sign in, never over another signed-in account (53) | — |
@@ -41,6 +41,8 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 | `unit/units_check.js` | batch-1 unit helpers in `logic.js`: `compatibleUnits`, `convertQuantity`, `toBaseUnit`, `fromBaseUnit` (incl. a 32-case typed → stored → shown round trip), `unitLabel`, `formatQuantity`; `toBaseQuantity` (purchases) unchanged; `CATEGORY_SEED` has Raw materials (48) | — |
 | `unit/printer_check.js` | 1.3 (core-sync-engineer): `printer.js` ESC/POS bytes, ASCII folding, 58 / 80 mm golden receipts, cut + drawer, chunked Bluetooth writes with a fake device (small MTU, one reconnect), Web Serial, print-dialog fallback, unsupported browsers (97; helper `unit/printer_env.js`) | — |
 | `unit/menu_stock_check.js` | 1.3 (core-sync-engineer): sub-category order helpers in `ui.js` / `logic.js` (drinks first, `settings.subcategory_order`), `cartStockProblems` (45) | — |
+| `unit/core14_check.js` | 1.4 shared core (core-sync-engineer): one unit converter (weighs), recipe lines in other units, options (extras, swaps, cups / lids, library groups, required groups), merged ingredients + operating supplies, supplied items, waste op data, error texts (92) | — |
+| `unit/stock_parity_check.js` | 1.4: `inventoryLinesForSaleLine` / `cleanStockLines` / `toBaseQty` vs the 010 server's `_recipe_stock_lines` / `_clean_stock_lines` / `_to_base_qty` on random sale lines (seeded db, rolled back) (14) | — |
 | `unit/refund_parity_check.js` | 500 random refunds: `logic.js` and the database's `_refund_items_cap` give the same amount (seeded db, rolled back) | — |
 | `e2e/fo.e2e.js` | counter: pair, PIN, shift, sale with options, offline sale → reload → uploads once, void, close shift | 1280 |
 | `e2e/fo_security.e2e.js` | counter security: pairing only, cashier-only offline PINs, manager-PIN discount (token used), offline approval message, full refund of a discounted sale, masked phones + escaping + look-up limit, manager's own token + deferred logout, closing another cashier's shift, PIN lockout text | 1280 |

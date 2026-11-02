@@ -123,8 +123,10 @@ function eq(name, got, exp){
     r(`cartStockProblems([{recipe_id:'water', name:'W', quantity:1}, {recipe_id:'water', name:'W', quantity:2}])`)), []);
   eq('within 0.001 of the stock is fine (server tolerance), more is short',
     [r(`cartStockProblems([{recipe_id:'latte', name:'L', quantity:1, modifiers:[]}], {milk: 199.9995, beans: 100}).length`), r(`cartStockProblems([{recipe_id:'latte', name:'L', quantity:1, modifiers:[]}], {milk: 199.99, beans: 100}).length`)], [0, 1]);
-  eq('a negative option amount still takes stock off (as the sale does: |qty|)',
-    r(`cartStockProblems([{recipe_id:'amer', name:'A', quantity:1, modifiers:[{label:'Less oat', ingredient_id:'oat', ingredient_qty_delta:-30}]}], {beans: 100, oat: 10})`).map(p => p.short_ingredients.map(x => x.ingredient_id + ':' + x.needed)), [['oat:30']]);
+  // 1.4 (lead-approved 2026-11-03): a negative option on an ingredient the recipe doesn't use takes nothing
+  // (server parity, _recipe_stock_lines keeps amounts > 0 only); before 1.4 it took |qty| off (a 1.3 bug).
+  eq('a negative option amount on an ingredient the recipe does not use takes nothing (1.4, server parity)',
+    r(`cartStockProblems([{recipe_id:'amer', name:'A', quantity:1, modifiers:[{label:'Less oat', ingredient_id:'oat', ingredient_qty_delta:-30}]}], {beans: 100, oat: 10})`).map(p => p.short_ingredients.map(x => x.ingredient_id + ':' + x.needed)), []);
   eq('explicit stock argument used instead of state.stock', r(`cartStockProblems([${latte(1)}], {milk: 0, beans: 100}).length`), 1);
   eq('the line object is returned as given (counter can remove it)', r(`(function(){ const l = ${latte(9)}; return cartStockProblems([l], {})[0].line === l; })()`), true);
 }

@@ -120,9 +120,11 @@ run_node unit/units_check "$DIR/unit/units_check.js" "$REPO"
 run_node unit/shift_reward_check "$DIR/unit/shift_reward_check.js" "$REPO"        # 1.2: shift summary with stamp rewards
 REPO="$REPO" run_node unit/printer_check "$DIR/unit/printer_check.js"             # 1.3: receipt printer (ESC/POS, Bluetooth / Serial fakes)
 REPO="$REPO" run_node unit/menu_stock_check "$DIR/unit/menu_stock_check.js"       # 1.3: sub-category order + cart stock check
+run_node unit/core14_check "$DIR/unit/core14_check.js" "$REPO"                    # 1.4: units, options (extras / swaps / library groups), merged items, waste
 "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1          # parity check needs a shop (runs inside a rolled-back transaction)
 run_node unit/refund_parity_check "$DIR/unit/refund_parity_check.js" "$REPO" "$DB" 500
 run_node unit/loyalty_totals_check "$DIR/unit/loyalty_totals_check.js" "$REPO" "$DB" 1500   # 1.2: reward totals vs the 008 server (rolled back)
+run_node unit/stock_parity_check "$DIR/unit/stock_parity_check.js" "$REPO" "$DB"         # 1.4: stock lines + unit conversion vs the 010 server (rolled back)
 
 if [ "$BROWSER" = 1 ]; then
   "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1
