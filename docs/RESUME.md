@@ -36,6 +36,7 @@ Full list with decisions: `docs/owner-feedback.md` (sections "Release 1.3 …").
   - **Grams for sauces (A10):** a "weighs" value per produced (and liquid) item, so recipes can use g or mL; stock and cost convert.
   - **Expenses (A11):** an "Operating supplies" category counted as an expense (not stock), an Expenses log (rent, utilities, internet, wages…) and a monthly net income report.
   - **Merge ingredients (A12):** combine same-kind ingredients into one general ingredient with brands (Full Cream Milk, Non-dairy Milk, Non-Coffee Milk, Cocoa Powder, Coffee Beans, Butter, Cream); recipes and options repointed.
+  - **Tick-and-remove ingredients (A13):** like recipes; history → inactive; used-in-recipe warning.
   - **P2:** manager "retry without the reward".
   - **Optional:** T3, T4, Senior/PWD, drop `profiles.pin_hash`.
 - **Menu photos (A1):** already exist; no change (owner).
