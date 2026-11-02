@@ -1,7 +1,7 @@
 /* Service worker: lets the counter (Front Office) open and run with no internet.
    Strategy: network first (so updates arrive right away), fall back to the saved copy.
    Supabase data calls are never cached here — the app keeps its own offline copy. */
-const CACHE = 'cccc-app-v5.3.0';   // 1.3: receipt printer (shared/printer.js); 1.2: brand look
+const CACHE = 'cccc-app-v5.3.1';   // 1.3: receipt printer (shared/printer.js); 1.2: brand look
 const SHELL = [
   './', './index.html',
   './front/', './front/index.html', './front/front.js', './front/front.css', './front/manifest.json',

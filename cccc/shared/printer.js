@@ -75,9 +75,14 @@ const Printer = (() => {
     '°': ' deg', '€': 'EUR', '£': 'GBP', '¥': 'JPY', 'ß': 'ss', 'Æ': 'AE', 'æ': 'ae', 'Ø': 'O', 'ø': 'o',
     'Œ': 'OE', 'œ': 'oe', '✓': 'v', '✔': 'v', '✕': 'x', '✖': 'x', '«': '<<', '»': '>>',
   };
-  // Any text -> printable ASCII (0x20..0x7E) plus \n. pesoText: what ₱ becomes.
-  function toAscii(s, pesoText){
-    s = String(s == null ? '' : s).replace(/\r\n?/g, '\n').replace(/\t/g, ' ');
+  // Any text -> printable ASCII (0x20..0x7E). pesoText: what ₱ becomes.
+  // Line breaks (\r, \n, U+2028, U+2029, \v, \f, U+0085) become a space, so a data field
+  // (item note, nickname, modifier label, reference, table, cashier) can never print extra
+  // receipt lines (e.g. a fake TOTAL). keepBreaks = true keeps real \n line breaks; only the
+  // shop's own settings text (receipt_header / receipt_footer) uses it, via b.lines().
+  function toAscii(s, pesoText, keepBreaks){
+    s = String(s == null ? '' : s).replace(/\r\n|[\r\n\u2028\u2029\u000B\u000C\u0085]/g, '\n').replace(/\t/g, ' ');
+    if(!keepBreaks) s = s.replace(/\n/g, ' ');
     let out = '';
     for(const ch of s){
       if(ch === '₱'){ out += (pesoText == null ? 'P' : pesoText); continue; }
@@ -164,8 +169,10 @@ const Printer = (() => {
       cols(){ return this._wide ? Math.floor(this.width / 2) : this.width; },
       // Text as ASCII (₱ -> the peso prefix). No line end.
       text(s){ const t = toAscii(s, this.peso); for(let i = 0; i < t.length; i++) this.bytes.push(t.charCodeAt(i)); return this; },
-      // One or more printed lines, wrapped to the current width.
+      // One data field as printed line(s): line breaks in s become spaces; long text wraps.
       line(s){ wrap(toAscii(s, this.peso), this.cols()).forEach(l => { this.text(l); this.bytes.push(0x0A); }); return this; },
+      // Shop settings text (receipt_header / receipt_footer): keeps the owner's own line breaks.
+      lines(s){ wrap(toAscii(s, this.peso, true), this.cols()).forEach(l => { this.text(l); this.bytes.push(0x0A); }); return this; },
       lr(left, right, indent){ leftRight(toAscii(left, this.peso), toAscii(right, this.peso), this.cols(), indent).forEach(l => { this.text(l); this.bytes.push(0x0A); }); return this; },
       sep(ch){ return this.text((ch || '-').repeat(this.cols())).raw([0x0A]); },
       feed(n){ return this.raw([ESC, 0x64, Math.max(0, Math.min(255, n == null ? 1 : n))]); },  // ESC d n
@@ -235,7 +242,7 @@ const Printer = (() => {
     if(s.business_address) b.line(s.business_address);
     if(s.business_contact) b.line(s.business_contact);
     if(s.business_tin) b.line('TIN: ' + s.business_tin);
-    if(s.receipt_header) b.line(s.receipt_header);
+    if(s.receipt_header) b.lines(s.receipt_header);
     b.align('left').sep();
     b.lr(sale.transaction_number || '', _dateText(sale.transaction_date));
     b.lr('Cashier: ' + (sale.cashier_name || ''), _timeText(sale.transaction_date));
@@ -262,7 +269,7 @@ const Printer = (() => {
       if(pay.reference) b.lr('Ref#', pay.reference);
     });
     b.sep();
-    b.align('center').line(s.receipt_footer || 'Thank you!');
+    b.align('center').lines(s.receipt_footer || 'Thank you!');
     if(sale.status && sale.status !== 'COMPLETED') b.bold(true).line('*** ' + String(sale.status).replace(/_/g, ' ') + ' ***').bold(false);
     if(opts.qrText){ b.feed(1).qr(opts.qrText, 5); b.raw([0x0A]); }
     if(opts.reprint) b.line('(Reprint)');
@@ -407,13 +414,13 @@ const Printer = (() => {
     if(name === 'NotFoundError' && where === 'serial') return 'No printer port was chosen.';
     if(name === 'NotFoundError') return 'No printer was chosen.';
     if(name === 'SecurityError') return 'The browser blocked the printer connection. Open the app from its https address and tap the button again.';
-    if(name === 'NotAllowedError') return 'The browser didn\'t allow the printer connection. Tap Connect printer and allow it.';
+    if(name === 'NotAllowedError') return 'The browser didn\'t allow the printer connection. Tap Connect Bluetooth printer and allow it.';
     if(name === 'InvalidStateError' && where === 'serial') return 'The printer port is in use by another app or browser tab. Close it and try again.';
-    if(name === 'NetworkError' || /disconnect|GATT|connection/i.test(msg) || (e && e.code === 'NOT_CONNECTED' && state_device_name())) return 'Couldn\'t reach the printer' + (state_device_name() ? ' "' + state_device_name() + '"' : '') + '. Check it is switched on, has paper and is close by, then tap Connect printer.';
+    if(name === 'NetworkError' || /disconnect|GATT|connection/i.test(msg) || (e && e.code === 'NOT_CONNECTED' && state_device_name())) return 'Couldn\'t reach the printer' + (state_device_name() ? ' "' + state_device_name() + '"' : '') + '. Check it is switched on, has paper and is close by, then tap Connect Bluetooth printer.';
     if(e && e.code === 'NO_WRITE') return 'This Bluetooth device doesn\'t accept print data. Choose your receipt printer (or tap "Show all Bluetooth devices").';
     if(e && e.code === 'BT_OFF') return 'Bluetooth is off on this device. Turn it on and try again.';
     if(e && e.code === 'NOT_SUPPORTED') return supportText();
-    if(e && e.code === 'NOT_CONNECTED') return 'The printer isn\'t connected. Tap Connect printer.';
+    if(e && e.code === 'NOT_CONNECTED') return 'The printer isn\'t connected. Tap Connect Bluetooth printer.';
     return msg ? 'Printing failed: ' + msg : 'Printing failed.';
   }
   function fail(code){ const e = new Error(code); e.code = code; return e; }
