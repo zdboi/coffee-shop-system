@@ -20,7 +20,7 @@ Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"
 - **QA:** `tests/run_all.sh --runs 2` passes 69/71 suites (4,295 checks). The 2 failures were one counter defect (D1), since fixed and re-tested. The money, stock, cash and brand-FIFO reconciliation (`tests/e2e/money12.e2e.js`) matches to the centavo. **Final run on the finished code (2026-11-02, `run_all.sh --runs 1`): 47 suites, 3,007 checks, 0 failing.**
 - **Security:** 008 passed two review rounds (all findings fixed). The 1.2 screens review found 4 low items, all fixed.
 
-## Next: wait for the owner's go-ahead (owner: "don't proceed with 1.3 unless I say so")
+## Now: building Wave 1 of `docs/PLAN_1.3.md` (owner approved 2026-11-02). Waves 2 and 3 follow as releases 1.4 and 1.5.
 Full list with decisions: `docs/owner-feedback.md` (sections "Release 1.3 …").
 - **Start fresh (A4):** a one-time clear of test sales, shifts, cash and QR orders before opening day, **Nov 8, 2026**. It keeps the menu, stock setup, staff and customers. It is a separate small update and can ship before 1.3, but needs its own go-ahead.
 - **Release 1.3:**
