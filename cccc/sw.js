@@ -1,12 +1,12 @@
 /* Service worker: lets the counter (Front Office) open and run with no internet.
    Strategy: network first (so updates arrive right away), fall back to the saved copy.
    Supabase data calls are never cached here — the app keeps its own offline copy. */
-const CACHE = 'cccc-app-v5.2.0';   // 1.2: new brand look (tokens, Brunson, logo + wordmark images)
+const CACHE = 'cccc-app-v5.3.0';   // 1.3: receipt printer (shared/printer.js); 1.2: brand look
 const SHELL = [
   './', './index.html',
   './front/', './front/index.html', './front/front.js', './front/front.css', './front/manifest.json',
   './back/', './back/index.html',
-  './shared/config.js', './shared/cloud.js', './shared/captcha.js', './shared/local.js', './shared/ui.js', './shared/logic.js',
+  './shared/config.js', './shared/cloud.js', './shared/captcha.js', './shared/local.js', './shared/ui.js', './shared/logic.js', './shared/printer.js',
   './shared/styles.css', './shared/vendor/qrcode.js',
   // Brand (release 1.2): colours + display font + logo images, so the counter looks right offline.
   './shared/brand/tokens.css', './shared/brand/brunson.woff',
