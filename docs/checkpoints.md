@@ -32,6 +32,7 @@ Older working versions stay in the table below, so you can go back further if ne
 | 9 | **Release 1.1 live** | 2026-10-29 | You merged pull request #2 and ran `007_batch1.sql` ("it works"). This is now the last working version. |
 | 10 | **Release 1.2 ready** | 2026-11-02 | Full redesign (your logo colours, Brunson, wordmark); counter Orders + Customers + stamp rewards + QR floor plan; Back Office floor plan editor, tile colours, ingredient brands (oldest stock first), loyalty settings; QR stamp card. final test run 47 suites / 3,007 checks, 0 failing; money/stock/cash reconciliation matches; security reviews passed. Waiting for you to publish (`docs/RELEASE_1.2.md`). |
 | 11 | **Release 1.2 live** | 2026-11-02 | You ran `008_release_1_2.sql` and merged pull request #3. This is now the last working version. |
+| 12 | **Release 1.3 ready** | 2026-11-02 | Wave 1 "Opening day": receipt printer (Xprinter 58 mm, Bluetooth), "Sarado pa po kami!", QR ticket colours + pickup banner, sub-category order, out-of-stock check at payment, customers sort, retry without the reward, tick-and-remove ingredients, branded QR cards, Start fresh. Final test run 54 suites / 3,414 checks, 0 failing; security review ready. Waiting for you to publish (`docs/RELEASE_1.3.md`). |
 
 ## Look at or download a checkpoint
 

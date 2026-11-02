@@ -1,4 +1,4 @@
-# Resume here (save point: 2026-11-02, checkpoint 11, release 1.2 LIVE)
+# Resume here (save point: 2026-11-02, checkpoint 12, release 1.3 Wave 1 READY)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
@@ -20,7 +20,27 @@ Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"
 - **QA:** `tests/run_all.sh --runs 2` passes 69/71 suites (4,295 checks). The 2 failures were one counter defect (D1), since fixed and re-tested. The money, stock, cash and brand-FIFO reconciliation (`tests/e2e/money12.e2e.js`) matches to the centavo. **Final run on the finished code (2026-11-02, `run_all.sh --runs 1`): 47 suites, 3,007 checks, 0 failing.**
 - **Security:** 008 passed two review rounds (all findings fixed). The 1.2 screens review found 4 low items, all fixed.
 
-## Now: building Wave 1 of `docs/PLAN_1.3.md` (owner approved 2026-11-02). Waves 2 and 3 follow as releases 1.4 and 1.5.
+## Now: release 1.3 (Wave 1 of `docs/PLAN_1.3.md`) is READY, waiting for the owner to publish
+- **Owner steps:** `docs/RELEASE_1.3.md` (backup → run `009_release_1_3.sql` → merge the PR → reload → set up → Start fresh before Nov 8).
+- **Built:**
+  - P1 printing (`cccc/shared/printer.js`, counter printer screen);
+  - A7 closed QR page;
+  - A2/A5 ticket colours and pickup banner;
+  - A16/A3/A14 sub-category order and colours;
+  - Q6 out-of-stock at payment;
+  - A17 customers sort;
+  - P2 retry without the reward;
+  - A13 tick-and-remove ingredients;
+  - A18 branded QR cards;
+  - A4 Start fresh.
+- **Also fixed:** a Back Office window race (a late closeModal after a save's reload closed a newer window; test `bo_modal_race`).
+- **QA:** `tests/run_all.sh --runs 1` gives 54/54 suites, 3,414 checks, 0 failing.
+- **Security:** 009 passed two rounds. The client review said "ready", and its 3 low items (receipt line breaks, drawer setting manager-only + audited, last-sale button cleared on lock) are fixed.
+- **After the owner runs 009:** mark 009 frozen in CLAUDE.md (next script 010), add checkpoint 13 ("1.3 live"), and update the changelog.
+- **Open, optional:** a password re-check before Start fresh (offered; the owner hasn't answered).
+- **Waves 2 and 3** (releases 1.4 and 1.5) start only when the owner says.
+
+## Release 1.3 plan (all waves; Wave 1 done)
 Full list with decisions: `docs/owner-feedback.md` (sections "Release 1.3 …").
 - **Start fresh (A4):** a one-time clear of test sales, shifts, cash and QR orders before opening day, **Nov 8, 2026**. It keeps the menu, stock setup, staff and customers. It is a separate small update and can ship before 1.3, but needs its own go-ahead.
 - **Release 1.3:**
