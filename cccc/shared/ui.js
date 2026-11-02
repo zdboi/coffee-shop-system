@@ -258,12 +258,12 @@ function sortSubcategoryNames(names, typeOf, order){
     const hit = Object.keys(map).find(x => subcategoryKey(x) === k);
     return hit === undefined ? undefined : map[hit];
   });
-  const pos = {};
-  (Array.isArray(order) ? order : []).forEach((n, i) => { const k = subcategoryKey(n); if(typeof n === 'string' && !(k in pos)) pos[k] = i; });
+  const pos = new Map();   // a Map, so names like "constructor" are just names
+  (Array.isArray(order) ? order : []).forEach((n, i) => { const k = subcategoryKey(n); if(typeof n === 'string' && !pos.has(k)) pos.set(k, i); });
   const rows = (names || []).map((name, i) => {
     const k = subcategoryKey(name);
     let t; try{ t = typeFn(name); }catch(e){ t = undefined; }
-    return {name, i, block: subcategoryBlock(t), at: (k in pos) ? pos[k] : Infinity, k};
+    return {name, i, block: subcategoryBlock(t), at: pos.has(k) ? pos.get(k) : Infinity, k};
   });
   rows.sort((a, b) => a.block - b.block || (a.at === b.at ? 0 : a.at < b.at ? -1 : 1)
     || a.k.localeCompare(b.k) || String(a.name).localeCompare(String(b.name)) || a.i - b.i);

@@ -1024,14 +1024,14 @@ function subcategoryOrder(settings){
 function subcategoryTypeMap(recipes){
   const list = (recipes || state.recipes || []).filter(r => r && r.active !== false)
     .slice().sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0) || String(a.name || '').localeCompare(String(b.name || '')));
-  const counts = {}, first = {};
+  const counts = Object.create(null), first = Object.create(null);   // no inherited keys ("constructor" is a name)
   list.forEach(r => {
     const name = posCategoryOf(r), t = recipeTypeOf(r);
-    counts[name] = counts[name] || {};
+    counts[name] = counts[name] || Object.create(null);
     counts[name][t] = (counts[name][t] || 0) + 1;
     if(!(name in first)) first[name] = t;
   });
-  const out = {};
+  const out = Object.create(null);
   Object.keys(counts).forEach(name => {
     let best = first[name], bestN = counts[name][best];
     Object.keys(counts[name]).forEach(t => { if(counts[name][t] > bestN){ best = t; bestN = counts[name][t]; } });
@@ -1043,7 +1043,7 @@ function _subcategoryTypeOf(recipesOrTypes){
   if(typeof recipesOrTypes === 'function') return recipesOrTypes;
   const map = (recipesOrTypes && !Array.isArray(recipesOrTypes) && typeof recipesOrTypes === 'object')
     ? recipesOrTypes : subcategoryTypeMap(Array.isArray(recipesOrTypes) ? recipesOrTypes : undefined);
-  const loose = {};
+  const loose = Object.create(null);
   Object.keys(map).forEach(k => { loose[subcategoryKey(k)] = map[k]; });
   return (name) => Object.prototype.hasOwnProperty.call(map, name) ? map[name] : loose[subcategoryKey(name)];
 }
