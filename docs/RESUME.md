@@ -33,6 +33,7 @@ Full list with decisions: `docs/owner-feedback.md` (sections "Release 1.3 …").
   - **Thermal printing (P1):** Xprinter 58 mm and other ESC/POS printers. Direct Bluetooth from Chrome/Edge on Android, Windows and Mac, found with the browser's printer chooser and reconnected automatically; 58/80 mm, paper cut, cash drawer. **No print helper for now**, so iPad and LAN printers use the print dialog.
   - **Supplied items (A8):** a one-form "buy and resell" item for supplier food and pastries (cost = price paid, margin vs selling price; stock in pieces, one per sale); house-made costing stays.
   - **Option library (A9):** shared option groups (Hot/Iced, take-away cup, extra shot, non-dairy milk swap) applied to many items with per-item untick; a new "swap ingredient" option kind.
+  - **Grams for sauces (A10):** a "weighs" value per produced (and liquid) item, so recipes can use g or mL; stock and cost convert.
   - **P2:** manager "retry without the reward".
   - **Optional:** T3, T4, Senior/PWD, drop `profiles.pin_hash`.
 - **Menu photos (A1):** already exist; no change (owner).
