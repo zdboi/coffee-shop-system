@@ -23,7 +23,9 @@
 --      those lines puts the stock back to what it would be WITHOUT the test
 --      sales. This is on purpose; the preview lists every ingredient whose
 --      stock changes (now -> after).
---   B. SHOP OPEN = at least one counter has an open shift. The QR page gets
+--   B. SHOP OPEN = at least one counter has a shift that is open and was
+--      opened in the last 24 hours (older ones are listed in the Back Office
+--      as "still open for more than 24 hours"). The QR page gets
 --      is_open; when closed it gets no menu items (the stamp card still
 --      works) and qr_place_order answers SHOP_CLOSED.
 --   C. Sub-category order (settings.subcategory_order, a list of names) and,
@@ -83,11 +85,17 @@ end $$;
 -- =============================================================================
 -- B. SHOP OPEN = ANY OPEN SHIFT
 -- =============================================================================
--- True when at least one counter of the shop has a shift that is still open.
+-- True when at least one counter of the shop has a shift that is still open
+-- AND was opened in the last 24 hours (lead decision 2026-11-02: a shift that
+-- somebody forgot to close must not keep QR ordering open for days; the Back
+-- Office lists such shifts, see bo_bootstrap -> stale_open_shifts).
 -- (Shifts are 'ACTIVE' while open and 'CLOSED' after; see shifts_status_check.)
+create index if not exists shifts_open_idx on public.shifts(business_id) where status = 'ACTIVE';
 create or replace function public._shop_is_open(p_biz uuid) returns boolean
 language sql stable security definer set search_path = public as $$
-  select exists (select 1 from public.shifts where business_id = p_biz and status = 'ACTIVE')
+  select exists (select 1 from public.shifts
+                 where business_id = p_biz and status = 'ACTIVE'
+                   and coalesce(opened_at, created_at) > now() - interval '24 hours')
 $$;
 
 -- Public menu for a table QR code: same as 008, plus
@@ -368,7 +376,10 @@ $$;
 
 -- WHICH rows Start fresh removes (one definition, used by the preview AND the
 -- real thing, so the numbers always match). Only the shop p_biz.
---   sales:    dated (transaction_date, else created_at) before p_before, any status
+--   sales:    dated (transaction_date, else created_at) before p_before, any
+--             status; also sales the SERVER received (received_at) before
+--             p_before (a test tablet whose clock was ahead), and unfinished
+--             (HELD) sales created before p_before
 --   refunds:  the refunds of those sales, plus refunds without a sale dated before
 --   stock:    SALE_USAGE lines of those sales, SALE_REVERSAL lines of those
 --             refunds, plus sale / refund stock lines dated before whose sale /
@@ -386,7 +397,10 @@ declare
   v_day date := (p_before at time zone coalesce((select nullif(btrim(timezone), '') from public.settings where business_id = p_biz), 'Asia/Manila'))::date;
 begin
   select coalesce(array_agg(id), '{}') into v_s from public.sales
-    where business_id = p_biz and coalesce(transaction_date, created_at) < p_before;
+    where business_id = p_biz
+      and (coalesce(transaction_date, created_at) < p_before
+           or received_at < p_before
+           or (status = 'HELD' and created_at < p_before));
   select coalesce(array_agg(id), '{}') into v_r from public.refunds
     where business_id = p_biz
       and (sale_id = any(v_s) or (sale_id is null and coalesce(date, created_at) < p_before));
@@ -517,12 +531,16 @@ begin
   if p_before is null or not isfinite(p_before) or p_before > now() then raise exception 'BAD_DATE'; end if;
   if p_confirm is distinct from 'START FRESH' then raise exception 'CONFIRM_REQUIRED'; end if;
   -- Hold the sales tables still while we work, so no counter upload or QR
-  -- order slips in between "check" and "remove". Waits at most 15 seconds.
-  perform set_config('lock_timeout', '15s', true);
+  -- order slips in between "check" and "remove". Waits at most 5 seconds
+  -- (Supabase ends an API request after about 8 seconds); busy -> BUSY_TRY_AGAIN.
+  -- (Later, before many shops share the database: lock only this shop's work,
+  -- e.g. a per-shop advisory lock also taken by fo_sync / qr_place_order,
+  -- instead of whole tables. Security review L1.)
+  perform set_config('lock_timeout', '5s', true);
   begin
     lock table public.shifts, public.sales, public.refunds, public.cash_movements,
                public.inventory_transactions, public.qr_orders in share row exclusive mode;
-  exception when lock_not_available then
+  exception when lock_not_available or deadlock_detected then
     raise exception 'BUSY_TRY_AGAIN';
   end;
   perform set_config('lock_timeout', '0', true);
@@ -541,8 +559,8 @@ begin
   delete from public.loyalty_redemptions where business_id = v_biz and sale_id = any(i.sale_ids);
   delete from public.inventory_transactions where business_id = v_biz and id = any(i.stock_ids);
   delete from public.refunds where business_id = v_biz and id = any(i.refund_ids);
-  delete from public.payments where sale_id = any(i.sale_ids);
-  delete from public.sale_items where sale_id = any(i.sale_ids);
+  delete from public.payments where business_id = v_biz and sale_id = any(i.sale_ids);
+  delete from public.sale_items where business_id = v_biz and sale_id = any(i.sale_ids);
   delete from public.sales where business_id = v_biz and id = any(i.sale_ids);
   delete from public.cash_movements where business_id = v_biz and id = any(i.cash_ids);
   delete from public.shifts where business_id = v_biz and id = any(i.shift_ids);
@@ -737,10 +755,11 @@ begin
              then 'STAFF_MISMATCH' end,
         -- 009: stock below 0 because of this sale
         public._sale_stock_review(p_biz, v_id, p_d->'inventory'),
-        -- 009: a NEW sale dated before the shop's latest Start fresh moment (a
-        -- counter that was offline, or whose clock is wrong). Saved, never
-        -- dropped (it may be a real sale), but the owner checks it.
-        case when v_old is null and v_fresh is not null
+        -- 009: a sale (new, or a HELD one finished now) dated before the shop's
+        -- latest Start fresh moment (a counter that was offline, or whose clock
+        -- is wrong). Saved, never dropped (it may be a real sale), but the
+        -- owner checks it.
+        case when v_fresh is not null
                   and public._to_ts(v_sale->>'transaction_date') < v_fresh then 'BEFORE_START_FRESH' end), '');
     end if;
     v_sale := v_sale || jsonb_build_object('needs_review', v_reason is not null, 'review_reason', v_reason,
@@ -906,21 +925,77 @@ begin
   end case;
 end $$;
 
+-- Back Office start-up data: same as 008, plus
+--   stale_open_shifts = [{id, shift_number, cashier_id, cashier_name, device_id,
+--                         device_name, opened_at}] shifts still open after 24 hours,
+--                       oldest first ("Shifts still open for more than 24 hours").
+create or replace function public.bo_bootstrap() returns jsonb
+language plpgsql stable security invoker set search_path = public as $$
+declare v_biz uuid := public.current_business_id(); v_upd uuid[];
+begin
+  if v_biz is null then raise exception 'NOT_A_MEMBER'; end if;
+  select coalesce(array_agg(x), '{}') into v_upd from public.staff_pin_update_needed() x;
+  return jsonb_build_object(
+    'server_time', now(),
+    'is_owner', public.is_owner(),
+    'pin_update_needed', to_jsonb(v_upd),
+    'pin_lockouts', coalesce((select jsonb_agg(jsonb_build_object('device_id', e.device_id, 'device_name', e.device_name,
+                        'locked_at', e.locked_at, 'locked_until', e.locked_until) order by e.locked_at desc)
+                      from (select * from public.pin_lock_events
+                            where business_id = v_biz and locked_at > now() - interval '7 days'
+                            order by locked_at desc limit 100) e), '[]'::jsonb),
+    'rank', public.app_rank(),
+    'business', (select to_jsonb(b) from public.businesses b where b.id = v_biz),
+    'settings', (select to_jsonb(s) from public.settings s where s.business_id = v_biz),
+    'staff', coalesce((select jsonb_agg(to_jsonb(st) || jsonb_build_object('has_pin', st.id in (select public.staff_pin_ids()),
+                                                                          'pin_update_needed', st.id = any(v_upd)) order by st.name)
+                       from public.staff st where st.business_id = v_biz), '[]'::jsonb),
+    'categories', coalesce((select jsonb_agg(to_jsonb(x)) from public.categories x where x.business_id = v_biz), '[]'::jsonb),
+    'suppliers', coalesce((select jsonb_agg(to_jsonb(x)) from public.suppliers x where x.business_id = v_biz), '[]'::jsonb),
+    'ingredients', coalesce((select jsonb_agg(to_jsonb(x)) from public.ingredients x where x.business_id = v_biz), '[]'::jsonb),
+    'ingredient_brands', coalesce((select jsonb_agg(to_jsonb(x) order by x.ingredient_id, x.sort_order, x.name)
+                                   from public.ingredient_brands x where x.business_id = v_biz), '[]'::jsonb),
+    'brand_stock', case when public.app_rank() >= 3 then public.ingredient_brand_stock(null) else '[]'::jsonb end,
+    'recipes', coalesce((select jsonb_agg(to_jsonb(x)) from public.recipes x where x.business_id = v_biz), '[]'::jsonb),
+    'recipe_ingredients', coalesce((select jsonb_agg(to_jsonb(x)) from public.recipe_ingredients x where x.business_id = v_biz), '[]'::jsonb),
+    'purchases', coalesce((select jsonb_agg(to_jsonb(x)) from public.purchases x where x.business_id = v_biz), '[]'::jsonb),
+    'production_batches', coalesce((select jsonb_agg(to_jsonb(x)) from public.production_batches x where x.business_id = v_biz), '[]'::jsonb),
+    'waste', coalesce((select jsonb_agg(to_jsonb(x)) from public.waste x where x.business_id = v_biz), '[]'::jsonb),
+    'stock', coalesce((select jsonb_agg(jsonb_build_object('ingredient_id', v.ingredient_id, 'stock', v.stock))
+                       from public.v_ingredient_stock v where v.business_id = v_biz), '[]'::jsonb),
+    'tables', coalesce((select jsonb_agg(to_jsonb(x) order by x.sort_order, x.label) from public.dining_tables x where x.business_id = v_biz), '[]'::jsonb),
+    'floor_shapes', coalesce((select jsonb_agg(to_jsonb(f) order by f.sort_order, f.created_at) from public.floor_shapes f where f.business_id = v_biz), '[]'::jsonb),
+    'devices', coalesce((select jsonb_agg(to_jsonb(x) order by x.device_tag) from public.devices x where x.business_id = v_biz), '[]'::jsonb),
+    'stores', coalesce((select jsonb_agg(to_jsonb(x)) from public.stores x where x.business_id = v_biz), '[]'::jsonb),
+    'open_qr_orders', (select count(*) from public.qr_orders where business_id = v_biz and status in ('PENDING','PREPARING','READY')),
+    'customer_count', (select count(*) from public.customers where business_id = v_biz and merged_into is null),
+    -- 009: shifts still open for more than 24 hours (they no longer keep the QR
+    -- page open, but they still block Start fresh until someone closes them)
+    'stale_open_shifts', coalesce((select jsonb_agg(jsonb_build_object('id', x.id, 'shift_number', x.shift_number,
+                              'cashier_id', x.cashier_id, 'cashier_name', x.cashier_name, 'device_id', x.device_id,
+                              'device_name', (select d.device_name from public.devices d where d.id = x.device_id),
+                              'opened_at', coalesce(x.opened_at, x.created_at)) order by coalesce(x.opened_at, x.created_at))
+                            from public.shifts x
+                            where x.business_id = v_biz and x.status = 'ACTIVE'
+                              and coalesce(x.opened_at, x.created_at) <= now() - interval '24 hours'), '[]'::jsonb)
+  );
+end $$;
+
 -- =============================================================================
 -- Who may call the new / re-made functions
 -- =============================================================================
 -- Every function this script makes is first locked, then opened only where meant:
 --   logged-in users (each checks the caller's shop / role itself):
 --     start_fresh_preview, start_fresh (owner only, checked inside),
---     fo_customer_list (paired counters only, checked inside)
+--     fo_customer_list (paired counters only, checked inside), bo_bootstrap (as in 004)
 --   anyone with a table QR code: get_qr_menu, qr_place_order (as in 004)
 --   everything else here is internal (no API access).
 do $$
 declare f record;
   mine text[] := array['_valid_subcategory_order','_settings_check','_shop_is_open','get_qr_menu','qr_place_order',
     'fo_customer_list','_sale_stock_review','_fresh_start_before','_start_fresh_ids','_start_fresh_summary',
-    '_require_owner','start_fresh_preview','start_fresh','_fo_apply'];
-  member_fns text[] := array['start_fresh_preview','start_fresh','fo_customer_list'];
+    '_require_owner','start_fresh_preview','start_fresh','_fo_apply','bo_bootstrap'];
+  member_fns text[] := array['start_fresh_preview','start_fresh','fo_customer_list','bo_bootstrap'];
   public_fns text[] := array['get_qr_menu','qr_place_order'];
 begin
   for f in
@@ -937,8 +1012,8 @@ begin
 end $$;
 
 -- The new table: nobody writes it through the API (only start_fresh does).
-revoke all on public.start_fresh_runs from anon;
-revoke insert, update, delete, truncate on public.start_fresh_runs from authenticated;
+revoke all on public.start_fresh_runs from anon, authenticated;
+grant select on public.start_fresh_runs to authenticated;   -- rows: owner only (RLS above)
 
 commit;
 
