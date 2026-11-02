@@ -524,7 +524,7 @@ const Printer = (() => {
           if(ok) continue;
         }
         conn.connected = !!(conn.device && conn.device.gatt && conn.device.gatt.connected);
-        throw e;
+        throw _withWritten(e, off);
       }
     }
   }
@@ -578,7 +578,9 @@ const Printer = (() => {
     const port = conn.port;
     if(!port || !port.writable) throw fail('NOT_CONNECTED');
     const w = port.writable.getWriter();
-    try{ for(const part of chunk(bytes, 512)) await w.write(part); }
+    let off = 0;
+    try{ for(const part of chunk(bytes, 512)){ await w.write(part); off += part.length; } }
+    catch(e){ throw _withWritten(e, off); }
     finally { try{ w.releaseLock(); }catch(e){} }
   }
 
@@ -617,6 +619,13 @@ const Printer = (() => {
   }
   function directMode(){ return (current.connection === 'bluetooth' && support().bluetooth) || (current.connection === 'serial' && support().serial); }
 
+  // Errors from a print job carry how many bytes reached the printer before it stopped
+  // (e.written; 0 = nothing was sent, so nothing came out of the printer).
+  function _withWritten(e, n){
+    if(!(e instanceof Error)) e = new Error(String(e || 'write failed'));
+    try{ e.written = Math.max(0, n | 0); }catch(x){}
+    return e;
+  }
   let queue = Promise.resolve();
   // Send raw bytes (one job at a time). Reconnects quietly first.
   function sendBytes(bytes){
@@ -630,6 +639,10 @@ const Printer = (() => {
         lastPrintedAt = new Date().toISOString(); lastError = '';
         emit('printed', {at: lastPrintedAt, bytes: bytes.length});
         return true;
+      } catch(e){
+        e = _withWritten(e, e && e.written);
+        e.partial = e.written > 0;
+        throw e;
       } finally { busy = false; emit('status'); }
     });
     queue = job.catch(() => null);
@@ -639,29 +652,59 @@ const Printer = (() => {
     if(typeof receiptHtml !== 'function' || typeof openPrintWindow !== 'function') return null;
     return openPrintWindow(receiptHtml(sale, items, payments, Object.assign({paperWidth: current.paper_width}, opts)), opts.autoPrint !== false);
   }
-  // Print a receipt. Same arguments as receiptHtml (+ the extra opts of receiptBytes and
-  // fallback: false to never open the print screen).
-  // Returns {ok, method: 'bluetooth'|'serial'|'dialog', error?}.
-  //   Print screen chosen (or direct printing impossible here) -> the print screen, ok true.
-  //   Direct printing fails -> last_error set; the print screen opens unless fallback === false.
+  // Was the drawer-kick command (ESC p, sent right after ESC @) among the bytes that reached the printer?
+  const DRAWER_END = 7;   // ESC @ (2 bytes) + ESC p 0 25 250 (5 bytes)
+  function _drawerSent(bytes, written){
+    return written >= DRAWER_END && bytes[2] === ESC && bytes[3] === 0x70;
+  }
+  // Print a receipt. Same arguments as receiptHtml, plus the extra opts of receiptBytes, and:
+  //   auto: true      -> printing by itself after a sale: never opens the print screen on failure
+  //   fallback: false -> never open the print screen on failure (same as auto)
+  // Returns {ok, method: 'bluetooth'|'serial'|'dialog', partial?, error?, drawer_kick_sent}.
+  //   Print screen chosen (or direct printing impossible here) -> the print screen, ok true
+  //     (for auto prints too: that is the counter's chosen way to print).
+  //   Direct printing fails BEFORE any byte reached the printer -> last_error set; the print
+  //     screen opens (unless auto / fallback false): {ok:false, method:'dialog', error}.
+  //   Fails PART-WAY (some paper came out) -> never the print screen by itself (it would
+  //     print a second copy): {ok:false, partial:true, method, error}. The counter offers
+  //     "Print again" / "Use print screen" (printReceipt(..., {fallback:false}) / receiptHtml).
+  //   drawer_kick_sent: the cash drawer command reached the printer (the drawer opened).
   async function printReceipt(sale, items, payments, opts){
     opts = opts || {};
-    if(!directMode()){ _dialog(sale, items, payments, opts); return {ok: true, method: 'dialog'}; }
+    if(!directMode()){ _dialog(sale, items, payments, opts); return {ok: true, method: 'dialog', drawer_kick_sent: false}; }
+    const bytes = receiptBytes(sale, items, payments, opts);
     try{
-      await sendBytes(receiptBytes(sale, items, payments, opts));
-      return {ok: true, method: conn.type};
+      await sendBytes(bytes);
+      return {ok: true, method: conn.type, drawer_kick_sent: _drawerSent(bytes, bytes.length)};
     }catch(e){
-      const m = friendly(e, current.connection); setError(m);
-      if(opts.fallback !== false){ _dialog(sale, items, payments, opts); return {ok: false, method: 'dialog', error: m}; }
-      return {ok: false, method: current.connection, error: m};
+      const written = (e && e.written) || 0;
+      const partial = written > 0;
+      const m = partial ? 'Printing stopped part-way. ' + friendly(e, current.connection) : friendly(e, current.connection);
+      setError(m);
+      const drawer = _drawerSent(bytes, written);
+      if(partial) return {ok: false, partial: true, method: current.connection, error: m, drawer_kick_sent: drawer};
+      if(opts.fallback !== false && !opts.auto){ _dialog(sale, items, payments, opts); return {ok: false, partial: false, method: 'dialog', error: m, drawer_kick_sent: false}; }
+      return {ok: false, partial: false, method: current.connection, error: m, drawer_kick_sent: false};
     }
   }
-  // A short test slip. opts.openDrawer: also kick the drawer. Returns {ok, error?}.
+  // A short test slip. opts.openDrawer: also kick the drawer (the counter makes that
+  // manager-only and writes the audit entry). Returns
+  //   {ok, method, partial, error?, drawer_requested, drawer_kick_sent, printer_name, at}
+  //   drawer_kick_sent: true when the drawer command reached the printer (even if the slip
+  //   then stopped part-way), so the counter knows to write "Cash drawer opened (test slip)".
   async function printTest(opts){
     opts = opts || {};
-    if(!directMode()) return {ok: false, error: current.connection === 'dialog' ? 'Choose a Bluetooth printer or printer port first.' : supportText()};
-    try{ await sendBytes(testBytes(opts)); return {ok: true, method: conn.type}; }
-    catch(e){ const m = friendly(e, current.connection); setError(m); return {ok: false, error: m}; }
+    const base = {drawer_requested: !!opts.openDrawer, drawer_kick_sent: false, printer_name: state_device_name(), at: new Date().toISOString()};
+    if(!directMode()) return Object.assign(base, {ok: false, partial: false, method: current.connection, error: current.connection === 'dialog' ? 'Choose a Bluetooth printer or printer port first.' : supportText()});
+    const bytes = testBytes(opts);
+    try{
+      await sendBytes(bytes);
+      return Object.assign(base, {ok: true, partial: false, method: conn.type, printer_name: state_device_name(), drawer_kick_sent: !!opts.openDrawer && _drawerSent(bytes, bytes.length)});
+    }catch(e){
+      const written = (e && e.written) || 0;
+      const m = (written > 0 ? 'Printing stopped part-way. ' : '') + friendly(e, current.connection); setError(m);
+      return Object.assign(base, {ok: false, partial: written > 0, method: current.connection, error: m, drawer_kick_sent: !!opts.openDrawer && _drawerSent(bytes, written)});
+    }
   }
 
   return {
