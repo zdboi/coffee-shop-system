@@ -505,7 +505,9 @@
     const next = (card.milestones || []).find(m => m.status === 'locked' && m.stamp > n);
     if(next){
       const left = next.stamp - n;
-      const txt = n === 0 ? `Get your first stamp with today's order. ${left} to ${rewardName(next)}.`
+      // Closed (1.3): there's no "today's order" to stamp.
+      const first = isOpen() ? 'Get your first stamp with today\'s order.' : 'Get your first stamp on your next visit.';
+      const txt = n === 0 ? `${first} ${left} to ${rewardName(next)}.`
         : `${left} more ${left === 1 ? 'stamp' : 'stamps'} to ${rewardName(next)}.`;
       return {line: `${of} · ${txt}`, sr: `${of} stamps. ${txt}`};
     }
