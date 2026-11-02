@@ -616,15 +616,18 @@ function optionStockRemoves(option){
   if(!option || !Array.isArray(option.removes)) return [];
   return option.removes.filter(e => e && e.ingredient_id && _hasNum(e.quantity)).map(e => ({ingredient_id: e.ingredient_id, quantity: Number(e.quantity)}));
 }
-// The recipe's option a chosen modifier refers to (server rule): group id + option id first,
-// else group name + label. -> {group, option} | null
-function findRecipeOption(recipe, m){
-  if(!m) return null;
+// The recipe's option a chosen modifier refers to (server rule, _recipe_stock_lines): group id +
+// option id first, else group name + label. -> {group, option} | null
+// strictIds: true -> a modifier that has a group_id is matched by ids only (the waste check,
+// _resolve_options).
+function findRecipeOption(recipe, m, strictIds){
+  if(!m || typeof m !== 'object') return null;
   const groups = recipeOptionGroups(recipe);
   const opts = (g) => Array.isArray(g.options) ? g.options : [];
   if(m.group_id != null && m.option_id != null){
     for(const g of groups){ if(g.id === m.group_id){ const o = opts(g).find(x => x && x.id === m.option_id); if(o) return {group: g, option: o}; } }
   }
+  if(strictIds && Object.prototype.hasOwnProperty.call(m, 'group_id')) return null;
   if(m.group != null && m.label != null){
     for(const g of groups){ if(g.name === m.group){ const o = opts(g).find(x => x && x.label === m.label); if(o) return {group: g, option: o}; } }
   }
@@ -662,21 +665,24 @@ function modifiersFromSelections(recipe, selections){
 // qr_place_order does). selections: [{group_id, option_id}] or modifiers [{group, label}].
 // -> {ok, missing: [{group_id, name}]  (required groups with nothing chosen, menu order),
 //     problems: [{group_id, option_id, group, label, reason: 'UNKNOWN'|'DUPLICATE'|'ONE_ONLY'}]}
-function checkOptionSelections(recipe, selections){
+// opts.strictIds: match modifiers that carry a group_id by ids only (as the server's waste check).
+// The result also has resolved: [{group, label, group_id, option_id}] for the options found.
+function checkOptionSelections(recipe, selections, opts){
   const groups = recipeOptionGroups(recipe);
-  const seen = new Set(), chosenGroups = {}, problems = [];
+  const seen = new Set(), chosenGroups = {}, problems = [], resolved = [];
   (selections || []).forEach(s => {
     if(!s) return;
-    const f = findRecipeOption(recipe, s);
+    const f = findRecipeOption(recipe, s, !!(opts && opts.strictIds));
     if(!f){ problems.push({group_id: s.group_id || null, option_id: s.option_id || null, group: s.group || null, label: s.label || null, reason: 'UNKNOWN'}); return; }
     const key = f.group.id + ':' + f.option.id;
     const base = {group_id: f.group.id, option_id: f.option.id, group: f.group.name, label: f.option.label};
     if(seen.has(key)){ problems.push(Object.assign(base, {reason: 'DUPLICATE'})); return; }
     if(chosenGroups[f.group.id] && !f.group.multi_select){ problems.push(Object.assign(base, {reason: 'ONE_ONLY'})); return; }
     seen.add(key); chosenGroups[f.group.id] = true;
+    resolved.push({group: f.group.name, label: f.option.label, group_id: f.group.id, option_id: f.option.id});
   });
   const missing = groups.filter(g => g.required && !chosenGroups[g.id]).map(g => ({group_id: g.id, name: g.name}));
-  return {ok: !missing.length && !problems.length, missing, problems};
+  return {ok: !missing.length && !problems.length, missing, problems, resolved};
 }
 // Just the required groups with nothing chosen: [{group_id, name}] ([] = fine).
 function missingRequiredGroups(recipe, selections){ return checkOptionSelections(recipe, selections).missing; }
@@ -744,18 +750,21 @@ const WASTE_REASONS = [
   {id: 'OTHER',         label: 'Other', needs_note: true},
 ];
 function wasteReasonLabel(id){ const r = WASTE_REASONS.find(x => x.id === id); return r ? r.label : String(id == null ? '' : id); }
-const WASTE_MAX_ITEMS = 30, WASTE_MAX_RECIPE_QTY = 100, WASTE_MAX_BASE_QTY = 1000000, WASTE_NOTE_MAX = 200;
+const WASTE_MAX_ITEMS = 30, WASTE_MAX_RECIPE_QTY = 100, WASTE_MAX_BASE_QTY = 1000000, WASTE_NOTE_MAX = 200, WASTE_MAX_OPTIONS = 20;
 function _codeError(code){ const e = new Error(code); e.code = code; return e; }
 // buildWasteData({reason, note, staff_id, shift_id, items, approved_by, approval_token, id?, logged_at?})
 //   items: [{recipe_id, quantity, modifiers}] (modifiers: cart modifiers, or {group_id, option_id}/{group, label})
 //        | [{ingredient_id, quantity, unit}]  (unit: any unit that converts; empty = stock unit)
 // -> the op's data, ready for Sync.queue('waste', data):
 //   {id, reason, note, staff_id, shift_id, logged_at, items, approved_by, approval_token}
-//   items sent as {recipe_id, quantity, modifiers: [{group, label, group_id, option_id}]} or
+//   items sent as {recipe_id, quantity, modifiers: [{group, label, group_id, option_id}] (the options
+//   found on the item's current menu, like the server keeps)} or
 //   {ingredient_id, quantity, unit}. id is made ONCE here: keep the same data for retries.
 // Throws an Error whose message/code is the server's code (friendlyError gives the words):
-//   BAD_WASTE_REASON, NOTE_REQUIRED, BAD_WASTE (no items / > 30 / unreadable), BAD_QUANTITY,
-//   BAD_UNIT, UNKNOWN_RECIPE / UNKNOWN_INGREDIENT (not in this counter's menu copy),
+//   BAD_WASTE_REASON, NOTE_REQUIRED, BAD_WASTE (no items / > 30 / unreadable; an option not on the
+//   item now, chosen twice, two in a pick-one group, > 20 options: e.problems lists them),
+//   OPTION_REQUIRED (a required group not chosen: e.missing = [{group_id, name}]; the server would say
+//   BAD_WASTE), BAD_QUANTITY, BAD_UNIT, UNKNOWN_RECIPE / UNKNOWN_INGREDIENT (not in this counter's menu copy),
 //   APPROVAL_REQUIRED (COMPLIMENTARY without approved_by + approval_token).
 function buildWasteData(input){
   input = input || {};
@@ -770,15 +779,18 @@ function buildWasteData(input){
     const q = Number(it.quantity);
     if(!_hasNum(it.quantity) || q <= 0) throw _codeError('BAD_QUANTITY');
     if(it.recipe_id){
-      if(!state.recipes.some(r => r.id === it.recipe_id)) throw _codeError('UNKNOWN_RECIPE');
+      const rec = state.recipes.find(r => r.id === it.recipe_id);
+      if(!rec) throw _codeError('UNKNOWN_RECIPE');
       if(q > WASTE_MAX_RECIPE_QTY) throw _codeError('BAD_QUANTITY');
-      const mods = (Array.isArray(it.modifiers) ? it.modifiers : []).filter(m => m && typeof m === 'object').map(m => {
-        const o = {group: m.group != null ? m.group : null, label: m.label != null ? m.label : null};
-        if(m.group_id != null) o.group_id = m.group_id;
-        if(m.option_id != null) o.option_id = m.option_id;
-        return o;
-      });
-      return {recipe_id: it.recipe_id, quantity: q, modifiers: mods};
+      // options checked against the menu like the server (_resolve_options): at most 20, each on
+      // the item now, none twice, one per pick-one group, every required group chosen.
+      if(it.modifiers != null && !Array.isArray(it.modifiers)) throw _codeError('BAD_WASTE');
+      const mods = it.modifiers || [];
+      if(mods.length > WASTE_MAX_OPTIONS || mods.some(m => !m || typeof m !== 'object' || Array.isArray(m))) throw _codeError('BAD_WASTE');
+      const chk = checkOptionSelections(rec, mods, {strictIds: true});
+      if(chk.problems.length){ const e = _codeError('BAD_WASTE'); e.problems = chk.problems; e.recipe_id = rec.id; throw e; }
+      if(chk.missing.length){ const e = _codeError('OPTION_REQUIRED'); e.missing = chk.missing; e.recipe_id = rec.id; throw e; }
+      return {recipe_id: it.recipe_id, quantity: q, modifiers: chk.resolved};
     }
     if(it.ingredient_id){
       const ing = ingredientById(it.ingredient_id);
