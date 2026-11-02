@@ -608,6 +608,7 @@ function lockSession(){
   try{ sessionStorage.removeItem(STAFF_SESSION_STORAGE); }catch(e){}
   posState.currentUser = null; posState.loginExpiresAt = null;
   posState.cart = []; posState.discount = null; posState.customer = null; posState.qrOrder = null; posState.resumingHeldSaleId = null; posState.reward = null;
+  posState.lastSaleId = null;          // the next person doesn't get "Print receipt" for this person's sale
   // Customers screen: forget what was shown (a manager's money view must not stay after locking);
   // answers still on their way are thrown away.
   custView.list = null; custView.detail = null; custView.selected = null; custView.q = '';
@@ -1018,7 +1019,7 @@ async function showFailedOps(){
   openModal({title:'Uploads that need attention', wide:true, body: list.length ? `
     <p class="hint" style="margin-top:0;">The server refused these. They are still saved on this counter. Usually this means a setting changed (e.g. a staff member was removed). Retry, or download the details for the owner.</p>
     <div class="table-wrap"><table><thead><tr><th>When</th><th>Type</th><th>Reason</th><th></th></tr></thead><tbody>
-    ${list.map(f=>`<tr><td>${fmtDateTime(f.queued_at)}</td><td>${escapeHtml(opTypeLabel(f.type))}</td><td class="text-light">${escapeHtml(friendlyError({message:f.error}))}</td>
+    ${list.map(f=>`<tr><td>${fmtDateTime(f.queued_at)}</td><td>${escapeHtml(opTypeLabel(f.type))}</td><td class="text-light">${escapeHtml(failedReasonText(f))}</td>
       <td class="failed-acts"><button class="btn btn-sm btn-outline" data-retry="${f.seq}">Retry</button> <button class="btn btn-sm btn-ghost" data-drop="${f.seq}">Dismiss</button>
         ${rewardRefused(f) ? (hasRole('MANAGER') ? `<button class="btn btn-sm btn-amber" data-noreward="${f.seq}">Retry without the reward</button>` : '<div class="hint failed-hint">A manager can retry this sale without the stamp reward.</div>') : ''}</td></tr>`).join('')}
     </tbody></table></div>` : '<p>Nothing failed. Everything uploaded.</p>',
@@ -1055,6 +1056,13 @@ async function showFailedOps(){
    the same sale id, a new upload id, no reward, totals worked out again by the shared maths,
    the payment exactly as taken (the server flags a short payment for the owner to review). */
 const REWARD_REFUSAL_CODES = ['REWARD_NOT_AVAILABLE', 'REWARD_AMOUNT_MISMATCH'];
+// Plain words for a refused upload (a discounted sale whose approval ran out gets its own sentence).
+function failedReasonText(f){
+  if(f && f.type === 'sale' && errorCode(f.error) === 'APPROVAL_INVALID' && f.data && f.data.sale && Number(f.data.sale.discount_amount) > 0){
+    return 'The manager approval for this discount has expired or was already used. To record it, ring the sale up again and ask a manager to approve the discount.';
+  }
+  return friendlyError({message: f && f.error});
+}
 function rewardRefused(f){
   return !!(f && f.type === 'sale' && f.data && f.data.sale && f.data.sale.status === 'COMPLETED' && REWARD_REFUSAL_CODES.includes(errorCode(f.error)));
 }
@@ -2486,8 +2494,8 @@ function renderPrinterScreen(){
   const st = Printer.settings();
   const sup = Printer.support();
   const mgr = hasRole('MANAGER');
-  const toggle = (id, on, title, sub) => `<label class="pr-toggle" for="${id}"><span><b>${escapeHtml(title)}</b><small>${escapeHtml(sub)}</small></span>
-    <span class="switch"><input type="checkbox" id="${id}" ${on?'checked':''}><span class="slider-tog"></span></span></label>`;
+  const toggle = (id, on, title, sub, locked) => `<label class="pr-toggle ${locked?'locked':''}" for="${id}"><span><b>${escapeHtml(title)}</b><small>${escapeHtml(sub)}</small></span>
+    <span class="switch"><input type="checkbox" id="${id}" ${on?'checked':''} ${locked?'disabled':''}><span class="slider-tog"></span></span></label>`;
   content.innerHTML = `
     <div class="printer-page">
       <div class="card pr-card pr-wide" id="pr-status"></div>
@@ -2514,7 +2522,7 @@ function renderPrinterScreen(){
         <div class="pr-row"><span class="pr-label">Peso sign on paper</span>${segHtml('peso_style', [{v:'P',l:'P150.00'},{v:'PHP',l:'PHP 150.00'},{v:'none',l:'150.00'}], st.peso_style)}</div>
         <div class="pr-row"><span class="pr-label">Copies of each receipt</span>${segHtml('copies', [{v:1,l:'1'},{v:2,l:'2'},{v:3,l:'3'}], st.copies)}</div>
         ${toggle('pr-auto', st.auto_print, 'Print the receipt after each sale', 'Off: after a sale, tap "Print receipt" on the order screen when the customer wants one.')}
-        ${toggle('pr-drawer', st.open_drawer_on_cash, 'Open the cash drawer on cash sales', 'Needs a cash drawer plugged into the printer.')}
+        ${toggle('pr-drawer', st.open_drawer_on_cash, 'Open the cash drawer on cash sales', mgr ? 'Needs a cash drawer plugged into the printer.' : (st.open_drawer_on_cash ? 'On.' : 'Off.') + ' Only a manager can change this.', !mgr)}
       </div>
       <div class="card pr-card">
         <h3 class="card-title">Check the printer</h3>
@@ -2543,12 +2551,17 @@ function renderPrinterScreen(){
     const b = e.target.closest('[data-v]'); if(!b) return;
     const key = seg.dataset.seg;
     const v = key === 'peso_style' ? b.dataset.v : Number(b.dataset.v);
+    const before = Printer.settings()[key];
     await Printer.saveSettings({[key]: v});
+    if(key === 'copies' && Number(before) !== v) queueAudit('Receipt copies changed', `${before} → ${v} (by ${posState.currentUser ? posState.currentUser.name : ''})`);
     seg.querySelectorAll('[data-v]').forEach(x=>{ const on = x === b; x.classList.toggle('active', on); x.setAttribute('aria-pressed', String(on)); });
     toast('Saved');
   }));
-  document.getElementById('pr-auto').onchange = async (e)=>{ await Printer.saveSettings({auto_print: e.target.checked}); toast(e.target.checked ? 'Receipts print after each sale' : 'Receipts print only when you tap Print receipt'); };
-  document.getElementById('pr-drawer').onchange = async (e)=>{ await Printer.saveSettings({open_drawer_on_cash: e.target.checked}); toast(e.target.checked ? 'The drawer opens on cash sales' : 'The drawer no longer opens by itself'); };
+  const who = ()=> posState.currentUser ? posState.currentUser.name : '';
+  document.getElementById('pr-auto').onchange = async (e)=>{ await Printer.saveSettings({auto_print: e.target.checked}); queueAudit('Print receipt after each sale: ' + (e.target.checked ? 'on' : 'off'), 'by ' + who()); toast(e.target.checked ? 'Receipts print after each sale' : 'Receipts print only when you tap Print receipt'); };
+  document.getElementById('pr-drawer').onchange = async (e)=>{
+    if(!hasRole('MANAGER')){ e.target.checked = !e.target.checked; toast('Only a manager can change this.', 'warn'); return; }
+    await Printer.saveSettings({open_drawer_on_cash: e.target.checked}); queueAudit('Cash drawer on cash sales: ' + (e.target.checked ? 'on' : 'off'), 'by ' + who()); toast(e.target.checked ? 'The drawer opens on cash sales' : 'The drawer no longer opens by itself'); };
   const test = async (btn, drawer)=> busyRun(btn, async ()=>{
     if(drawer && !hasRole('MANAGER')){ toast('Only a manager can open the cash drawer.', 'warn'); return; }
     if(!printerDirect()){ toast('Connect a Bluetooth printer or printer port first.', 'warn'); return; }

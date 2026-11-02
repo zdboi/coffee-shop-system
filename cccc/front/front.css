@@ -451,6 +451,8 @@
 .pr-row .seg-btn{min-height:44px;padding:6px 16px;font-size:14px;}
 .pr-toggle{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:8px 0;border-bottom:1px solid var(--cc-line);cursor:pointer;min-height:var(--cc-touch);}
 .pr-toggle:last-child{border-bottom:none;}
+.pr-toggle.locked{cursor:default;}
+.pr-toggle.locked .switch{opacity:.55;}
 .pr-toggle > span:first-child{display:flex;flex-direction:column;gap:2px;}
 .pr-toggle b{font-size:14.5px;color:var(--cc-ink);}
 .pr-toggle small{font-size:13px;color:var(--cc-muted);}
