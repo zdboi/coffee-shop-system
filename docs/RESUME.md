@@ -34,6 +34,7 @@ Full list with decisions: `docs/owner-feedback.md` (sections "Release 1.3 …").
   - **Supplied items (A8):** a one-form "buy and resell" item for supplier food and pastries (cost = price paid, margin vs selling price; stock in pieces, one per sale); house-made costing stays.
   - **Option library (A9):** shared option groups (Hot/Iced, take-away cup, extra shot, non-dairy milk swap) applied to many items with per-item untick; a new "swap ingredient" option kind.
   - **Grams for sauces (A10):** a "weighs" value per produced (and liquid) item, so recipes can use g or mL; stock and cost convert.
+  - **Expenses (A11):** an "Operating supplies" category counted as an expense (not stock), an Expenses log (rent, utilities, internet, wages…) and a monthly net income report.
   - **P2:** manager "retry without the reward".
   - **Optional:** T3, T4, Senior/PWD, drop `profiles.pin_hash`.
 - **Menu photos (A1):** already exist; no change (owner).
