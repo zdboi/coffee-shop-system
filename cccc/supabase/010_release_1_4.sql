@@ -470,16 +470,19 @@ create or replace function public._recipe_options_build() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare v_own jsonb; v_new jsonb;
 begin
+  -- (security review L7) an own option may never carry "removes": only the
+  -- library's SWAP options do, worked out by the database. Any sent is dropped.
   select coalesce(jsonb_agg(
            case when jsonb_typeof(g->'options') = 'array'
-                     and exists (select 1 from jsonb_array_elements(g->'options') o where jsonb_typeof(o->'extras') = 'array')
+                     and exists (select 1 from jsonb_array_elements(g->'options') o
+                                 where jsonb_typeof(o->'extras') = 'array' or o ? 'removes')
                 then g || jsonb_build_object('options', (
                        select jsonb_agg(case when jsonb_typeof(o->'extras') = 'array'
-                                             then o || jsonb_build_object('extras', public._option_extras(new.business_id, o))
+                                             then (o - 'removes') || jsonb_build_object('extras', public._option_extras(new.business_id, o))
                                                     || jsonb_build_object(
                                                          'ingredient_id', public._option_extras(new.business_id, o)->0->'ingredient_id',
                                                          'ingredient_qty_delta', coalesce(public._option_extras(new.business_id, o)->0->'quantity', '0'::jsonb))
-                                             else o end order by x.ord)
+                                             else o - 'removes' end order by x.ord)
                        from jsonb_array_elements(g->'options') with ordinality x(o, ord)))
                 else g end
            order by y.ord), '[]'::jsonb)
@@ -587,10 +590,12 @@ $$;
 
 -- True when the ingredient is an operating supply (its category is an
 -- EXPENSE category): it is never counted as stock.
-create or replace function public._is_expense_item(p_ingredient uuid) returns boolean
+-- (Only the shop p_biz's ingredients and categories count.)
+drop function if exists public._is_expense_item(uuid);
+create or replace function public._is_expense_item(p_biz uuid, p_ingredient uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from public.ingredients i join public.categories c on c.id = i.category_id
-                 where i.id = p_ingredient and c.kind = 'EXPENSE')
+                 where i.id = p_ingredient and i.business_id = p_biz and c.business_id = p_biz and c.kind = 'EXPENSE')
 $$;
 
 -- A counter's stock lines, cleaned before they are saved:
@@ -608,7 +613,7 @@ language sql stable security definer set search_path = public as $$
            order by x.ord), '[]'::jsonb)
   from jsonb_array_elements(case when jsonb_typeof(p) = 'array' then p else '[]'::jsonb end) with ordinality x(l, ord)
   left join lateral public._merge_target(p_biz, public._to_uuid(l->>'ingredient_id')) t on true
-  where not public._is_expense_item(coalesce(t.id, public._to_uuid(l->>'ingredient_id')))
+  where not public._is_expense_item(p_biz, coalesce(t.id, public._to_uuid(l->>'ingredient_id')))
 $$;
 
 -- The stock that p_qty of a recipe with these options takes off, worked out by
@@ -718,7 +723,7 @@ begin
       return new;
     end if;
   end if;
-  if public._is_expense_item(new.ingredient_id) then raise exception 'EXPENSE_ITEM_NOT_STOCK'; end if;
+  if public._is_expense_item(new.business_id, new.ingredient_id) then raise exception 'EXPENSE_ITEM_NOT_STOCK'; end if;
   return new;
 end $$;
 drop trigger if exists purchases_expense_check on public.purchases;
@@ -730,10 +735,12 @@ create trigger inventory_tx_expense_check before insert on public.inventory_tran
 
 -- Every existing shop gets the category "Operating supplies" (kind EXPENSE),
 -- once. The owner can rename it or add more in the category manager.
+-- A shop that ALREADY has a category with that name keeps it as it is
+-- (STOCK): its items are never silently taken out of stock; the owner can
+-- switch it to EXPENSE in the category manager.
 insert into public.categories (business_id, name, kind)
 select b.id, 'Operating supplies', 'EXPENSE' from public.businesses b
 where not exists (select 1 from public.categories c where c.business_id = b.id and lower(btrim(c.name)) = 'operating supplies');
-update public.categories set kind = 'EXPENSE' where lower(btrim(name)) = 'operating supplies' and kind <> 'EXPENSE';
 
 -- The expenses log (owner only). One row per cost:
 --   category    SUPPLIES (operating supplies bought), RENT, UTILITIES (power,
@@ -890,6 +897,51 @@ begin
   execute format('alter table public.sync_operations add constraint sync_operations_operation_type_check check (operation_type in (%s))', v_list);
 end $$;
 
+-- The options chosen on ONE item of a recipe, checked against the recipe's
+-- menu (used by the counter waste log). p_mods = [{group_id, option_id}] or
+-- [{group, label}] (the shape the counter keeps). Returns the matched options
+-- as [{group, label, group_id, option_id}] (nothing else is kept). Raises
+-- BAD_WASTE when: more than 20, not readable, an option that isn't on the
+-- menu, the same option twice, two options of a pick-one group, or a required
+-- group with nothing chosen.
+create or replace function public._resolve_options(p_biz uuid, p_recipe uuid, p_mods jsonb) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare v_groups jsonb; m jsonb; g jsonb; o jsonb; v_out jsonb := '[]'::jsonb;
+begin
+  if p_mods is null or jsonb_typeof(p_mods) = 'null' then p_mods := '[]'::jsonb; end if;
+  if jsonb_typeof(p_mods) <> 'array' or jsonb_array_length(p_mods) > 20 then raise exception 'BAD_WASTE'; end if;
+  select case when jsonb_typeof(modifier_groups) = 'array' then modifier_groups else '[]'::jsonb end into v_groups
+    from public.recipes where id = p_recipe and business_id = p_biz;
+  v_groups := coalesce(v_groups, '[]'::jsonb);
+  for m in select value from jsonb_array_elements(p_mods) loop
+    if jsonb_typeof(m) <> 'object' then raise exception 'BAD_WASTE'; end if;
+    g := null; o := null;
+    select x.g, x.o into g, o
+      from (select gg as g, oo as o
+              from jsonb_array_elements(v_groups) gg,
+                   jsonb_array_elements(case when jsonb_typeof(gg->'options') = 'array' then gg->'options' else '[]'::jsonb end) oo
+             where (gg->>'id' = m->>'group_id' and oo->>'id' = m->>'option_id')
+                or (not (m ? 'group_id') and gg->>'name' = m->>'group' and oo->>'label' = m->>'label')
+             limit 1) x;
+    if o is null then raise exception 'BAD_WASTE'; end if;
+    if exists (select 1 from jsonb_array_elements(v_out) e where e->>'group_id' = g->>'id' and e->>'option_id' = o->>'id') then
+      raise exception 'BAD_WASTE';
+    end if;
+    if not coalesce((g->>'multi_select')::boolean, false)
+       and exists (select 1 from jsonb_array_elements(v_out) e where e->>'group_id' = g->>'id') then
+      raise exception 'BAD_WASTE';
+    end if;
+    v_out := v_out || jsonb_build_array(jsonb_build_object('group', g->>'name', 'label', o->>'label',
+                                                           'group_id', g->>'id', 'option_id', o->>'id'));
+  end loop;
+  if exists (select 1 from jsonb_array_elements(v_groups) gg
+             where coalesce((gg->>'required')::boolean, false)
+               and not exists (select 1 from jsonb_array_elements(v_out) e where e->>'group_id' = gg->>'id')) then
+    raise exception 'BAD_WASTE';
+  end if;
+  return v_out;
+end $$;
+
 -- Error codes a counter may see: same as 008, plus (010)
 --   BAD_WASTE         the waste entry is not readable (no id, no items, > 30 items)
 --   BAD_WASTE_REASON  reason is not one of the five
@@ -927,7 +979,7 @@ declare
   v_inv jsonb;                                                  -- 010: the counter's stock lines, cleaned
   v_wid uuid; v_reason_code text; v_staff uuid; v_staff_name text; v_item jsonb; v_item_id uuid;   -- 010: waste
   v_qty numeric; v_lines jsonb; v_cost numeric; v_total_cost numeric := 0; v_day date; v_ing public.ingredients%rowtype;
-  v_shift_id uuid; v_at timestamptz; v_name text; v_unit text;
+  v_shift_id uuid; v_at timestamptz; v_name text; v_unit text; v_mods jsonb;
 begin
   -- fo_sync only lets a paired counter call us with its own device row
   if p_dev.auth_user_id is distinct from auth.uid() then raise exception 'DEVICE_MISMATCH'; end if;
@@ -1270,24 +1322,36 @@ begin
       v_appr := public._use_approval(p_biz, p_dev.auth_user_id, public._to_uuid(p_d->>'approved_by'),
                                      p_d->>'approval_token', 'waste:' || v_wid, v_staff);
     end if;
+    -- Flagged for the owner (saved, never refused), like sales: the staff
+    -- member named is not who the server knows signed in (STAFF_MISMATCH),
+    -- dated more than 1 hour ahead (FUTURE_DATE), more than 7 days back
+    -- (OLD_DATE), or before the shop's latest Start fresh (BEFORE_START_FRESH).
+    v_reason := nullif(concat_ws(', ',
+      case when v_signed is null or v_signed is distinct from v_staff then 'STAFF_MISMATCH' end,
+      case when v_at > now() + interval '1 hour' then 'FUTURE_DATE' end,
+      case when v_at < now() - interval '7 days' then 'OLD_DATE' end,
+      case when v_fresh is not null and v_at < v_fresh then 'BEFORE_START_FRESH' end), '');
     insert into public.waste_logs(id, business_id, device_id, shift_id, staff_id, staff_name, reason, note, logged_at, waste_date,
                                   approved_by, approved_by_name, signed_in_staff_id, needs_review, review_reason)
       values (v_wid, p_biz, p_dev.id, v_shift_id, v_staff, v_staff_name, v_reason_code, left(nullif(btrim(p_d->>'note'), ''), 200),
-              v_at, v_day, v_appr.id, v_appr.name, v_signed,
-              v_signed is null or v_signed is distinct from v_staff,
-              case when v_signed is null or v_signed is distinct from v_staff then 'STAFF_MISMATCH' end);
+              v_at, v_day, v_appr.id, v_appr.name, v_signed, v_reason is not null, v_reason);
     for v_item in select value from jsonb_array_elements(p_d->'items') loop
       if jsonb_typeof(v_item) is distinct from 'object' then raise exception 'BAD_WASTE'; end if;
       v_qty := public._to_num(v_item->>'quantity');
       if v_qty is null or v_qty <= 0 then raise exception 'BAD_QUANTITY'; end if;
-      v_unit := null; v_name := null; v_item_id := null; v_ing := null;
+      v_unit := null; v_name := null; v_item_id := null; v_ing := null; v_mods := null;
       if public._to_uuid(v_item->>'recipe_id') is not null then
         -- a menu item: what a sale of v_qty of it (with these options) takes off
         v_item_id := public._to_uuid(v_item->>'recipe_id');
         select name into v_name from public.recipes where id = v_item_id and business_id = p_biz;
         if v_name is null then raise exception 'UNKNOWN_RECIPE'; end if;
         if v_qty > 100 then raise exception 'BAD_QUANTITY'; end if;
-        v_lines := public._recipe_stock_lines(p_biz, v_item_id, v_qty, v_item->'modifiers');
+        -- the options chosen, checked against the menu (BAD_WASTE when one is
+        -- unknown, chosen twice, two in a pick-one group, or a required group
+        -- is missing); only the resolved {group, label, group_id, option_id}
+        -- are used and kept
+        v_mods := public._resolve_options(p_biz, v_item_id, v_item->'modifiers');
+        v_lines := public._recipe_stock_lines(p_biz, v_item_id, v_qty, v_mods);
       elsif public._to_uuid(v_item->>'ingredient_id') is not null then
         -- a single ingredient, in any unit that converts to its stock unit
         v_ing := public._ingredient_final(p_biz, public._to_uuid(v_item->>'ingredient_id'));
@@ -1312,7 +1376,7 @@ begin
                 case when public._to_uuid(v_item->>'recipe_id') is not null then v_item_id end,
                 case when public._to_uuid(v_item->>'recipe_id') is null then v_ing.id end,
                 v_name, v_qty, v_unit,
-                case when jsonb_typeof(v_item->'modifiers') = 'array' then v_item->'modifiers' else '[]'::jsonb end,
+                coalesce(v_mods, '[]'::jsonb),
                 v_lines, round(v_cost, 4));
       for v_r in select value from jsonb_array_elements(v_lines) loop
         perform public._require_ingredient(p_biz, v_r);
@@ -1395,7 +1459,8 @@ end $$;
 --   merged), MERGE_SUPPLIED_NOT_ALLOWED (the stock item of a supplied menu item),
 --   MERGE_UNIT_MISMATCH (g/kg with mL/L, or two different count units),
 --   BAD_NAME (missing / longer than 80), NAME_TAKEN (another ingredient
---   already has that name).
+--   already has that name), MERGE_SWAP_CONFLICT (a library swap's "from" and
+--   "to" would both end up as the general ingredient).
 create or replace function public._merge_plan(p_biz uuid, p_ids uuid[], p_name text, p_into uuid,
                                               p_base_unit text, p_brand_names jsonb) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
@@ -1439,6 +1504,14 @@ begin
       raise exception 'MERGE_UNIT_MISMATCH';
     end if;
   end loop;
+  -- a library swap whose "from" AND "to" would both become the general
+  -- ingredient would swap it for itself: refused (fix the swap first)
+  if exists (select 1 from public.option_groups og, jsonb_array_elements(og.options) o
+             where og.business_id = p_biz and upper(coalesce(o->>'kind', '')) = 'SWAP'
+               and public._to_uuid(o->>'swap_from_ingredient_id') = any(v_sources || p_into)
+               and public._to_uuid(o->>'swap_to_ingredient_id') = any(v_sources || p_into)) then
+    raise exception 'MERGE_SWAP_CONFLICT';
+  end if;
   -- the name
   if p_into is null and v_name is null then raise exception 'BAD_NAME'; end if;
   if length(coalesce(v_name, '')) > 80 then raise exception 'BAD_NAME'; end if;
@@ -1560,7 +1633,11 @@ declare
   v_plan jsonb; v_g uuid; s jsonb; b jsonb; v_src uuid; v_f numeric; v_nb uuid; v_sb uuid; r record;
   v_actor public.staff%rowtype; v_name text; v_sort integer;
 begin
-  -- one merge at a time per shop, and no counter upload in between
+  -- one merge at a time per shop, and no counter upload in between.
+  -- (Security review L6: the table locks below pause stock writes of EVERY
+  -- shop for the few seconds a merge takes. Fine for one shop; before many
+  -- shops share the database, lock only this shop's work instead, e.g. a
+  -- per-shop advisory lock also taken by fo_sync / apply_changes.)
   perform pg_advisory_xact_lock(hashtext('cccc.merge_ingredients:' || v_biz::text));
   perform set_config('lock_timeout', '5s', true);
   begin
@@ -1716,8 +1793,15 @@ begin
   -- links must be this shop's
   perform public._check_links('ingredients', jsonb_build_object('supplier_id', p_item->'supplier_id', 'category_id', p_item->'category_id'), v_biz);
   if (v_rid is null) <> (v_iid is null) then raise exception 'NOT_A_SUPPLIED_ITEM'; end if;
-  if v_rid is not null and not exists (select 1 from public.recipes where id = v_rid and business_id = v_biz and supplied_ingredient_id = v_iid)
-     then raise exception 'NOT_A_SUPPLIED_ITEM'; end if;
+  -- (security review H1) an edit must name ONE supplied item of THIS shop:
+  -- the recipe AND its stock item both belong to the shop (rows locked so
+  -- nothing changes them meanwhile)
+  if v_rid is not null then
+    perform 1 from public.recipes where id = v_rid and business_id = v_biz and supplied_ingredient_id = v_iid for update;
+    if not found then raise exception 'NOT_A_SUPPLIED_ITEM'; end if;
+    perform 1 from public.ingredients where id = v_iid and business_id = v_biz for update;
+    if not found then raise exception 'NOT_A_SUPPLIED_ITEM'; end if;
+  end if;
   if v_rid is null then
     v_rid := gen_random_uuid(); v_iid := gen_random_uuid();
     insert into public.ingredients(id, business_id, name, base_unit, is_produced_item, active)
@@ -1733,7 +1817,7 @@ begin
          standard_cost = case when p_item ? 'cost_per_piece' then v_cost else standard_cost end,
          active = coalesce((p_item->>'active')::boolean, active, true),
          updated_at = now()
-   where id = v_iid;
+   where id = v_iid and business_id = v_biz;
   update public.recipes
      set name = v_name, recipe_type = v_type, selling_price = v_price,
          category = case when p_item ? 'subcategory' then nullif(btrim(p_item->>'subcategory'), '') else category end,
@@ -1745,7 +1829,7 @@ begin
          sort_order = coalesce(public._to_num(p_item->>'sort_order')::integer, sort_order, 0),
          is_production_recipe = false, supplied_ingredient_id = v_iid,
          updated_at = now()
-   where id = v_rid;
+   where id = v_rid and business_id = v_biz;
   -- exactly one recipe line: 1 piece of the stock item
   delete from public.recipe_ingredients where recipe_id = v_rid and ingredient_id <> v_iid;
   if exists (select 1 from public.recipe_ingredients where recipe_id = v_rid) then
@@ -1812,7 +1896,7 @@ begin
              coalesce((select jsonb_agg(jsonb_build_object('name', i.name, 'quantity', i.quantity, 'unit', i.unit,
                                                            'recipe_id', i.recipe_id, 'ingredient_id', i.ingredient_id,
                                                            'modifiers', i.modifiers, 'cost', i.cost))
-                       from public.waste_log_items i where i.waste_log_id = l.id), '[]'::jsonb) as items
+                       from public.waste_log_items i where i.waste_log_id = l.id and i.business_id = v_biz), '[]'::jsonb) as items
       from public.waste_logs l
       where l.business_id = v_biz and l.waste_date between p_from and p_to
       union all
@@ -2087,7 +2171,118 @@ begin
       left(nullif(btrim(p_note), ''), 200))
     returning * into v_order;
   update public.customers set last_seen_at = now() where id = v_c.id;
-  return jsonb_build_object('order', to_jsonb(v_order));
+  -- (security review M1) the customer gets only {group, label, price_delta, kind}
+  -- per option; the stock details stay stored for the counter
+  return jsonb_build_object('order', public._qr_order_public(v_order));
+end $$;
+
+-- =============================================================================
+-- 11b. Links of the NEW columns stay inside the shop (security review H1)
+-- =============================================================================
+-- apply_changes already checks links, but these tables can also be written
+-- directly by the owner's login through the API. So the database itself
+-- refuses a link to ANOTHER shop's row (FORBIDDEN_ROW), whoever writes it.
+-- Trigger arguments: pairs of (column, table it points at).
+create or replace function public._same_shop_links() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare i integer := 0; v_id uuid; v_owner uuid; v_row jsonb := to_jsonb(new);
+begin
+  while i < tg_nargs loop
+    v_id := public._to_uuid(v_row->>tg_argv[i]);
+    if v_id is not null then
+      execute format('select business_id from public.%I where id = $1', tg_argv[i + 1]) into v_owner using v_id;
+      if v_owner is distinct from new.business_id then raise exception 'FORBIDDEN_ROW'; end if;
+    end if;
+    i := i + 2;
+  end loop;
+  return new;
+end $$;
+drop trigger if exists recipes_same_shop on public.recipes;
+create trigger recipes_same_shop before insert or update of supplied_ingredient_id, business_id on public.recipes
+  for each row execute function public._same_shop_links('supplied_ingredient_id', 'ingredients');
+drop trigger if exists ingredients_same_shop on public.ingredients;
+create trigger ingredients_same_shop before insert or update of merged_into, business_id on public.ingredients
+  for each row execute function public._same_shop_links('merged_into', 'ingredients');
+drop trigger if exists waste_logs_same_shop on public.waste_logs;
+create trigger waste_logs_same_shop before insert or update on public.waste_logs
+  for each row execute function public._same_shop_links('shift_id', 'shifts');
+drop trigger if exists waste_log_items_same_shop on public.waste_log_items;
+create trigger waste_log_items_same_shop before insert or update on public.waste_log_items
+  for each row execute function public._same_shop_links('waste_log_id', 'waste_logs', 'recipe_id', 'recipes', 'ingredient_id', 'ingredients');
+drop trigger if exists expenses_same_shop on public.expenses;
+create trigger expenses_same_shop before insert or update on public.expenses
+  for each row execute function public._same_shop_links('ingredient_id', 'ingredients', 'supplier_id', 'suppliers');
+-- (option_group_recipes has its own check, _option_group_recipe_check.)
+
+-- =============================================================================
+-- 11c. What a CUSTOMER sees of a QR order (security review M1)
+-- =============================================================================
+-- The stored order keeps every option's stock details (the counter needs
+-- them when the order is paid). Answers to the phone keep only, per option,
+-- {group, label, price_delta, kind}.
+create or replace function public._qr_order_public(p_o public.qr_orders) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select case when p_o.id is null then null else
+    (to_jsonb(p_o) - 'auth_user_id') || jsonb_build_object('items', coalesce((
+      select jsonb_agg(case when jsonb_typeof(it) = 'object'
+                            then it || jsonb_build_object('modifiers', coalesce((
+                                   select jsonb_agg(jsonb_build_object('group', m->>'group', 'label', m->>'label',
+                                                                       'price_delta', m->'price_delta',
+                                                                       'kind', coalesce(m->>'kind', 'PLAIN')) order by mo)
+                                   from jsonb_array_elements(case when jsonb_typeof(it->'modifiers') = 'array' then it->'modifiers' else '[]'::jsonb end)
+                                        with ordinality y(m, mo)), '[]'::jsonb))
+                            else it end order by io)
+      from jsonb_array_elements(case when jsonb_typeof(p_o.items) = 'array' then p_o.items else '[]'::jsonb end) with ordinality x(it, io)), '[]'::jsonb))
+  end
+$$;
+
+-- Same as 004, but each order goes through _qr_order_public.
+create or replace function public.qr_my_orders(p_token text) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare v_t public.dining_tables;
+begin
+  v_t := public._qr_table(p_token);
+  if v_t.id is null then return jsonb_build_object('error', 'TABLE_NOT_FOUND'); end if;
+  return jsonb_build_object('orders', coalesce((
+    select jsonb_agg(public._qr_order_public(o) order by o.created_at desc) from public.qr_orders o
+    where o.auth_user_id = auth.uid() and o.business_id = v_t.business_id
+      and (o.status in ('PENDING','PREPARING','READY') or o.created_at > now() - interval '12 hours')), '[]'::jsonb));
+end $$;
+
+-- Same as 004, but the order goes through _qr_order_public.
+create or replace function public.qr_cancel_order(p_token text, p_order_id uuid) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare v_t public.dining_tables; v_o public.qr_orders%rowtype;
+begin
+  v_t := public._qr_table(p_token);
+  if v_t.id is null then return jsonb_build_object('error', 'TABLE_NOT_FOUND'); end if;
+  update public.qr_orders set status = 'CANCELLED'
+    where id = p_order_id and auth_user_id = auth.uid() and business_id = v_t.business_id and status = 'PENDING'
+      and paid_at is null      -- a paid order is never cancelled from the phone
+    returning * into v_o;
+  if v_o.id is null then return jsonb_build_object('error', 'CANNOT_CANCEL'); end if;
+  return jsonb_build_object('order', public._qr_order_public(v_o));
+end $$;
+
+-- =============================================================================
+-- 11d. Menu photos: only the owner uploads / replaces / deletes (review item c)
+-- =============================================================================
+-- 004 let ANY login of the shop (also a paired counter) write into the shop's
+-- folder of the public 'menu-images' bucket. Now only the owner's email login
+-- (rank 3) may; everyone can still SEE the photos (public bucket).
+do $$
+begin
+  if exists (select 1 from pg_namespace where nspname = 'storage') and to_regclass('storage.objects') is not null then
+    execute 'drop policy if exists cccc_menu_images_insert on storage.objects';
+    execute 'drop policy if exists cccc_menu_images_update on storage.objects';
+    execute 'drop policy if exists cccc_menu_images_delete on storage.objects';
+    execute $p$create policy cccc_menu_images_insert on storage.objects for insert to authenticated
+      with check (bucket_id = 'menu-images' and (storage.foldername(name))[1] = public.current_business_id()::text and public.app_rank() >= 3)$p$;
+    execute $p$create policy cccc_menu_images_update on storage.objects for update to authenticated
+      using (bucket_id = 'menu-images' and (storage.foldername(name))[1] = public.current_business_id()::text and public.app_rank() >= 3)$p$;
+    execute $p$create policy cccc_menu_images_delete on storage.objects for delete to authenticated
+      using (bucket_id = 'menu-images' and (storage.foldername(name))[1] = public.current_business_id()::text and public.app_rank() >= 3)$p$;
+  end if;
 end $$;
 
 -- =============================================================================
@@ -2142,10 +2337,11 @@ declare f record;
     '_merge_target','_ingredient_final','_is_expense_item','_clean_stock_lines','_recipe_stock_lines',
     '_ingredient_unit_cost','_expense_item_check','_fo_error_code','_fo_apply','_jsonb_swap_ingredient',
     '_free_brand_name','_merge_plan','merge_ingredients_preview','merge_ingredients','save_supplied_item',
-    'waste_report','net_income_report','_writable_tables','bo_bootstrap','qr_place_order'];
+    'waste_report','net_income_report','_writable_tables','bo_bootstrap','qr_place_order',
+    '_resolve_options','_same_shop_links','_qr_order_public','qr_my_orders','qr_cancel_order'];
   member_fns text[] := array['merge_ingredients_preview','merge_ingredients','save_supplied_item','waste_report',
     'net_income_report','bo_bootstrap'];
-  public_fns text[] := array['qr_place_order'];
+  public_fns text[] := array['qr_place_order','qr_my_orders','qr_cancel_order'];
 begin
   for f in
     select p.oid::regprocedure as sig, p.proname from pg_proc p

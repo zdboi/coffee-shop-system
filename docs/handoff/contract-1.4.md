@@ -1,5 +1,5 @@
 # Release 1.4 (Wave 2): database contract (`cccc/supabase/010_release_1_4.sql`)
-From db-security-engineer's report, 2026-11-03 (net income tax change the same day). If the script and this file disagree, the script wins; tell the lead.
+From db-security-engineer's report, 2026-11-03 (net income tax change and security review fixes H1, M1, L1–L7, a–d the same day). If the script and this file disagree, the script wins; tell the lead.
 "Owner only" = the owner's email login (profile ADMIN, rank 3); anything else gets `NOT_ALLOWED` (`NOT_A_MEMBER` without a shop).
 
 ## 0. Units (shared rule, logic.js must match)
@@ -48,14 +48,17 @@ From db-security-engineer's report, 2026-11-03 (net income tax change the same d
 - **Stock per sale line** (qty Q): recipe lines × Q + Σ chosen options' `extras` × Q − Σ chosen options' `removes` × Q, summed per ingredient, keep amounts > 0. Options without `extras` use the old `ingredient_id × ingredient_qty_delta`.
   Server version: `_recipe_stock_lines` (used for waste; sales still trust the counter's stock lines as before).
 - **Required groups** (e.g. Hot/Iced): `required:true` on the library group; enforced by `qr_place_order` (`OPTION_REQUIRED`, `group` = name) and must be enforced by the counter.
-- **QR page:** `get_qr_menu` options add `kind` (PLAIN/EXTRA/SWAP); never stock amounts. `qr_place_order` takes `{group_id, option_id}` as before (group ids `lib_…`); each saved modifier also carries `kind`, `extras`, `removes`, so paying the order at the counter deducts the swap correctly.
+- **QR page:** `get_qr_menu` options add `kind` (PLAIN/EXTRA/SWAP); never stock amounts. `qr_place_order` takes `{group_id, option_id}` as before (group ids `lib_…`).
+  - The **stored** order (`qr_orders.items`, read by counters) keeps each option's `ingredient_id`, `ingredient_qty_delta`, `kind`, `extras`, `removes`, so paying it at the counter deducts the swap correctly.
+  - **Answers to the phone** (`qr_place_order`, `qr_my_orders`, `qr_cancel_order`) give each option as `{group, label, price_delta, kind}` only (security review M1). The QR page must not rely on any other option field.
+- Own (non-library) options can't carry `removes`; any sent is dropped (only library SWAPs have it).
 
 ## A8. Supplied items (owner only)
 - **`save_supplied_item(p_item jsonb)`** creates/edits, all-or-nothing:
   a recipe (`recipe_type` PASTRY default or FOOD, `supplied_ingredient_id` set) + a stock item in **pcs** + one recipe line "1 pcs" (+ optional restock purchase + PURCHASE stock line).
   - `p_item = {recipe_id?, ingredient_id? (both or neither), name, recipe_type, subcategory, supplier_id, category_id, cost_per_piece, selling_price, image_url, description, pos_visible, qr_visible, active, sort_order, reorder_level, restock?:{quantity, cost_per_piece | total_price, purchase_date, invoice_number, notes, brand_id}}`
   - Returns `{recipe_id, ingredient_id, purchase_id|null, cost_per_piece, selling_price, margin, margin_pct}`; cost = latest purchase price per piece, else the typed cost (`ingredients.standard_cost`).
-  - Errors: `BAD_NAME`, `BAD_TYPE`, `BAD_PRICE`, `BAD_QUANTITY`, `NOT_A_SUPPLIED_ITEM`, `FORBIDDEN_ROW`.
+  - Errors: `BAD_NAME`, `BAD_TYPE`, `BAD_PRICE`, `BAD_QUANTITY`, `NOT_A_SUPPLIED_ITEM` (the ids are not one supplied item whose recipe AND stock item belong to this shop), `FORBIDDEN_ROW`.
 - New columns: `recipes.supplied_ingredient_id`, `ingredients.standard_cost`. The stock item can't leave pcs (`SUPPLIED_NEEDS_PCS`).
 - Sales, waste, counts, sold-out work as for any recipe (1 pc per sale; no stock = can't be sold, Q6 rule).
 - Later restocks can also be ordinary purchases of the stock item.
@@ -63,11 +66,12 @@ From db-security-engineer's report, 2026-11-03 (net income tax change the same d
 ## A15. Counter waste log (`fo_sync` op `waste`)
 - `{op_id, type:'waste', data:{id (uuid, made on the counter), reason, note, staff_id, shift_id, logged_at, items:[...], approved_by, approval_token}}`
   - `reason`: `CALIBRATION` | `SPILLAGE` | `COMPLIMENTARY` | `EXPIRED` | `OTHER` (`OTHER` needs `note`, ≤ 200 chars).
-  - `items` (1–30): `{recipe_id, quantity (≤100), modifiers:[{group,label}|{group_id,option_id}]}` or `{ingredient_id, quantity, unit}` (any convertible unit).
+  - `items` (1–30): `{recipe_id, quantity (≤100), modifiers:[{group_id,option_id}|{group,label}]}` or `{ingredient_id, quantity, unit}` (any convertible unit).
+  - **Options are checked against the menu like a QR order:** at most 20; each must be on the recipe's current options; no option twice; at most one per pick-one group; every required group (e.g. Size, Hot/Iced) chosen. Otherwise `BAD_WASTE`. Only `{group, label, group_id, option_id}` of matched options is stored. (A counter with an out-of-date menu gets `BAD_WASTE`; re-log it after the menu refresh.)
   - **The server works out the stock** (`_recipe_stock_lines`, same rule as a sale incl. extras/swaps) and the cost; the counter sends no stock lines.
   - **COMPLIMENTARY** needs approval exactly like a discount: `approved_by` + `approval_token` = manager/admin OVERRIDE (one-time), or the manager's own LOGIN token when that manager is `staff_id` (offline-safe). Other reasons: no approval.
   - **Idempotent:** same `op_id` → `duplicate`; same `data.id` with a new op_id → `skipped` (checked before approval, so a retry never needs a second PIN).
-  - `staff_id` ≠ the server's signed-in staff → saved with `needs_review`, `review_reason='STAFF_MISMATCH'`.
+  - Saved but flagged (`needs_review`, `review_reason`, comma separated), like sales: `STAFF_MISMATCH` (`staff_id` is not the server's signed-in staff), `FUTURE_DATE` (`logged_at` more than 1 hour ahead), `OLD_DATE` (more than 7 days back), `BEFORE_START_FRESH` (before the latest Start fresh).
 - Writes `waste_logs` (+ `waste_log_items`) and `inventory_transactions` type `WASTE`, `reference_id = data.id`.
 - New error codes: `BAD_WASTE`, `BAD_WASTE_REASON`, `NOTE_REQUIRED`, `BAD_QUANTITY`, `BAD_UNIT` (+ existing `UNKNOWN_RECIPE`, `UNKNOWN_INGREDIENT`, `UNKNOWN_STAFF`, approval codes).
 - Stamp freebies stay on the reward path; there is no "stamp freebie" waste reason (lead decision 2026-11-03).
@@ -77,7 +81,7 @@ From db-security-engineer's report, 2026-11-03 (net income tax change the same d
 - Counters read neither table; the owner reads both directly too.
 
 ## A11. Operating supplies, expenses, net income (owner only)
-- **`categories.kind`**: `'STOCK'` (default) | `'EXPENSE'`. Every shop gets a category **"Operating supplies"** (EXPENSE). The category manager may set `kind`.
+- **`categories.kind`**: `'STOCK'` (default) | `'EXPENSE'`. Every shop gets a category **"Operating supplies"** (EXPENSE) — only when it has no category of that name yet; an existing one is left as it is (STOCK) and the owner can switch it in the category manager, which may set `kind`.
   - Items in an EXPENSE category are not stock: a purchase, starting stock or positive adjustment → `EXPENSE_ITEM_NOT_STOCK` (taking old stock off is allowed). Counter sale/refund lines for them are dropped silently.
   - The Back Office records buying them as an **expense** (category SUPPLIES, optional `ingredient_id`, `quantity`, `unit`, `supplier_id`), and should hide them from stock counts, low-stock, inventory value and recipe pickers.
 - **`expenses`** (owner reads/writes via `apply_changes`): `id, business_id, expense_date, category ('SUPPLIES','RENT','UTILITIES','INTERNET','WAGES','REPAIRS','OTHER'), amount (> 0), note (≤ 500), photo_path, ingredient_id, supplier_id, quantity, unit, created_by, created_at, updated_at`.
@@ -97,7 +101,8 @@ From db-security-engineer's report, 2026-11-03 (net income tax change the same d
   - Plan: `{general:{id, is_new, name, base_unit, category_id, stock_now, stock_after}, sources:[{id, name, base_unit, factor, stock, stock_in_general_unit, purchases, stock_lines, becomes_brand, brands:[{id, name, new_name}], reorder_level, category_id, supplier_id}], recipes:[{recipe_id, name, is_production_recipe, lines, lines_combined}], option_recipes:[{recipe_id, name}], library_groups:[{id, name}], open_qr_orders, waste_records}`
 - What merge does: picked ingredients' brands move to G; each picked ingredient becomes a brand of G for its unbranded purchases/starting stock (FIFO brand stock keeps working); every purchase, stock line, waste record, waste log, expense, recipe line (menu + production), option extra/swap (recipes + library), sale item option and QR order item is repointed and converted (×factor); two lines of one recipe on G are combined; picked ingredients stay with `active=false`, `merged_into=G`, `merged_at`. One audit row "Merge ingredients".
 - **Old offline counters** that still name a merged ingredient upload fine: the server moves those lines to G (converted).
-- Errors: `MERGE_TOO_FEW`, `MERGE_TOO_MANY` (> 30), `MERGE_UNKNOWN_INGREDIENT`, `MERGE_ALREADY_MERGED`, `MERGE_PRODUCED_NOT_ALLOWED` (house-made), `MERGE_SUPPLIED_NOT_ALLOWED`, `MERGE_UNIT_MISMATCH`, `BAD_NAME`, `NAME_TAKEN`, `BUSY_TRY_AGAIN`.
+- Errors: `MERGE_TOO_FEW`, `MERGE_TOO_MANY` (> 30), `MERGE_UNKNOWN_INGREDIENT`, `MERGE_ALREADY_MERGED`, `MERGE_PRODUCED_NOT_ALLOWED` (house-made), `MERGE_SUPPLIED_NOT_ALLOWED`, `MERGE_UNIT_MISMATCH`, `MERGE_SWAP_CONFLICT` (a library swap's "from" and "to" would both become the general ingredient: change the swap first), `BAD_NAME`, `NAME_TAKEN`, `BUSY_TRY_AGAIN`.
+- The merge briefly pauses stock writes for the whole database (table locks; fine for one shop, to be narrowed before multi-shop SaaS).
 - Apps: hide `merged_into` ingredients from pickers (they are inactive).
 
 ## Old apps (1.3) against 010
@@ -108,10 +113,28 @@ Everything is additive; no rename, no removed column or function. Known limits u
 ## Back Office writable tables / backup
 `apply_changes` adds `option_groups`, `option_group_recipes`, `expenses`, `waste_logs`, `waste_log_items`. Backup/import order: option groups after recipes, ticks after both; expenses after ingredients/suppliers; waste logs after shifts, items after logs.
 
+## Same-shop links (security review H1)
+The database refuses (`FORBIDDEN_ROW`) any link to another shop's row on the new columns, whoever writes them (apply_changes or a direct API write): `recipes.supplied_ingredient_id`, `ingredients.merged_into`, `waste_logs.shift_id`, `waste_log_items.waste_log_id / recipe_id / ingredient_id`, `expenses.ingredient_id / supplier_id`, `option_group_recipes.group_id / recipe_id`.
+
+## Menu photos (review item c)
+Uploading, replacing and deleting files in the public `menu-images` bucket is now owner only (rank 3). A paired counter can no longer write there; everyone can still see the photos.
+
+## Owner step: list the storage rules on live (read-only, review item d)
+Before running 010, the owner runs this in Supabase → SQL Editor → New query, and sends the lead the result. It only READS; it changes nothing.
+```sql
+-- Which file buckets exist, and which are public
+select id, name, public from storage.buckets order by id;
+-- Every access rule on stored files
+select policyname, cmd, roles, qual as can_see_or_change, with_check as can_add
+from pg_policies where schemaname = 'storage' order by tablename, policyname;
+```
+What we look for: any rule (often from the Lovable days) that lets `public`, `anon` or every `authenticated` login read or write ALL files (e.g. `qual` = `true` or only `bucket_id = '...'` without the shop-folder check). The lead decides whether a later script removes it.
+
 ## Live rule changed
 `sync_operations.operation_type` allowed words gain `'waste'` (re-made as in 006, keeping every stored word). Stock line type `WASTE` is already allowed live.
 
 ## New labels for the apps
 - Waste reasons: CALIBRATION "Calibration / barista drink", SPILLAGE "Spillage", COMPLIMENTARY "Complimentary", EXPIRED "Expired / spoiled", OTHER "Other".
 - Expense categories: SUPPLIES "Operating supplies", RENT "Rent", UTILITIES "Utilities (power, water)", INTERNET "Internet", WAGES "Wages", REPAIRS "Repairs", OTHER "Other".
-- Every new error code above needs a plain-language text (counter: the five fo_sync codes; Back Office: merge, supplied item, weighs, option group, expense codes).
+- Waste review reasons: `FUTURE_DATE` "Dated in the future", `OLD_DATE` "Dated more than 7 days back", `BEFORE_START_FRESH`, `STAFF_MISMATCH` (existing labels).
+- Every new error code above needs a plain-language text (counter: the five fo_sync codes; Back Office: merge incl. `MERGE_SWAP_CONFLICT`, supplied item, weighs, option group, expense codes).
