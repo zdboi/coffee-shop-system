@@ -296,8 +296,7 @@ async function manilaClock(){
     ok(stock(BEANS) === start.beans - X.beansUsed + X.beansBack && stock(MILK) === start.milk - X.milkUsed + X.milkBack, `stock now: beans ${start.beans - X.beansUsed + X.beansBack} g, milk ${start.milk - X.milkUsed + X.milkBack} ml`, [stock(BEANS), stock(MILK)]);
     u = await inUse();
     ok(u.brand === 'Batangas Barako' && u.stock === 460 && u.brands['Batangas Barako'] === 460, 'FIFO at the end: 460 g, all Batangas Barako (in use)', u);
-    // the Back Office reads stock at sign-in (bo_bootstrap) and after its own saves: reload to see the counter's sales
-    await bo.reload(); await bo.waitForSelector('#app', {state: 'visible', timeout: 20000});
+    // no reload: opening the screen must show the counter's sales (D2 fix, 2026-11-02)
     await B.go(bo, 'ingredientDetail', BEANS); await bo.waitForSelector('#brand-card');
     const card = (await bo.textContent('#brand-card')).replace(/\s+/g, ' ');
     ok(/In use now:\s*Batangas Barako/.test(card), 'BO ingredient detail: "In use now: Batangas Barako"', card.slice(0, 200));
