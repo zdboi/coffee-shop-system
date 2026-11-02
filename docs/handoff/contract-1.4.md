@@ -1,5 +1,5 @@
 # Release 1.4 (Wave 2): database contract (`cccc/supabase/010_release_1_4.sql`)
-From db-security-engineer's report, 2026-11-03. If the script and this file disagree, the script wins; tell the lead.
+From db-security-engineer's report, 2026-11-03 (net income tax change the same day). If the script and this file disagree, the script wins; tell the lead.
 "Owner only" = the owner's email login (profile ADMIN, rank 3); anything else gets `NOT_ALLOWED` (`NOT_A_MEMBER` without a shop).
 
 ## 0. Units (shared rule, logic.js must match)
@@ -70,7 +70,7 @@ From db-security-engineer's report, 2026-11-03. If the script and this file disa
   - `staff_id` ≠ the server's signed-in staff → saved with `needs_review`, `review_reason='STAFF_MISMATCH'`.
 - Writes `waste_logs` (+ `waste_log_items`) and `inventory_transactions` type `WASTE`, `reference_id = data.id`.
 - New error codes: `BAD_WASTE`, `BAD_WASTE_REASON`, `NOTE_REQUIRED`, `BAD_QUANTITY`, `BAD_UNIT` (+ existing `UNKNOWN_RECIPE`, `UNKNOWN_INGREDIENT`, `UNKNOWN_STAFF`, approval codes).
-- Stamp freebies stay on the reward path (not a waste reason).
+- Stamp freebies stay on the reward path; there is no "stamp freebie" waste reason (lead decision 2026-11-03).
 - **Back Office:** `waste_report(p_from date, p_to date)` (owner only, ≤ 400 days, else `BAD_DATE`) →
   `{from, to, total_cost, by_reason:[{reason, entries, cost}], by_day:[{day, reason, source, entries, cost}], entries:[{id, source:'COUNTER'|'OFFICE', day, reason, note, staff_name, approved_by_name, needs_review, cost, items:[{name, quantity, unit, recipe_id, ingredient_id, modifiers, cost}]}]}` (newest 500).
   Back Office waste (the `waste` table) is included as `OFFICE`.
@@ -83,8 +83,10 @@ From db-security-engineer's report, 2026-11-03. If the script and this file disa
 - **`expenses`** (owner reads/writes via `apply_changes`): `id, business_id, expense_date, category ('SUPPLIES','RENT','UTILITIES','INTERNET','WAGES','REPAIRS','OTHER'), amount (> 0), note (≤ 500), photo_path, ingredient_id, supplier_id, quantity, unit, created_by, created_at, updated_at`.
   - Receipt photos: **private** bucket `expense-photos`, path `<business_id>/<file>`, owner only (read with an authenticated storage request, not a public URL).
 - **`net_income_report(p_month date)`** → `{month:'YYYY-MM', from, to, sales:{gross, refunds, net, tax, service_charge, count}, ingredients:{sold, wasted, used}, expenses:{total, by_category:{RENT:…}}, net_income}`
-  - gross = finished (not voided) sales of the month; refunds = full/partial refunds dated in the month; net = gross − refunds.
-  - sold = cost of SALE_USAGE − SALE_REVERSAL stock lines of the month; wasted = cost of WASTE lines; costs per unit = `_ingredient_unit_cost` (costing method over purchases up to month end; house-made = production recipe ÷ yield, else batches; supplied without purchases = `standard_cost`).
+  - gross = finished (not voided) sales of the month; refunds = full/partial refunds dated in the month.
+  - tax = tax on those sales minus the refunds' tax share (refund × sale tax ÷ sale grand total). **Tax is owed, not income** (lead decision 2026-11-03), so it is shown as its own line and taken out.
+  - net = gross − refunds − tax. Service charge stays income (shown as `service_charge` for information).
+  - sold = cost of SALE_USAGE − SALE_REVERSAL stock lines of the month; wasted = cost of WASTE lines; costs per unit = `_ingredient_unit_cost`, following the shop's costing method (lead-approved 2026-11-03): weighted average over purchases up to month end, or the latest purchase price when the method is `latest` (not the brand in use); house-made = production recipe ÷ yield, else batches; supplied without purchases = `standard_cost`).
   - net_income = net − used − expenses.
 
 ## A12. Merge ingredients (owner only)

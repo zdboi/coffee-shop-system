@@ -1843,8 +1843,11 @@ end $$;
 --                    don't count; HELD ones aren't finished)
 --   sales.refunds  = money given back in the month on those kinds of sales
 --                    (full / partial refunds; a void is not a refund here)
---   sales.net      = gross - refunds
---   sales.tax / service_charge / count: for information (tax is not taken out)
+--   sales.tax      = tax collected on those sales minus the tax share of the
+--                    refunds (refund x the sale's tax / grand total): owed to
+--                    the government, so NOT income (lead decision 2026-11-03)
+--   sales.net      = gross - refunds - tax (service charge stays income)
+--   sales.service_charge / count: for information
 --   ingredients.sold    = cost of the stock the month's sales took, minus what
 --                         refunds / voids put back (stock lines of the month)
 --   ingredients.wasted  = cost of the month's waste stock lines (counter and Back Office)
@@ -1859,7 +1862,7 @@ language plpgsql stable security definer set search_path = public as $$
 declare
   v_biz uuid := public._require_owner();
   v_tz text; v_from date; v_to date; v_from_ts timestamptz; v_to_ts timestamptz;
-  v_gross numeric; v_tax numeric; v_svc numeric; v_count integer; v_ref numeric;
+  v_gross numeric; v_tax numeric; v_svc numeric; v_count integer; v_ref numeric; v_ref_tax numeric;
   v_sold numeric; v_wasted numeric; v_exp numeric; v_by jsonb;
 begin
   if p_month is null then raise exception 'BAD_DATE'; end if;
@@ -1874,7 +1877,9 @@ begin
     from public.sales
     where business_id = v_biz and status in ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
       and coalesce(transaction_date, created_at) >= v_from_ts and coalesce(transaction_date, created_at) < v_to_ts;
-  select coalesce(sum(r.amount), 0) into v_ref
+  select coalesce(sum(r.amount), 0),
+         coalesce(sum(case when coalesce(s.grand_total, 0) > 0 then r.amount * coalesce(s.tax_amount, 0) / s.grand_total else 0 end), 0)
+    into v_ref, v_ref_tax
     from public.refunds r join public.sales s on s.id = r.sale_id
     where r.business_id = v_biz and r.type <> 'VOID' and s.status in ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
       and coalesce(r.date, r.created_at) >= v_from_ts and coalesce(r.date, r.created_at) < v_to_ts;
@@ -1898,11 +1903,13 @@ begin
           where business_id = v_biz and expense_date between v_from and v_to group by category) x;
   return jsonb_build_object(
     'month', to_char(v_from, 'YYYY-MM'), 'from', v_from, 'to', v_to,
-    'sales', jsonb_build_object('gross', round(v_gross, 2), 'refunds', round(v_ref, 2), 'net', round(v_gross - v_ref, 2),
-                                'tax', round(v_tax, 2), 'service_charge', round(v_svc, 2), 'count', v_count),
+    'sales', jsonb_build_object('gross', round(v_gross, 2), 'refunds', round(v_ref, 2),
+                                'tax', round(v_tax - v_ref_tax, 2),
+                                'net', round(v_gross - v_ref, 2) - round(v_tax - v_ref_tax, 2),
+                                'service_charge', round(v_svc, 2), 'count', v_count),
     'ingredients', jsonb_build_object('sold', round(v_sold, 2), 'wasted', round(v_wasted, 2), 'used', round(v_sold + v_wasted, 2)),
     'expenses', jsonb_build_object('total', round(v_exp, 2), 'by_category', v_by),
-    'net_income', round(v_gross - v_ref, 2) - round(v_sold + v_wasted, 2) - round(v_exp, 2));
+    'net_income', round(v_gross - v_ref, 2) - round(v_tax - v_ref_tax, 2) - round(v_sold + v_wasted, 2) - round(v_exp, 2));
 end $$;
 
 -- =============================================================================
