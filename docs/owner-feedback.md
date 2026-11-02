@@ -74,3 +74,10 @@ Owner: **don't start 1.3 until I say so.**
 | A16 | **Arrange the order of sub-categories on the menu**, on the counter AND the customer's QR page. General rule: **drinks always come first, then pastries and food.** | **New** (today the counter sorts sub-categories A–Z; items inside keep their own sort order). 1.3: a drag-to-arrange list in Recipes & menu (next to Sub-category colours), saved once for the shop and used by the counter, the QR page and the Back Office recipes list (A14). Drinks sub-categories are always kept above pastry/food ones: the owner arranges within each block. New sub-categories go to the end of their block until moved. |
 | A17 | **Counter Customers tab: sort by name (A–Z), most recent visitors, or most frequent visitors.** | **New** (today the list comes in one fixed order with a nickname search). 1.3: a sort switch on the Customers tab; the server sorts (so it works with the 50-per-page limit and the search); the choice is remembered on that counter. Same masking/money rules as 1.2. |
 | A18 | **QR code printouts in the café's theme** (logo, Brunson wordmark, brand colours). | Partly exists: Tables & QR codes prints plain QR cards. Wave 1 (1.3). |
+
+## Release 1.4 (Wave 2) decisions (owner, 2026-11-02 23:10)
+- Owner: "009 is live… proceed with the next wave."
+- **A9, non-dairy swap price:** **one extra price for all** (e.g. +₱30), set once in the option library.
+- **A9, take-away cups:** **counted as stock.** Cups and lids are stock items, a take-away choice deducts them, and low-stock warnings apply.
+- **A15, waste approval:** **only Complimentary** needs a manager's PIN. Calibration, spillage and expired don't.
+- **A10, "weighs":** **house-made (produced) sauces only.** Bought liquids stay in mL.
