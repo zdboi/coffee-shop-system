@@ -2,7 +2,7 @@
 tags: [cccc, pos, session-log]
 project: Cavite City Coffee Club POS
 updated: 2026-11-02
-checkpoint: 10
+checkpoint: 11
 repo: zdboi/coffee-shop-system (branch wip/cccc-online-qr)
 ---
 
@@ -14,7 +14,11 @@ It has three apps on one Supabase database:
 - **Back Office:** the owner's email login only.
 - **QR order page:** customers order from their phones and pay at the counter.
 
-## Where things stand (Nov 2): release 1.2 ready for me
+## Where things stand (Nov 2): release 1.2 is LIVE 🎉
+- I ran 008 and merged pull request #3. 1.2 is saved as the **last working version** (checkpoint 11).
+- Next: release 1.3. I'm adding more revisions before C starts building.
+
+## Earlier (Nov 2): release 1.2 ready for me
 - **1.1 is live** (I ran 007 on Oct 29). It's saved as the **last working version**.
 - **Release 1.2 is built, tested (4,295 checks, twice) and security-reviewed.** To publish it, I follow `docs/RELEASE_1.2.md` (about 20 min):
   1. counters show "all saved";

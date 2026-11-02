@@ -12,8 +12,9 @@ If an update goes wrong, tell C: **"Go back to the last working version."**
 
 | Apps | Live since | Browse | Download |
 |---|---|---|---|
-| Counter, Back Office, QR page (all apps), release 1.1 | 2026-10-26 (pull request #2; database script 007 run) | [0741e1b](https://github.com/zdboi/coffee-shop-system/tree/0741e1b567a6e662f52d38d1b0d4872720e6777e) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/0741e1b567a6e662f52d38d1b0d4872720e6777e.zip) |
-| *(previous)* release 1.0 | 2026-10-20 (pull request #1) | [a53238e](https://github.com/zdboi/coffee-shop-system/tree/a53238e77f374c38c4f730101b84f5a5898ee00f) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/a53238e77f374c38c4f730101b84f5a5898ee00f.zip) |
+| Counter, Back Office, QR page (all apps), release 1.2 | 2026-11-02 (pull request #3; database script 008 run) | [a44a123](https://github.com/zdboi/coffee-shop-system/tree/a44a123b513e0c031fbaad9923ecc8cc6a34831b) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/a44a123b513e0c031fbaad9923ecc8cc6a34831b.zip) |
+| *(previous)* release 1.1 | 2026-10-26 (pull request #2; database script 007 run) | [0741e1b](https://github.com/zdboi/coffee-shop-system/tree/0741e1b567a6e662f52d38d1b0d4872720e6777e) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/0741e1b567a6e662f52d38d1b0d4872720e6777e.zip) |
+| *(older)* release 1.0 | 2026-10-20 (pull request #1) | [a53238e](https://github.com/zdboi/coffee-shop-system/tree/a53238e77f374c38c4f730101b84f5a5898ee00f) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/a53238e77f374c38c4f730101b84f5a5898ee00f.zip) |
 
 Older working versions stay in the table below, so you can go back further if needed.
 
@@ -30,6 +31,7 @@ Older working versions stay in the table below, so you can go back further if ne
 | 8 | **Release 1.1 ready** | 2026-10-26 | Batch 1 (your feedback #1–#6): units everywhere, category manager, Excel import/export, tick-and-remove recipes, counter menu. 3,716 tests pass; security review ready. Waiting for you to publish. |
 | 9 | **Release 1.1 live** | 2026-10-29 | You merged pull request #2 and ran `007_batch1.sql` ("it works"). This is now the last working version. |
 | 10 | **Release 1.2 ready** | 2026-11-02 | Full redesign (your logo colours, Brunson, wordmark); counter Orders + Customers + stamp rewards + QR floor plan; Back Office floor plan editor, tile colours, ingredient brands (oldest stock first), loyalty settings; QR stamp card. final test run 47 suites / 3,007 checks, 0 failing; money/stock/cash reconciliation matches; security reviews passed. Waiting for you to publish (`docs/RELEASE_1.2.md`). |
+| 11 | **Release 1.2 live** | 2026-11-02 | You ran `008_release_1_2.sql` and merged pull request #3. This is now the last working version. |
 
 ## Look at or download a checkpoint
 

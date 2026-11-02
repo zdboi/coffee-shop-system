@@ -1,10 +1,10 @@
-# Resume here (save point: 2026-11-02, checkpoint 10, release 1.2 ready)
+# Resume here (save point: 2026-11-02, checkpoint 11, release 1.2 LIVE)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
 ## Where we are
-- **Live:** release 1.1, commit 0741e1b (PR #2; 007 run on 2026-10-29). This is the **last working version** (`docs/checkpoints.md`).
-- **Release 1.2 is built, tested and security-reviewed** on `wip/cccc-online-qr`. It waits for the owner to follow `docs/RELEASE_1.2.md`:
+- **Live:** release 1.2, commit a44a123 (PR #3; 008 run on 2026-11-02). This is the **last working version** (`docs/checkpoints.md`). The next database script is 009.
+- **Release 1.2** was released by the owner following `docs/RELEASE_1.2.md`:
   1. counters uploaded;
   2. backup;
   3. run `008_release_1_2.sql`;
@@ -20,12 +20,7 @@ Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"
 - **QA:** `tests/run_all.sh --runs 2` passes 69/71 suites (4,295 checks). The 2 failures were one counter defect (D1), since fixed and re-tested. The money, stock, cash and brand-FIFO reconciliation (`tests/e2e/money12.e2e.js`) matches to the centavo. **Final run on the finished code (2026-11-02, `run_all.sh --runs 1`): 47 suites, 3,007 checks, 0 failing.**
 - **Security:** 008 passed two review rounds (all findings fixed). The 1.2 screens review found 4 low items, all fixed.
 
-## After the owner releases 1.2
-- Mark 008 as run and frozen in CLAUDE.md; the next script is 009.
-- Add checkpoint 11 "Release 1.2 live" as the new last working version.
-- Update the changelog (1.2 = live) and send the Obsidian note.
-
-## Next batch: release 1.3 (planned, see `docs/owner-feedback.md`)
+## Next batch: release 1.3 (planned, see `docs/owner-feedback.md`). The owner is adding more revisions before building starts.
 - **QR ordering security (Q1–Q7):** guest vs registered sign-in, unique coffee-themed usernames, max 4 open tickets per table, 1 guest per table, account-switch warning that removes unpaid orders, and a stock check at payment where out-of-stock items must be removed (also for counter sales).
 - **Thermal printing (P1):** the owner's counters are iPad, Android, Windows and Mac; printers are Bluetooth and LAN. Plan: a network printer with a built-in web print service (Epson ePOS / Star WebPRNT), with the print dialog as fallback. Ask the printer brand and model first.
 - **P2:** manager-only "Retry without the reward" for refused reward sales.
