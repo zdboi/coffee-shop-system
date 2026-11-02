@@ -131,6 +131,8 @@ from pg_policies where schemaname = 'storage' order by tablename, policyname;
 ```
 What we look for: any rule (often from the Lovable days) that lets `public`, `anon` or every `authenticated` login read or write ALL files (e.g. `qual` = `true` or only `bucket_id = '...'` without the shop-folder check). The lead decides whether a later script removes it.
 
+**Result from live (owner, 2026-11-03 01:05):** only the three `cccc_menu_images_*` rules (delete/insert/update, own shop folder, `authenticated`). There are no Lovable-era rules and no read-all rule, so nothing needs removing. 010 tightens these three to the owner only.
+
 ## Live rule changed
 `sync_operations.operation_type` allowed words gain `'waste'` (re-made as in 006, keeping every stored word). Stock line type `WASTE` is already allowed live.
 

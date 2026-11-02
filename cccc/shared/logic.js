@@ -739,6 +739,18 @@ function inventoryLinesForSaleLine(recipeId, quantity, modifiers, opts){
   return (opts && opts.raw) ? out : cleanStockLines(out);
 }
 
+// How many of an item (with these options) the stock on hand can make now: the lowest
+// floor(stock ÷ amount per item) over its stock lines (same lines as a sale; state.stock or
+// the stock map given). No stock lines (nothing tracked) -> 99, like the counter's tile badge.
+function recipeMakeableCount(recipeId, modifiers, stock){
+  stock = stock || state.stock || {};
+  let lowest = Infinity;
+  inventoryLinesForSaleLine(recipeId, 1, modifiers || []).forEach(l => {
+    lowest = Math.min(lowest, Math.floor(((Number(stock[l.ingredient_id]) || 0) + STOCK_EPSILON) / l.quantity));
+  });
+  return lowest === Infinity ? 99 : Math.max(0, lowest);
+}
+
 /* ================= Counter waste log (release 1.4, A15) =================
    fo_sync op 'waste' (contract A15): the counter sends WHAT was wasted; the server works out
    the stock and cost itself. Only COMPLIMENTARY needs a manager's approval (like a discount). */

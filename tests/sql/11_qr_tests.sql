@@ -38,14 +38,15 @@ select public.qr_place_order(:'tok5',
 select test.ok((:'ord'::jsonb->>'subtotal')::numeric = 450, 'server price: (150+20+30+25) x 2 = 450, phone-sent price ignored');
 select test.ok((:'ord'::jsonb->>'service_charge_amount')::numeric = 45 and (:'ord'::jsonb->>'total')::numeric = 495, '10% service charge applied');
 select test.ok((:'ord'::jsonb->>'order_number') = 'Q-001' and (:'ord'::jsonb->>'table_label') = 'Table 5', 'order number + table');
-select test.ok((:'ord'::jsonb->'items'->0->'modifiers'->0->>'ingredient_id') = '22222222-0000-0000-0000-000000000002', 'order keeps modifier stock links for the counter');
+select test.ok((:'ord'::jsonb->'items'->0->'modifiers'->0) = '{"group":"Size","label":"16oz","price_delta":20,"kind":"PLAIN"}'::jsonb, 'reply shows options as {group, label, price_delta, kind} only');
 select (:'ord'::jsonb->>'id') as order_id \gset
-select test.ok((select count(*) from qr_orders) = 1, 'customer can read own order (RLS)');
+select test.ok((select count(*) from qr_orders) = 0 and jsonb_array_length(public.qr_my_orders(:'tok')->'orders') = 1, 'customer reads own order only through qr_my_orders (no direct table read)');
 select test.ok((select count(*) from customers) = 0 and (select count(*) from sales) = 0, 'customer cannot read shop tables');
 select test.ok(jsonb_array_length(public.qr_my_orders(:'tok')->'orders') = 1, 'qr_my_orders');
 select public.qr_place_order(:'tok', '[{"recipe_id":"33333333-0000-0000-0000-000000000001","quantity":1,"modifiers":[{"group_id":"g-size","option_id":"o-12"}]}]') -> 'order' ->> 'id' as order2 \gset
 select test.ok((public.qr_cancel_order(:'tok', :'order2')->'order'->>'status') = 'CANCELLED', 'customer can cancel a pending order');
 reset role;
+select test.ok((select items->0->'modifiers'->0->>'ingredient_id' from public.qr_orders where id = :'order_id') = '22222222-0000-0000-0000-000000000002', 'stored order keeps modifier stock links for the counter');
 
 -- ===== customer phone #2: same person, new phone =====
 select test.login('00000000-0000-0000-0000-0000000000c2');
@@ -53,7 +54,7 @@ set role authenticated;
 select test.ok(public.qr_register(:'tok', 'Zack', '09171234567', true)->>'error' = 'PHONE_TAKEN', 'phone taken by a different nickname');
 select test.ok(public.qr_relink(:'tok', '+639171234567', 'Zedd')->>'error' = 'NO_MATCH', 'relink needs the right nickname');
 select test.ok((public.qr_relink(:'tok', '+63 917 123 4567', 'zed')->'customer'->>'nickname') = 'Zed', 'relink with phone + nickname (case-insensitive)');
-select test.ok((select count(*) from qr_orders) = 0, 'new phone does not see the old phone''s orders');
+select test.ok(jsonb_array_length(public.qr_my_orders(:'tok')->'orders') = 0, 'new phone does not see the old phone''s orders');
 select test.ok((public.qr_forget_device(:'tok')->>'ok')::boolean and (public.qr_session(:'tok')->'customer') = 'null'::jsonb, '"Not Zed?" unlinks this phone');
 reset role;
 
