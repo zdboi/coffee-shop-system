@@ -461,6 +461,7 @@
       },
 
       async upload(bucket, path, blob, contentType){
+        checkStoragePath(bucket, path);   // same name rules as download / remove (BAD_STORAGE_PATH)
         const headers = await apiHeaders({'Content-Type': contentType || blob.type || 'application/octet-stream', 'x-upsert': 'true', 'cache-control': '3600'});
         delete headers['x-staff-token'];
         const res = await rawFetch(CFG.SUPABASE_URL + '/storage/v1/object/' + bucket + '/' + path, {method: 'POST', headers, body: blob}, 60000);
