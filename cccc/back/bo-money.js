@@ -84,13 +84,12 @@ function exportExpensesCSV(){
 }
 // Receipt photos live in a PRIVATE bucket: read with the owner's login (never a public link).
 async function fetchExpensePhoto(path){
-  await cloud.ensureSession();
-  const s = cloud.session;
-  const cfg = window.CCCC_CONFIG || {};
-  const res = await fetch(cfg.SUPABASE_URL + '/storage/v1/object/authenticated/expense-photos/' + String(path).split('/').map(encodeURIComponent).join('/'),
-    {headers: {Authorization: 'Bearer ' + (s && s.access_token), apikey: cfg.SUPABASE_ANON_KEY}});
-  if(!res.ok) throw new Error('The receipt photo could not be opened (' + res.status + '). Check your internet and try again.');
-  return URL.createObjectURL(await res.blob());
+  return URL.createObjectURL(await cloud.download('expense-photos', path));
+}
+// Old receipt files are removed AFTER the row change saved; a failure only goes to the console.
+function removeExpensePhoto(path){
+  if(!path) return;
+  cloud.remove('expense-photos', [path]).catch(e => console.warn('old receipt photo not removed', path, e));
 }
 async function showExpensePhoto(x){
   if(!x || !x.photo_path) return;
@@ -104,7 +103,7 @@ async function deleteExpense(x){
   if(!x) return;
   const ok = await confirmDialog(`Delete this expense: <b>${esc(expenseCategoryLabel(x.category))}</b>, ${fmtMoney(x.amount)} on ${esc(fmtDay(x.expense_date))}${x.note ? ` (${esc(x.note)})` : ''}? This cannot be undone.`, 'Delete expense');
   if(!ok) return;
-  if(await boSave([Ops.del('expenses', x.id), Ops.audit('Expense deleted', `${expenseCategoryLabel(x.category)} — ${fmtMoney(x.amount)} (${dayValue(x.expense_date)})${x.note ? ' · ' + x.note : ''}`, x.id)], {success: 'Expense deleted', reload: false})) drawExpenses();
+  if(await boSave([Ops.del('expenses', x.id), Ops.audit('Expense deleted', `${expenseCategoryLabel(x.category)} — ${fmtMoney(x.amount)} (${dayValue(x.expense_date)})${x.note ? ' · ' + x.note : ''}`, x.id)], {success: 'Expense deleted', reload: false})){ removeExpensePhoto(x.photo_path); drawExpenses(); }
 }
 function openExpenseForm(x){
   const editing = x || null;
@@ -169,9 +168,11 @@ function openExpenseForm(x){
         const ops = [editing ? Ops.update('expenses', row) : Ops.upsert('expenses', row),
           Ops.audit(editing ? 'Expense updated' : 'Expense recorded', `${expenseCategoryLabel(cat)} — ${fmtMoney(row.amount)} (${date})${row.note ? ' · ' + row.note : ''}`, id)];
         if(await boSave(ops, {success: editing ? 'Expense updated' : 'Expense added', reload: false})){
+          if(editing && editing.photo_path && editing.photo_path !== row.photo_path) removeExpensePhoto(editing.photo_path);    // replaced or removed
           closeModal();
           if(state.route === 'expenses'){ if(date.slice(0, 7) !== expFilter.month) expFilter.month = date.slice(0, 7); renderExpenses(); }
         }
+        else if(photo.blob && path) removeExpensePhoto(path);       // the row was not saved: don't leave the new file behind
       });
     }});
 }
