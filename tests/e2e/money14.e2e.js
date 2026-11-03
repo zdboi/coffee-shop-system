@@ -8,8 +8,8 @@
 // Back Office before the shift: supplied item "Ube Cheese Pandesal" (cost ₱25, price ₱45, restock 24 pcs).
 // Counter (cashier Cathy, opening cash ₱1,000):
 //   S1 Iced Latte Iced 12oz Oat  190, cash     tax 22.80 svc 19.00 = 231.80  stock beans 18, oat 180, cup 1, lid 1 (no dairy)
-//   S2 Iced Latte Hot 16oz Oat + shot 230, GCash  tax 27.60 svc 23.00 = 280.60  beans 36, oat 180, milk 60 (the swap
-//      takes away only the recipe's 180 mL; the 16oz +60 mL stays dairy, per contract 1.4 "removes = the recipe's lines")
+//   S2 Iced Latte Hot 16oz Oat + shot 230, GCash  tax 27.60 svc 23.00 = 280.60  beans 36, oat 240, no dairy (a swap turns ALL
+//      of the line's dairy into oat: recipe 180 + the 16oz +60 mL; lead decision 2026-11-03, changed from "recipe lines only")
 //   S3 Americano x2 + Ensaymada 285, cash      tax 34.20 svc 28.50 = 347.70  beans 36
 //   S4 Ube Cheese Pandesal x2 90, cash         tax 10.80 svc  9.00 = 109.80  pandesal 2 pcs
 //   refund ONE Americano from S3 (manager PIN): 110 x 347.70 / 285 = 134.20, beans 18 back (tax share 134.20 x 34.20 / 347.70 = 13.20)
@@ -18,16 +18,16 @@
 //   close shift: expected cash 1000 + 231.80 + 347.70 + 109.80 - 134.20 = 1,555.10 (counted the same, variance 0)
 // Back Office after the shift:
 //   merge dairy Milk (mL) + "Arla milk" (L; bought 5 L for ₱700 today) into a new "Full Cream Milk" (mL):
-//      every stock line moves over -> one ingredient at (500 + 700) / (5000 + 5000) = ₱0.12/mL
+//      every stock line moves over (only the waste's 180 mL; no sale used dairy) -> one ingredient at (500 + 700) / (5000 + 5000) = ₱0.12/mL
 //   buy foil (an Operating supplies item) for ₱150 -> a SUPPLIES expense, no stock; expenses Rent 5,000 + Utilities 1,234.56
 // Net income for this month (hand math):
 //   gross 231.80 + 280.60 + 347.70 + 109.80 = 969.90 · refunds 134.20 · tax 95.40 - 13.20 = 82.20 · net 753.50
-//   sold: usage beans 90 g = 81.00, oat 360 = 72.00, milk 60 x 0.12 = 7.20, cup 5, lid 2, pandesal 2 x 25 = 50 -> 217.20
-//         minus refund beans 18 = 16.20 -> 201.00
-//   wasted (month-end costs): beans 36 = 32.40, milk 180 x 0.12 = 21.60, cup 5, lid 2 -> 61.00 · used 262.00
-//   expenses 150 + 5000 + 1234.56 = 6,384.56 · net income 753.50 - 262.00 - 6384.56 = -5,893.06
+//   sold: usage beans 90 g = 81.00, oat 420 = 84.00, dairy 0, cup 5, lid 2, pandesal 2 x 25 = 50 -> 222.20
+//         minus refund beans 18 = 16.20 -> 206.00
+//   wasted (month-end costs): beans 36 = 32.40, milk 180 x 0.12 = 21.60, cup 5, lid 2 -> 61.00 · used 267.00
+//   expenses 150 + 5000 + 1234.56 = 6,384.56 · net income 753.50 - 267.00 - 6384.56 = -5,898.06
 // Waste report (cost stored when logged, at THAT day's costs, before the merge): W1 16.20 + 18.00 + 5 + 2 = 41.20, W2 16.20 -> 57.40
-// Stock at the end: beans 1000 - 90 + 18 - 36 = 892 · Full Cream Milk 5000 + 5000 - 60 - 180 = 9,760 mL · oat 640 · cups 48 · lids 48 · pandesal 22
+// Stock at the end: beans 1000 - 90 + 18 - 36 = 892 · Full Cream Milk 5000 + 5000 - 180 = 9,820 mL · oat 580 · cups 48 · lids 48 · pandesal 22
 // Needs a fresh seed:  tests/e2e_reset.sh [db] && tests/restart_fake.sh [port] [db]
 // Run:                 FAKE_PORT=8787 FAKE_DB=cccc node tests/e2e/money14.e2e.js
 const path = require('path');
@@ -56,9 +56,9 @@ const X = {
 X.gross = r2(X.S1.total + X.S2.total + X.S3.total + X.S4.total);        // 969.90
 X.tax = r2(X.S1.tax + X.S2.tax + X.S3.tax + X.S4.tax - X.refundTax);    // 82.20
 X.net = r2(X.gross - X.refund - X.tax);                                 // 753.50
-X.sold = 201.00; X.wasted = 61.00; X.used = 262.00;
+X.sold = 206.00; X.wasted = 61.00; X.used = 267.00;   // 1.4 swap rule (lead-approved 2026-11-03): was 201.00 / 262.00
 X.expenses = 6384.56;
-X.netIncome = r2(X.net - X.used - X.expenses);                          // -5893.06
+X.netIncome = r2(X.net - X.used - X.expenses);                          // -5898.06
 X.cash = r2(X.S1.total + X.S3.total + X.S4.total);                      // 689.30
 X.expectedCash = r2(1000 + X.cash - X.refund);                          // 1555.10
 X.wasteReport = 57.40;
@@ -143,7 +143,7 @@ async function manilaClock(){
     await done(2, 'S2 uploaded');
     sales.S2 = newest(); savedOk(sales.S2, X.S2, 'S2');
     const l2 = lines(sales.S2.id);
-    ok(l2[BEANS] === 36 && l2[OAT] === 180 && l2[MILK] === 60 && !l2[CUP], 'S2 stock: beans 36 g, oat 180 mL, dairy 60 mL (the 16oz extra), no cup', l2);
+    ok(l2[BEANS] === 36 && l2[OAT] === 240 && !l2[MILK] && !l2[CUP], 'S2 stock: beans 36 g, oat 240 mL (the swap covers the 16oz +60 mL too), no dairy, no cup', l2);
 
     // S3: Americano x2 + Ensaymada, cash
     await fo.click('.pos-product-card:has-text("Americano")'); await fo.waitForTimeout(200);
@@ -215,10 +215,10 @@ async function manilaClock(){
     await bo.click('#mg-go'); await bgone(); await bo.waitForTimeout(800);
     G = sql(`select id from ingredients where name='Full Cream Milk' and merged_into is null`);
     ok(!!G && sql(`select count(*) from ingredients where merged_into='${G}'`) === '2', 'merged dairy Milk + Arla milk into "Full Cream Milk"');
-    ok(sql(`select base_unit from ingredients where id='${G}'`) === 'ml' && stock(G) === 5000 + 5000 - 60 - 180 && stock(MILK) === 0 && stock(ARLA) === 0,
-      'Full Cream Milk: 5000 + 5000 (5 L Arla) - 60 sold - 180 wasted = 9,760 mL; nothing left on the old ones', [stock(G), stock(MILK), stock(ARLA)]);
-    ok(Number(sql(`select coalesce(sum(abs(quantity)),0) from inventory_transactions where ingredient_id='${G}' and transaction_type='SALE_USAGE'`)) === 60
-       && Number(sql(`select coalesce(sum(abs(quantity)),0) from inventory_transactions where ingredient_id='${G}' and transaction_type='WASTE'`)) === 180, 'the sale (60 mL) and waste (180 mL) lines moved to Full Cream Milk');
+    ok(sql(`select base_unit from ingredients where id='${G}'`) === 'ml' && stock(G) === 5000 + 5000 - 180 && stock(MILK) === 0 && stock(ARLA) === 0,
+      'Full Cream Milk: 5000 + 5000 (5 L Arla) - 180 wasted = 9,820 mL (no sale used dairy); nothing left on the old ones', [stock(G), stock(MILK), stock(ARLA)]);
+    ok(Number(sql(`select coalesce(sum(abs(quantity)),0) from inventory_transactions where ingredient_id='${G}' and transaction_type='SALE_USAGE'`)) === 0
+       && Number(sql(`select coalesce(sum(abs(quantity)),0) from inventory_transactions where ingredient_id='${G}' and transaction_type='WASTE'`)) === 180, 'the waste line (180 mL) moved to Full Cream Milk; no sale line on it');
     const uc = Number(sql(`select public._ingredient_unit_cost('${biz}', '${G}', (now() at time zone 'Asia/Manila')::date)`));
     ok(Math.abs(uc - 0.12) < 1e-9, 'Full Cream Milk costs (500 + 700) / 10,000 mL = ₱0.12/mL', uc);
     ok(sql(`select count(*) from sales where needs_review`) === '0', 'no sale flagged for review');
@@ -247,7 +247,7 @@ async function manilaClock(){
     ok(r && eq2(r.sales.gross, X.gross) && eq2(r.sales.refunds, X.refund) && eq2(r.sales.tax, X.tax) && eq2(r.sales.net, X.net) && r.sales.count === 4,
       `net income sales: gross ${X.gross}, refunds ${X.refund}, tax ${X.tax} (95.40 - 13.20 refund share), net ${X.net}, 4 sales`, r && r.sales);
     ok(r && eq2(r.ingredients.sold, X.sold) && eq2(r.ingredients.wasted, X.wasted) && eq2(r.ingredients.used, X.used),
-      `net income ingredients: sold ${X.sold}, wasted ${X.wasted} (month-end costs, milk at ₱0.12 after the merge), used ${X.used}`, r && r.ingredients);
+      `net income ingredients: sold ${X.sold}, wasted ${X.wasted} (month-end costs, milk at ₱0.12 after the merge; oat 420 mL), used ${X.used}`, r && r.ingredients);
     ok(r && eq2(r.expenses.total, X.expenses) && eq2(r.expenses.by_category.SUPPLIES, 150) && eq2(r.expenses.by_category.RENT, 5000) && eq2(r.expenses.by_category.UTILITIES, 1234.56),
       `net income expenses ${X.expenses} by category`, r && r.expenses);
     ok(r && eq2(r.net_income, X.netIncome), `net income = ${X.net} - ${X.used} - ${X.expenses} = ${X.netIncome}`, r && r.net_income);
@@ -263,8 +263,8 @@ async function manilaClock(){
 
   // ---------- stock at the end ----------
   const end = {beans: stock(BEANS), milk: stock(G), oat: stock(OAT), cup: stock(CUP), lid: stock(LID), pan: stock(PAN.ing)};
-  ok(end.beans === 892 && end.milk === 9760 && end.oat === 640 && end.cup === 48 && end.lid === 48 && end.pan === 22,
-    'stock at the end: beans 892 g, Full Cream Milk 9,760 mL, oat 640 mL, cups 48, lids 48, pandesal 22', end);
+  ok(end.beans === 892 && end.milk === 9820 && end.oat === 580 && end.cup === 48 && end.lid === 48 && end.pan === 22,
+    'stock at the end: beans 892 g, Full Cream Milk 9,820 mL, oat 580 mL, cups 48, lids 48, pandesal 22', end);
   ok(!errors.length, 'no browser errors', errors);
   await browser.close();
   process.exit(H.summary(NAME));
