@@ -60,6 +60,8 @@ cloud.onNetwork((up)=>{
   if(posState.route==='qr') renderQrBoard();
   if(posState.route==='customers' && !!document.querySelector('.offline-panel') === up) renderCustomersScreen();
   if(posState.route==='pos') renderCartPanel();
+  // The open waste log says whether Complimentary can be approved now (needs internet for a PIN).
+  if(document.getElementById('waste-approval-note')) openWasteLog();
 });
 function show(id, on){ const n = document.getElementById(id); if(n) n.style.display = on ? (id==='app'?'flex':'flex') : 'none'; }
 
@@ -3347,7 +3349,7 @@ async function openWasteLog(focusIndex){
       <input id="waste-note" maxlength="${WASTE_NOTE_MAX}" value="${escapeHtml(d.note || '')}" placeholder="e.g. Dropped on the floor"></div>
     ${manager ? '<div class="waste-cost" id="waste-cost"></div>' : ''}`;
   openModal({title: 'Log waste', wide: true, body,
-    foot: `${d.items.length ? '<button class="btn btn-ghost" id="waste-clear">Clear</button>' : ''}<button class="btn btn-outline" data-close>Close</button><button class="btn btn-primary btn-big" id="waste-save">Log waste</button>`,
+    foot: `${d.items.length ? '<button class="btn btn-ghost" id="waste-clear">Clear</button>' : ''}<button class="btn btn-outline" data-close>Close</button><button class="btn btn-primary" id="waste-save">Log waste</button>`,
     onMount: (root) => {
       const save = () => saveWasteDraft(d);
       const again = (fi) => { save(); openWasteLog(fi); };
