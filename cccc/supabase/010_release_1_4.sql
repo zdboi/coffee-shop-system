@@ -109,9 +109,10 @@ alter table public.ingredients add column if not exists weight_g_per_ml numeric;
 -- name it: the server sends those amounts to the general ingredient.
 alter table public.ingredients add column if not exists merged_into uuid;
 alter table public.ingredients add column if not exists merged_at timestamptz;
--- A8: "price paid per piece" typed on the supplied-item form; used as the cost
--- only while the item has no purchases yet.
-alter table public.ingredients add column if not exists standard_cost numeric;
+-- A8: the "price paid per piece" typed on the supplied-item form lives in the
+-- owner-only table ingredient_costs (section 5b), NOT on ingredients: every
+-- shop login (also a paired counter) reads ingredients, and counters must
+-- never see what the shop pays (screens security review M1).
 -- A10 (+ owner request #3): the amount AS TYPED, in recipe_ingredients.unit.
 -- When it is filled, the database works out quantity (stock unit) from it,
 -- also again later if the item's "weighs" changes. Empty (old apps) = the
@@ -144,7 +145,6 @@ do $$
 declare spec text[];
   specs text[][] := array[
     array['ingredients', 'ingredients_weight_g_per_ml_check', $c$weight_g_per_ml is null or (weight_g_per_ml > 0 and weight_g_per_ml <= 10)$c$],
-    array['ingredients', 'ingredients_standard_cost_check',   $c$standard_cost is null or (standard_cost >= 0 and standard_cost <= 1000000)$c$],
     array['ingredients', 'ingredients_merged_into_check',     $c$merged_into is null or merged_into <> id$c$],
     array['recipe_ingredients', 'recipe_ingredients_entered_quantity_check', $c$entered_quantity is null or (entered_quantity >= 0 and entered_quantity <= 1000000)$c$],
     array['categories', 'categories_kind_check',              $c$kind in ('STOCK','EXPENSE')$c$]
@@ -702,7 +702,7 @@ begin
       into v_c from public.purchases
       where business_id = p_biz and ingredient_id = v_i.id and purchase_date <= p_as_of;
   end if;
-  return coalesce(v_c, v_i.standard_cost, 0);
+  return coalesce(v_c, (select c.standard_cost from public.ingredient_costs c where c.ingredient_id = v_i.id and c.business_id = p_biz), 0);
 end $$;
 
 -- =============================================================================
@@ -791,6 +791,13 @@ begin
   if exists (select 1 from pg_namespace where nspname = 'storage') and to_regclass('storage.buckets') is not null then
     insert into storage.buckets (id, name, public) values ('expense-photos', 'expense-photos', false)
       on conflict (id) do update set public = false;
+    -- photos only, at most 5 MB each (Supabase's bucket settings; skipped on
+    -- a storage version without them)
+    if exists (select 1 from information_schema.columns where table_schema = 'storage' and table_name = 'buckets' and column_name = 'file_size_limit')
+       and exists (select 1 from information_schema.columns where table_schema = 'storage' and table_name = 'buckets' and column_name = 'allowed_mime_types') then
+      execute $u$update storage.buckets set public = false, file_size_limit = 5242880,
+                 allowed_mime_types = array['image/jpeg','image/png','image/webp'] where id = 'expense-photos'$u$;
+    end if;
     execute 'drop policy if exists cccc_expense_photos_read on storage.objects';
     execute 'drop policy if exists cccc_expense_photos_insert on storage.objects';
     execute 'drop policy if exists cccc_expense_photos_update on storage.objects';
@@ -805,6 +812,25 @@ begin
       using (bucket_id = 'expense-photos' and (storage.foldername(name))[1] = public.current_business_id()::text and public.app_rank() >= 3)$p$;
   end if;
 end $$;
+
+-- =============================================================================
+-- 5b. A8 typed cost per piece (owner only)
+-- =============================================================================
+-- One row per stock item that has a typed "price paid per piece" (supplied
+-- items). Used as its cost only while it has no purchases. Only the owner's
+-- email login reads or writes it (a counter never sees purchase prices).
+-- The Back Office gets it inside bo_bootstrap's ingredient rows (standard_cost).
+create table if not exists public.ingredient_costs (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null default public.current_business_id() references public.businesses(id) on delete cascade,
+  ingredient_id uuid not null references public.ingredients(id) on delete cascade,
+  standard_cost numeric,
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists ingredient_costs_ingredient_key on public.ingredient_costs(ingredient_id);
+alter table public.ingredient_costs drop constraint if exists ingredient_costs_standard_cost_check;
+alter table public.ingredient_costs add constraint ingredient_costs_standard_cost_check
+  check (standard_cost is null or (standard_cost >= 0 and standard_cost <= 1000000));
 
 -- =============================================================================
 -- 6. A15 COUNTER WASTE LOG (tables; the upload itself is in _fo_apply below)
@@ -1814,10 +1840,14 @@ begin
          supplier_id = case when p_item ? 'supplier_id' then public._to_uuid(p_item->>'supplier_id') else supplier_id end,
          category_id = case when p_item ? 'category_id' then public._to_uuid(p_item->>'category_id') else category_id end,
          reorder_level = coalesce(public._to_num(p_item->>'reorder_level'), reorder_level),
-         standard_cost = case when p_item ? 'cost_per_piece' then v_cost else standard_cost end,
          active = coalesce((p_item->>'active')::boolean, active, true),
          updated_at = now()
    where id = v_iid and business_id = v_biz;
+  -- the typed price paid per piece (owner-only table, see section 5b)
+  if p_item ? 'cost_per_piece' then
+    insert into public.ingredient_costs(business_id, ingredient_id, standard_cost) values (v_biz, v_iid, v_cost)
+      on conflict (ingredient_id) do update set standard_cost = excluded.standard_cost, updated_at = now();
+  end if;
   update public.recipes
      set name = v_name, recipe_type = v_type, selling_price = v_price,
          category = case when p_item ? 'subcategory' then nullif(btrim(p_item->>'subcategory'), '') else category end,
@@ -1857,12 +1887,13 @@ begin
     insert into public.inventory_transactions(business_id, ingredient_id, transaction_type, quantity, reference_id, transaction_date, notes)
       values (v_biz, v_iid, 'PURCHASE', v_q, v_pid::text, v_date, 'Supplied item restock');
     if not (p_item ? 'cost_per_piece') or p_item->>'cost_per_piece' is null then
-      update public.ingredients set standard_cost = round(v_total / v_q, 4) where id = v_iid;
+      insert into public.ingredient_costs(business_id, ingredient_id, standard_cost) values (v_biz, v_iid, round(v_total / v_q, 4))
+        on conflict (ingredient_id) do update set standard_cost = excluded.standard_cost, updated_at = now();
     end if;
   end if;
   v_unit_cost := coalesce((select price_per_base_unit from public.purchases where ingredient_id = v_iid
                            order by purchase_date desc, created_at desc limit 1),
-                          (select standard_cost from public.ingredients where id = v_iid), 0);
+                          (select standard_cost from public.ingredient_costs where ingredient_id = v_iid and business_id = v_biz), 0);
   return jsonb_build_object('recipe_id', v_rid, 'ingredient_id', v_iid, 'purchase_id', v_pid,
     'cost_per_piece', round(v_unit_cost, 4), 'selling_price', v_price,
     'margin', round(v_price - v_unit_cost, 2),
@@ -2007,10 +2038,11 @@ language sql immutable as $$
     'waste','inventory_transactions','settings','stores','dining_tables','staff','devices','customers','sales',
     'sale_items','payments','refunds','shifts','cash_movements','audit_log','qr_orders','businesses',
     'ingredient_brands','floor_shapes','loyalty_redemptions',
-    'option_groups','option_group_recipes','expenses','waste_logs','waste_log_items']
+    'option_groups','option_group_recipes','expenses','waste_logs','waste_log_items','ingredient_costs']
 $$;
 
--- Back Office start-up data: same as 009, plus option_groups and option_group_recipes (010).
+-- Back Office start-up data: same as 009, plus option_groups and option_group_recipes, and
+-- standard_cost on each ingredient row (010).
 create or replace function public.bo_bootstrap() returns jsonb
 language plpgsql stable security invoker set search_path = public as $$
 declare v_biz uuid := public.current_business_id(); v_upd uuid[];
@@ -2034,7 +2066,11 @@ begin
                        from public.staff st where st.business_id = v_biz), '[]'::jsonb),
     'categories', coalesce((select jsonb_agg(to_jsonb(x)) from public.categories x where x.business_id = v_biz), '[]'::jsonb),
     'suppliers', coalesce((select jsonb_agg(to_jsonb(x)) from public.suppliers x where x.business_id = v_biz), '[]'::jsonb),
-    'ingredients', coalesce((select jsonb_agg(to_jsonb(x)) from public.ingredients x where x.business_id = v_biz), '[]'::jsonb),
+    -- 010: each row adds standard_cost (owner-only table ingredient_costs; RLS
+    -- gives a non-owner login nothing, so it is null for them)
+    'ingredients', coalesce((select jsonb_agg(to_jsonb(x) || jsonb_build_object('standard_cost',
+                              (select c.standard_cost from public.ingredient_costs c where c.ingredient_id = x.id)))
+                             from public.ingredients x where x.business_id = v_biz), '[]'::jsonb),
     'ingredient_brands', coalesce((select jsonb_agg(to_jsonb(x) order by x.ingredient_id, x.sort_order, x.name)
                                    from public.ingredient_brands x where x.business_id = v_biz), '[]'::jsonb),
     'brand_stock', case when public.app_rank() >= 3 then public.ingredient_brand_stock(null) else '[]'::jsonb end,
@@ -2212,6 +2248,9 @@ create trigger waste_log_items_same_shop before insert or update on public.waste
 drop trigger if exists expenses_same_shop on public.expenses;
 create trigger expenses_same_shop before insert or update on public.expenses
   for each row execute function public._same_shop_links('ingredient_id', 'ingredients', 'supplier_id', 'suppliers');
+drop trigger if exists ingredient_costs_same_shop on public.ingredient_costs;
+create trigger ingredient_costs_same_shop before insert or update on public.ingredient_costs
+  for each row execute function public._same_shop_links('ingredient_id', 'ingredients');
 -- (option_group_recipes has its own check, _option_group_recipe_check.)
 
 -- =============================================================================
@@ -2298,21 +2337,21 @@ end $$;
 --   option_groups, option_group_recipes: everyone of the shop reads (like
 --     recipes; nothing secret: the options are copied into the recipes anyway);
 --     only the owner writes (apply_changes).
---   expenses: only the owner reads and writes.
+--   expenses, ingredient_costs: only the owner reads and writes.
 --   waste_logs, waste_log_items: office data (like purchases): logins with a
 --     staff-type profile (the owner's email login) read them; counters write
 --     them only through fo_sync; the owner may write them for backup / import.
 do $$
 declare t text; p record;
 begin
-  foreach t in array array['option_groups','option_group_recipes','expenses','waste_logs','waste_log_items'] loop
+  foreach t in array array['option_groups','option_group_recipes','expenses','waste_logs','waste_log_items','ingredient_costs'] loop
     execute format('alter table public.%I enable row level security', t);
     for p in select policyname from pg_policies where schemaname = 'public' and tablename = t loop
       execute format('drop policy %I on public.%I', p.policyname, t);
     end loop;
     if t in ('option_groups', 'option_group_recipes') then
       execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()))', t || '_read', t);
-    elsif t = 'expenses' then
+    elsif t in ('expenses', 'ingredient_costs') then
       execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3)', t || '_read', t);
     else
       execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 1)', t || '_read', t);

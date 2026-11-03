@@ -58,9 +58,10 @@ From db-security-engineer's report, 2026-11-03 (net income tax change and securi
 - **`save_supplied_item(p_item jsonb)`** creates/edits, all-or-nothing:
   a recipe (`recipe_type` PASTRY default or FOOD, `supplied_ingredient_id` set) + a stock item in **pcs** + one recipe line "1 pcs" (+ optional restock purchase + PURCHASE stock line).
   - `p_item = {recipe_id?, ingredient_id? (both or neither), name, recipe_type, subcategory, supplier_id, category_id, cost_per_piece, selling_price, image_url, description, pos_visible, qr_visible, active, sort_order, reorder_level, restock?:{quantity, cost_per_piece | total_price, purchase_date, invoice_number, notes, brand_id}}`
-  - Returns `{recipe_id, ingredient_id, purchase_id|null, cost_per_piece, selling_price, margin, margin_pct}`; cost = latest purchase price per piece, else the typed cost (`ingredients.standard_cost`).
+  - Returns `{recipe_id, ingredient_id, purchase_id|null, cost_per_piece, selling_price, margin, margin_pct}`; cost = latest purchase price per piece, else the typed cost (`standard_cost`, see below).
   - Errors: `BAD_NAME`, `BAD_TYPE`, `BAD_PRICE`, `BAD_QUANTITY`, `NOT_A_SUPPLIED_ITEM` (the ids are not one supplied item whose recipe AND stock item belong to this shop), `FORBIDDEN_ROW`.
-- New columns: `recipes.supplied_ingredient_id`, `ingredients.standard_cost`. The stock item can't leave pcs (`SUPPLIED_NEEDS_PCS`).
+- New column `recipes.supplied_ingredient_id`. The typed cost per piece is **not** on `ingredients` (every shop login, incl. counters, reads that table): it lives in the owner-only table **`ingredient_costs`** (`id, business_id, ingredient_id (unique), standard_cost, updated_at`; owner reads/writes; same-shop link check). `save_supplied_item` writes it; **`bo_bootstrap` adds `standard_cost` to each ingredient row** (owner only; null for anyone else), so Back Office code reading `ing.standard_cost` keeps working. `fo_bootstrap` and direct `ingredients` reads never contain it (screens security review M1).
+- The stock item can't leave pcs (`SUPPLIED_NEEDS_PCS`).
 - Sales, waste, counts, sold-out work as for any recipe (1 pc per sale; no stock = can't be sold, Q6 rule).
 - Later restocks can also be ordinary purchases of the stock item.
 
@@ -86,12 +87,12 @@ From db-security-engineer's report, 2026-11-03 (net income tax change and securi
   - Items in an EXPENSE category are not stock: a purchase, starting stock or positive adjustment → `EXPENSE_ITEM_NOT_STOCK` (taking old stock off is allowed). Counter sale/refund lines for them are dropped silently.
   - The Back Office records buying them as an **expense** (category SUPPLIES, optional `ingredient_id`, `quantity`, `unit`, `supplier_id`), and should hide them from stock counts, low-stock, inventory value and recipe pickers.
 - **`expenses`** (owner reads/writes via `apply_changes`): `id, business_id, expense_date, category ('SUPPLIES','RENT','UTILITIES','INTERNET','WAGES','REPAIRS','OTHER'), amount (> 0), note (≤ 500), photo_path, ingredient_id, supplier_id, quantity, unit, created_by, created_at, updated_at`.
-  - Receipt photos: **private** bucket `expense-photos`, path `<business_id>/<file>`, owner only (read with an authenticated storage request, not a public URL).
+  - Receipt photos: **private** bucket `expense-photos`, path `<business_id>/<file>`, owner only (read with an authenticated storage request, not a public URL). Bucket limits: **5 MB per file, JPEG / PNG / WebP only** (the app should shrink photos before upload, like menu photos).
 - **`net_income_report(p_month date)`** → `{month:'YYYY-MM', from, to, sales:{gross, refunds, net, tax, service_charge, count}, ingredients:{sold, wasted, used}, expenses:{total, by_category:{RENT:…}}, net_income}`
   - gross = finished (not voided) sales of the month; refunds = full/partial refunds dated in the month.
   - tax = tax on those sales minus the refunds' tax share (refund × sale tax ÷ sale grand total). **Tax is owed, not income** (lead decision 2026-11-03), so it is shown as its own line and taken out.
   - net = gross − refunds − tax. Service charge stays income (shown as `service_charge` for information).
-  - sold = cost of SALE_USAGE − SALE_REVERSAL stock lines of the month; wasted = cost of WASTE lines; costs per unit = `_ingredient_unit_cost`, following the shop's costing method (lead-approved 2026-11-03): weighted average over purchases up to month end, or the latest purchase price when the method is `latest` (not the brand in use); house-made = production recipe ÷ yield, else batches; supplied without purchases = `standard_cost`).
+  - sold = cost of SALE_USAGE − SALE_REVERSAL stock lines of the month; wasted = cost of WASTE lines; costs per unit = `_ingredient_unit_cost`, following the shop's costing method (lead-approved 2026-11-03): weighted average over purchases up to month end, or the latest purchase price when the method is `latest` (not the brand in use); house-made = production recipe ÷ yield, else batches; supplied without purchases = `ingredient_costs.standard_cost`).
   - net_income = net − used − expenses.
 
 ## A12. Merge ingredients (owner only)
@@ -112,7 +113,7 @@ Everything is additive; no rename, no removed column or function. Known limits u
 - A 1.3 Back Office shows library groups inside recipes; edits to them are ignored (rebuilt from the library).
 
 ## Back Office writable tables / backup
-`apply_changes` adds `option_groups`, `option_group_recipes`, `expenses`, `waste_logs`, `waste_log_items`. Backup/import order: option groups after recipes, ticks after both; expenses after ingredients/suppliers; waste logs after shifts, items after logs.
+`apply_changes` adds `option_groups`, `option_group_recipes`, `expenses`, `waste_logs`, `waste_log_items`, `ingredient_costs`. Backup/import order: `ingredient_costs` after ingredients (a backup's `standard_cost` on ingredient rows is ignored by an ingredients upsert, so back up / restore `ingredient_costs` itself); option groups after recipes, ticks after both; expenses after ingredients/suppliers; waste logs after shifts, items after logs.
 
 ## Same-shop links (security review H1)
 The database refuses (`FORBIDDEN_ROW`) any link to another shop's row on the new columns, whoever writes them (apply_changes or a direct API write): `recipes.supplied_ingredient_id`, `ingredients.merged_into`, `waste_logs.shift_id`, `waste_log_items.waste_log_id / recipe_id / ingredient_id`, `expenses.ingredient_id / supplier_id`, `option_group_recipes.group_id / recipe_id`.
