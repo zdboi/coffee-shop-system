@@ -400,9 +400,10 @@ $$;
 -- item's type / sub-category is in applies_to and the item doesn't untick it
 -- (EXCLUDE). Production recipes (house-made sauces) never get library groups
 -- unless ticked on.
--- SWAP on one item: takes off what THIS recipe uses of swap_from (all its
--- lines of it together) and puts on the same amount of swap_to (converted to
--- swap_to's stock unit). A recipe that doesn't use swap_from (or whose amount
+-- SWAP on one item: extras / removes = what THIS recipe's own lines use of
+-- swap_from and the same amount of swap_to (converted), for display. The stock
+-- actually moved is the line's WHOLE amount of swap_from, options included
+-- (swap_rule 'LINE_TOTAL', see _recipe_stock_lines). A recipe that doesn't use swap_from (or whose amount
 -- can't be converted) doesn't get that option. The swap carries no stock for
 -- old 1.3 counters (ingredient_id empty): they deduct the recipe as if no swap.
 -- A group left with no options for an item is left out for that item.
@@ -440,7 +441,7 @@ begin
           'kind', 'SWAP', 'ingredient_id', null, 'ingredient_qty_delta', 0,
           'extras', jsonb_build_array(jsonb_build_object('ingredient_id', v_y.id, 'quantity', v_to)),
           'removes', jsonb_build_array(jsonb_build_object('ingredient_id', v_x.id, 'quantity', v_amt)),
-          'swap_from_ingredient_id', v_x.id, 'swap_to_ingredient_id', v_y.id));
+          'swap_from_ingredient_id', v_x.id, 'swap_to_ingredient_id', v_y.id, 'swap_rule', 'LINE_TOTAL'));
       else
         v_extras := public._option_extras(p_r.business_id, o);
         v_opts := v_opts || jsonb_build_array(jsonb_build_object(
@@ -617,44 +618,83 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- The stock that p_qty of a recipe with these options takes off, worked out by
--- the SERVER from the recipe as it is now (same rule as inventoryLinesForSaleLine
--- in logic.js): the recipe's lines x p_qty, plus each chosen option's extras
--- x p_qty, minus each chosen option's removes x p_qty (a swap), summed per
--- ingredient; only amounts above 0 are kept. Returns [{ingredient_id, quantity}].
+-- the SERVER from the recipe as it is now. logic.js (inventoryLinesForSaleLine)
+-- must follow the SAME rule (lead decision 2026-11-03, "a non-dairy drink is
+-- fully non-dairy"):
+--   1. per ONE item: the recipe's lines, plus every chosen NON-swap option's
+--      extras (or its old ingredient_id x ingredient_qty_delta), summed per
+--      ingredient;
+--   2. then each chosen SWAP option, in the order chosen: the item's WHOLE
+--      amount of the "from" ingredient (recipe + the other options' extras,
+--      e.g. the 16oz size's extra milk) is taken off and the same amount,
+--      converted to the "to" ingredient's stock unit (g <-> kg, mL <-> L, g <->
+--      mL through "weighs"), is added to "to". If two chosen swaps have the
+--      same "from", only the FIRST one moves stock (the second still costs its
+--      price, nothing else). A swap whose "from" amount is 0 moves nothing.
+--      (The swap's own extras / removes are the recipe-only amounts, kept for
+--      display; they are NOT used here.)
+--   3. x p_qty, rounded to 6 decimals; only amounts above 0 are kept.
+-- Returns [{ingredient_id, quantity}] sorted by ingredient_id.
 -- A chosen option is found on the recipe's options by group_id + option_id,
 -- or by group name + label (the shape of sale_items.modifiers). An option that
 -- is no longer on the menu takes nothing.
 create or replace function public._recipe_stock_lines(p_biz uuid, p_recipe uuid, p_qty numeric, p_mods jsonb) returns jsonb
-language sql stable security definer set search_path = public as $$
-  with r as (select * from public.recipes where id = p_recipe and business_id = p_biz),
-  sel as (select m from jsonb_array_elements(case when jsonb_typeof(p_mods) = 'array' then p_mods else '[]'::jsonb end) m
-          where jsonb_typeof(m) = 'object'),
-  opt as (
-    select (select o from r,
-                   jsonb_array_elements(case when jsonb_typeof(r.modifier_groups) = 'array' then r.modifier_groups else '[]'::jsonb end) g,
-                   jsonb_array_elements(case when jsonb_typeof(g->'options') = 'array' then g->'options' else '[]'::jsonb end) o
-            where (g->>'id' = s.m->>'group_id' and o->>'id' = s.m->>'option_id')
-               or (g->>'name' = s.m->>'group' and o->>'label' = s.m->>'label')
-            order by (g->>'id' = s.m->>'group_id' and o->>'id' = s.m->>'option_id') desc nulls last
-            limit 1) as o
-    from sel s),
-  lines as (
-    select ri.ingredient_id, ri.quantity * p_qty as q
-      from public.recipe_ingredients ri join r on r.id = ri.recipe_id
-      where ri.quantity > 0
-    union all
-    select public._to_uuid(e->>'ingredient_id'), public._to_num(e->>'quantity') * p_qty
-      from opt, jsonb_array_elements(public._option_extras(p_biz, opt.o)) e
-      where opt.o is not null
-    union all
-    select public._to_uuid(e->>'ingredient_id'), -public._to_num(e->>'quantity') * p_qty
-      from opt, jsonb_array_elements(case when jsonb_typeof(opt.o->'removes') = 'array' then opt.o->'removes' else '[]'::jsonb end) e
-      where opt.o is not null
-  )
-  select coalesce(jsonb_agg(jsonb_build_object('ingredient_id', s.ingredient_id, 'quantity', s.q) order by s.ingredient_id), '[]'::jsonb)
-  from (select ingredient_id, round(sum(q), 6) as q from lines where ingredient_id is not null and q is not null
-        group by ingredient_id having round(sum(q), 6) > 0) s
-$$;
+language plpgsql stable security definer set search_path = public as $$
+declare
+  v_groups jsonb; m jsonb; o jsonb; e jsonb; v_t jsonb := '{}'::jsonb; v_opts jsonb := '[]'::jsonb;
+  v_from uuid; v_to uuid; v_amt numeric; v_conv numeric; v_done uuid[] := '{}';
+  v_x public.ingredients%rowtype; v_y public.ingredients%rowtype; r record;
+begin
+  select case when jsonb_typeof(modifier_groups) = 'array' then modifier_groups else '[]'::jsonb end into v_groups
+    from public.recipes where id = p_recipe and business_id = p_biz;
+  if not found then return '[]'::jsonb; end if;
+  -- the chosen options, as on the menu now
+  for m in select value from jsonb_array_elements(case when jsonb_typeof(p_mods) = 'array' then p_mods else '[]'::jsonb end) loop
+    if jsonb_typeof(m) <> 'object' then continue; end if;
+    o := null;
+    select oo into o
+      from jsonb_array_elements(v_groups) g,
+           jsonb_array_elements(case when jsonb_typeof(g->'options') = 'array' then g->'options' else '[]'::jsonb end) oo
+     where (g->>'id' = m->>'group_id' and oo->>'id' = m->>'option_id')
+        or (g->>'name' = m->>'group' and oo->>'label' = m->>'label')
+     order by (g->>'id' = m->>'group_id' and oo->>'id' = m->>'option_id') desc nulls last
+     limit 1;
+    if o is not null then v_opts := v_opts || jsonb_build_array(o); end if;
+  end loop;
+  -- 1. recipe lines + non-swap options' extras (per one item)
+  for r in select ingredient_id, quantity from public.recipe_ingredients
+           where recipe_id = p_recipe and business_id = p_biz and quantity > 0 loop
+    v_t := v_t || jsonb_build_object(r.ingredient_id::text, coalesce((v_t->>r.ingredient_id::text)::numeric, 0) + r.quantity);
+  end loop;
+  for o in select value from jsonb_array_elements(v_opts) loop
+    if upper(coalesce(o->>'kind', '')) = 'SWAP' then continue; end if;
+    for e in select value from jsonb_array_elements(public._option_extras(p_biz, o)) loop
+      if public._to_uuid(e->>'ingredient_id') is null or public._to_num(e->>'quantity') is null then continue; end if;
+      v_t := v_t || jsonb_build_object(e->>'ingredient_id',
+                                       coalesce((v_t->>(e->>'ingredient_id'))::numeric, 0) + public._to_num(e->>'quantity'));
+    end loop;
+  end loop;
+  -- 2. swaps, in the order chosen; the first swap of a "from" ingredient wins
+  for o in select value from jsonb_array_elements(v_opts) loop
+    if upper(coalesce(o->>'kind', '')) <> 'SWAP' then continue; end if;
+    v_from := public._to_uuid(o->>'swap_from_ingredient_id');
+    v_to := public._to_uuid(o->>'swap_to_ingredient_id');
+    if v_from is null or v_to is null or v_from = v_to or v_from = any(v_done) then continue; end if;
+    v_done := v_done || v_from;
+    v_amt := coalesce((v_t->>v_from::text)::numeric, 0);
+    if v_amt <= 0 then continue; end if;
+    select * into v_x from public.ingredients where id = v_from and business_id = p_biz;
+    select * into v_y from public.ingredients where id = v_to and business_id = p_biz;
+    if v_x.id is null or v_y.id is null then continue; end if;
+    v_conv := public._to_base_qty(v_amt, v_x.base_unit, v_y.base_unit, coalesce(v_y.weight_g_per_ml, v_x.weight_g_per_ml));
+    if coalesce(v_conv, 0) <= 0 then continue; end if;      -- can't convert: nothing moves
+    v_t := (v_t - v_from::text) || jsonb_build_object(v_to::text, coalesce((v_t->>v_to::text)::numeric, 0) + v_conv);
+  end loop;
+  -- 3. x quantity
+  return coalesce((select jsonb_agg(jsonb_build_object('ingredient_id', k::uuid, 'quantity', q) order by k::uuid)
+                   from (select key as k, round(value::text::numeric * p_qty, 6) as q from jsonb_each(v_t)) x
+                   where q > 0), '[]'::jsonb);
+end $$;
 
 -- What ONE stock unit of an ingredient cost, as of a day (for waste and the
 -- monthly report). Same idea as the Back Office's costing:
@@ -2175,7 +2215,12 @@ begin
         -- so the counter deducts the same stock when it is paid
         || case when jsonb_typeof(v_o->'extras') = 'array' then jsonb_build_object('extras', v_o->'extras') else '{}'::jsonb end
         || case when jsonb_typeof(v_o->'removes') = 'array' then jsonb_build_object('removes', v_o->'removes') else '{}'::jsonb end
-        || case when v_o ? 'kind' then jsonb_build_object('kind', v_o->'kind') else '{}'::jsonb end);
+        || case when v_o ? 'kind' then jsonb_build_object('kind', v_o->'kind') else '{}'::jsonb end
+        || case when upper(coalesce(v_o->>'kind', '')) = 'SWAP'
+                then jsonb_build_object('swap_from_ingredient_id', v_o->'swap_from_ingredient_id',
+                                        'swap_to_ingredient_id', v_o->'swap_to_ingredient_id',
+                                        'swap_rule', coalesce(v_o->'swap_rule', '"LINE_TOTAL"'::jsonb))
+                else '{}'::jsonb end);
       v_g := null; v_o := null;
     end loop;
     for v_g in select value from jsonb_array_elements(v_groups) loop
