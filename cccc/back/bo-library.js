@@ -341,7 +341,7 @@ function readLibraryGroupForm(root, editing){
 /* ---- choose the items a group is on (from the library side) ---- */
 function openLibraryItems(id){
   const g = libGroupById(id); if(!g) return;
-  const list = state.recipes.filter(r => r.active !== false && !isSuppliedRecipe(r) || (r.active !== false && isSuppliedRecipe(r))).filter(r => !isProductionRecipe(r) || libTick(g.id, r.id));
+  const list = state.recipes.filter(r => r.active !== false).filter(r => !isProductionRecipe(r) || libTick(g.id, r.id));
   const groups = recGroups(list);
   const applies = (r) => { const t = libTick(g.id, r.id); return t ? t.mode === 'INCLUDE' : libDefaultApplies(g, r); };
   openModal({title: 'Items with ' + esc(g.name), wide: true, body: `
