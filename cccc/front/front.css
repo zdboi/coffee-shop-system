@@ -480,3 +480,53 @@
 .failed-acts{white-space:nowrap;}
 .failed-acts .btn-amber{margin-top:6px;}
 .failed-hint{white-space:normal;margin:6px 0 0;font-size:12.5px;}
+/* ---- Release 1.4: option sheet (library groups, swaps, required) ---- */
+.mod-head{text-align:center;margin-bottom:10px;}
+.mod-head b{font-size:17px;}
+.mod-head .hint{margin:4px 0 0;}
+.mod-swap{display:inline-block;font-size:11.5px;font-weight:800;text-transform:uppercase;letter-spacing:.3px;padding:1px 6px;border-radius:6px;background:var(--cc-info-tint);color:var(--cc-info);vertical-align:1px;}
+.mod-opt.selected .mod-swap{background:var(--cc-butter);color:var(--cc-ink);}
+.mod-opt-out{border-style:dashed;color:var(--cc-muted);}
+.mod-out{display:inline-block;font-size:11.5px;font-weight:700;color:var(--cc-danger);}
+.mod-opt.selected .mod-out{color:var(--cc-butter);}
+.mod-group-missing .mod-group-title{color:var(--cc-danger);}
+.mod-group-missing .mod-options{outline:2px solid var(--cc-danger);outline-offset:4px;border-radius:12px;}
+.mod-missing{margin:4px 0 0;padding:10px 12px;border-radius:var(--cc-radius-sm);background:var(--cc-danger-tint);color:var(--cc-danger);font-weight:700;font-size:14px;}
+.mod-total{text-align:center;font-size:22px;}
+/* ---- Release 1.4: waste log (A15) ---- */
+.waste-intro{margin-top:0;}
+.waste-section-title{font-weight:800;font-size:14px;margin:14px 0 8px;color:var(--cc-ink);}
+.waste-lines{display:flex;flex-direction:column;gap:8px;}
+.waste-empty{padding:12px 14px;border:1px dashed var(--cc-line);border-radius:var(--cc-radius);color:var(--cc-muted);}
+.waste-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--cc-line);border-radius:var(--cc-radius);background:var(--cc-card);}
+.waste-line-main{display:flex;flex-direction:column;gap:2px;flex:1 1 180px;min-width:0;}
+.waste-line-main b{font-size:15px;overflow-wrap:anywhere;}
+.waste-line-main small{color:var(--cc-muted);font-size:12.5px;}
+.waste-line-qty{display:flex;align-items:center;gap:8px;}
+.waste-line-qty .qty-val{min-width:28px;text-align:center;font-weight:800;font-size:17px;}
+.waste-line-qty .waste-amount{width:110px;min-height:var(--cc-touch);font-size:16px;}
+.waste-line-qty select{min-height:var(--cc-touch);}
+.waste-line-acts{display:flex;gap:4px;margin-left:auto;}
+.waste-line-acts .btn{min-height:var(--cc-touch);}
+.waste-add{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;}
+.waste-reasons{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;}
+.waste-reason{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;min-height:60px;padding:8px 12px;border-radius:var(--cc-radius);border:2px solid var(--cc-line);background:var(--cc-card);font-weight:700;font-size:14.5px;text-align:left;color:var(--cc-ink);}
+.waste-reason small{font-weight:600;font-size:12px;color:var(--cc-muted);}
+.waste-reason.selected{border-color:var(--cc-terracotta);background:var(--cc-terracotta-tint);color:var(--cc-terracotta-deep);}
+#waste-approval-note .notice{margin:10px 0 0;}
+.waste-cost{margin-top:10px;padding:10px 12px;border-radius:var(--cc-radius-sm);background:var(--cc-cream);font-size:14px;}
+.waste-search{margin-right:0;}
+.waste-pick-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;max-height:56vh;overflow-y:auto;padding:2px;}
+.waste-pick{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-height:60px;padding:10px 12px;border-radius:var(--cc-radius);border:1px solid var(--cc-line);background:var(--cc-card);text-align:left;color:var(--cc-ink);}
+.waste-pick b{font-size:14.5px;overflow-wrap:anywhere;}
+.waste-pick small{font-size:12px;color:var(--cc-muted);}
+.waste-pick:hover{border-color:var(--cc-terracotta);}
+.waste-pick[hidden]{display:none;}
+.waste-summary .waste-list{margin-top:8px;font-size:13.5px;}
+.waste-summary .waste-list summary{cursor:pointer;min-height:36px;display:flex;align-items:center;font-weight:700;}
+.waste-entry{padding:4px 0;border-top:1px solid var(--cc-line);}
+@media(max-width:560px){
+  .waste-add{grid-template-columns:1fr;}
+  .waste-reasons{grid-template-columns:1fr 1fr;}
+  .waste-pick-grid{grid-template-columns:1fr 1fr;}
+}

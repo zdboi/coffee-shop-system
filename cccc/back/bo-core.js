@@ -182,6 +182,9 @@ function applyBoBootstrap(d){
   state.brandStock = Array.isArray(d.brand_stock) ? d.brand_stock : [];
   state.devices = d.devices || [];
   state.stores = d.stores || [];
+  // release 1.4 (010): the option library and the per-item ticks (an older database: none)
+  state.optionGroups = Array.isArray(d.option_groups) ? d.option_groups : [];
+  state.optionGroupRecipes = Array.isArray(d.option_group_recipes) ? d.option_group_recipes : [];
   state.ingredientTxns = {};
   BO.isOwner = !!d.is_owner;
   BO.rank = Number(d.rank) || 0;
@@ -699,8 +702,12 @@ const BO_NAV = [
   {id: 'production', label: 'Production', ic: 'refresh'},
   {id: 'recipes', label: 'Recipes & menu', ic: 'cup'},
   {id: 'inventory', label: 'Inventory', ic: 'grid'},
+  {id: 'wasteReport', label: 'Waste report', ic: 'trash'},
   {id: 'costing', label: 'Costing', ic: 'cash'},
   {id: 'suppliers', label: 'Suppliers', ic: 'download'},
+  {group: 'Money'},
+  {id: 'expenses', label: 'Expenses', ic: 'card'},
+  {id: 'netIncome', label: 'Net income', ic: 'star'},
   {id: 'reports', label: 'Reports', ic: 'chart'},
   {group: 'Setup'},
   {id: 'tables', label: 'Tables & QR codes', ic: 'map'},
@@ -727,6 +734,10 @@ const BO_ROUTES = {
   production: {title: 'Production', render: () => renderProduction()},
   recipes: {title: 'Recipes & menu', render: () => renderRecipes()},
   recipeDetail: {title: 'Recipe', param: true, nav: 'recipes', render: (p) => renderRecipeDetail(p)},
+  optionLibrary: {title: 'Options library', nav: 'recipes', render: () => renderOptionLibrary()},     // bo-library.js (1.4, A9)
+  wasteReport: {title: 'Waste report', render: () => renderWasteReport()},                          // bo-money.js (1.4, A15)
+  expenses: {title: 'Expenses', render: () => renderExpenses()},                                    // bo-money.js (1.4, A11)
+  netIncome: {title: 'Net income', render: () => renderNetIncome()},                                // bo-money.js (1.4, A11)
   inventory: {title: 'Inventory', render: () => renderInventory()},
   costing: {title: 'Recipe costing', render: () => renderCosting()},
   suppliers: {title: 'Suppliers', render: () => renderSuppliers()},
@@ -904,7 +915,8 @@ function staleShiftsAlertHtml(){
 /* ================= dashboard ================= */
 function renderDashboard(){
   const content = document.getElementById('content');
-  const activeIngredients = state.ingredients.filter(i => i.active !== false);
+  // counted stock only (1.4): not merged away, not operating supplies
+  const activeIngredients = stockIngredientsList();
   const rawActive = activeIngredients.filter(i => !isProducedItem(i));
   const producedActive = activeIngredients.filter(i => isProducedItem(i));
   const invValue = activeIngredients.reduce((sum, i) => sum + ingredientStock(i.id) * (ingredientCosting(i.id).current || 0), 0);

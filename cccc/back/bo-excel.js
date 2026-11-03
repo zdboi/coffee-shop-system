@@ -441,7 +441,13 @@ function xlBuildModel(read, problems){
 function xlAllSheets(model){ return model.files.flatMap(f => f.sheets); }
 function xlSheetActive(s){ return s.type !== 'SKIP' && s.action !== 'skip'; }
 function xlExistingRecipe(name){ const k = xlKey(name); return state.recipes.find(r => xlKey(r.name) === k && r.active !== false) || state.recipes.find(r => xlKey(r.name) === k) || null; }
-function xlExistingIngredient(key){ return state.ingredients.find(i => xlKey(i.name) === key && i.active !== false) || state.ingredients.find(i => xlKey(i.name) === key) || null; }
+// (1.4) an ingredient merged into a general one is matched to that general ingredient; operating supplies are not recipe items
+function xlExistingIngredient(key){
+  const hit = ingredientPickerList().find(i => xlKey(i.name) === key) || state.ingredients.find(i => xlKey(i.name) === key && !isMergedIngredient(i) && !isExpenseIngredient(i))
+    || state.ingredients.find(i => xlKey(i.name) === key && isMergedIngredient(i));
+  if(hit && isMergedIngredient(hit)){ const t = mergeTarget(hit.id); return t.ingredient && !isMergedIngredient(t.ingredient) ? t.ingredient : null; }
+  return hit || null;
+}
 function xlFamilySmall(base){ return base === 'kg' ? 'g' : base === 'L' ? 'ml' : base; }
 
 // Works out everything that depends on the owner's choices (called after every change).
@@ -589,7 +595,7 @@ function xlIngOptions(model, e){
   const house = [...model.house.values()];
   return `<option value="new" ${e.map === 'new' ? 'selected' : ''}>New ingredient</option>
     ${house.length ? `<optgroup label="Made by a sheet in this import">${house.map(h => `<option value="house:${esc(h.uid)}" ${e.map === 'house:' + h.uid ? 'selected' : ''}>${esc(h.name)} (house-made)</option>`).join('')}</optgroup>` : ''}
-    <optgroup label="Ingredients you already have">${state.ingredients.filter(i => i.active !== false || e.map === 'ing:' + i.id).slice().sort(byName)
+    <optgroup label="Ingredients you already have">${ingredientPickerList({keep: String(e.map || '').indexOf('ing:') === 0 ? [e.map.slice(4)] : []}).slice().sort(byName)
       .map(i => `<option value="ing:${esc(i.id)}" ${e.map === 'ing:' + i.id ? 'selected' : ''}>${esc(i.name)} (${esc(unitLabel(i.base_unit))})</option>`).join('')}</optgroup>`;
 }
 function xlCategoryOptions(selected){

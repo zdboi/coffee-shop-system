@@ -829,6 +829,10 @@ function applyOpLocally(op, replay){
       if(r) r.sold_out = !!d.sold_out;
       break;
     }
+    case 'waste':
+      // Release 1.4 (A15): the same stock the server will take off (it works it out itself).
+      applyStockDeltas(wasteStockDeltas(d));
+      break;
   }
   if(!replay) saveSnapshotSoon();
 }
@@ -884,7 +888,7 @@ const Sync = {
           if(r.status==='error'){
             await LocalDB.failedAdd(Object.assign({}, o, {error: r.message, failed_at: new Date().toISOString()}));
             if(o.type==='sale' && errorCode(r.message)==='QR_ORDER_ALREADY_PAID') await onQrOrderAlreadyPaid(o);
-            else toast(`Could not upload a ${o.type.replace('_',' ')}: ${friendlyError({message:r.message})}`, 'error');
+            else toast(`Could not upload (${opTypeLabel(o.type)}): ${failedReasonText({type: o.type, data: o.data, error: r.message})}`, 'error');
           }
           done.push(o.seq);
         }
@@ -1011,7 +1015,7 @@ async function renderAlerts(){
 
 // Plain words for the upload types shown to staff (unknown types show as they are).
 const OP_TYPE_LABELS = { shift_open:'Start shift', shift_close:'Close shift', cash_movement:'Pay in / pay out', sale:'Sale',
-  held_delete:'Remove held order', refund:'Refund / void', audit:'Activity note', sold_out:'Sold-out change' };
+  held_delete:'Remove held order', refund:'Refund / void', audit:'Activity note', sold_out:'Sold-out change', waste:'Waste log' };
 function opTypeLabel(type){ return Object.prototype.hasOwnProperty.call(OP_TYPE_LABELS, type) ? OP_TYPE_LABELS[type] : String(type == null ? '' : type); }
 
 async function showFailedOps(){
@@ -1060,6 +1064,13 @@ const REWARD_REFUSAL_CODES = ['REWARD_NOT_AVAILABLE', 'REWARD_AMOUNT_MISMATCH'];
 function failedReasonText(f){
   if(f && f.type === 'sale' && errorCode(f.error) === 'APPROVAL_INVALID' && f.data && f.data.sale && Number(f.data.sale.discount_amount) > 0){
     return 'The manager approval for this discount has expired or was already used. To record it, ring the sale up again and ask a manager to approve the discount.';
+  }
+  if(f && f.type === 'waste'){
+    const c = errorCode(f.error);
+    const what = f.data ? ` (${wasteReasonLabel(f.data.reason)}, ${(f.data.items||[]).length} line${(f.data.items||[]).length===1?'':'s'})` : '';
+    if(/^APPROVAL_|^PIN_UPDATE_NEEDED$/.test(c)) return `The manager approval for this complimentary waste${what} has expired or was already used. Log it again and ask a manager to approve.`;
+    if(c === 'BAD_WASTE' || c === 'UNKNOWN_RECIPE' || c === 'UNKNOWN_INGREDIENT') return `This waste entry${what} names an item or option that is no longer on the menu (the menu changed). Log it again with the current menu, then dismiss this one.`;
+    return friendlyError({message: f.error}) + what;
   }
   return friendlyError({message: f && f.error});
 }
@@ -1188,6 +1199,7 @@ async function refreshStockQuietly(){
     pending.forEach(op=>{
       if(op.type==='sale' && op.data.sale.status==='COMPLETED') applyStockDeltas(op.data.inventory.map(t=>Object.assign({transaction_type:'SALE_USAGE'}, t)));
       if(op.type==='refund') applyStockDeltas(op.data.inventory.map(t=>Object.assign({transaction_type:'SALE_REVERSAL'}, t)));
+      if(op.type==='waste') applyStockDeltas(wasteStockDeltas(op.data));
     });
     if(posState.route==='pos') renderProductGrid();
     return true;
@@ -1411,16 +1423,16 @@ function navigatePOS(route, param=null){
 function sellableRecipes(){
   return state.recipes.filter(r => r.active!==false && r.pos_visible!==false && Number(r.selling_price) > 0);
 }
-// How many more can be made right now from on-hand stock (99 = not tracked).
-function recipeAvailability(recipe){
-  const {lines} = recipeCost(recipe.id);
-  let lowest = Infinity;
-  for(const l of lines){
-    const qtyNeeded = Number(l.quantity)||0;
-    if(qtyNeeded<=0) continue;
-    lowest = Math.min(lowest, Math.floor(ingredientStock(l.ingredient_id)/qtyNeeded));
-  }
-  return lowest===Infinity ? 99 : lowest;
+// How many more can be made right now from on-hand stock (99 = not tracked). Release 1.4: the
+// shared recipeMakeableCount (same stock lines as a sale; merged ingredients counted on their
+// general ingredient, operating supplies left out). Without options here; the option sheet
+// checks the item again with the options chosen (cups, lids, swaps).
+function recipeAvailability(recipe, modifiers){
+  return recipeMakeableCount(recipe.id, modifiers || []);
+}
+// A swap option could still make an item whose own recipe ran out (e.g. no dairy milk, oat milk in stock).
+function hasSwapOption(recipe){
+  return recipeOptionGroups(recipe).some(g => (g.options||[]).some(o => o && optionKind(o) === 'SWAP'));
 }
 
 function renderPOSScreen(){
@@ -1430,8 +1442,10 @@ function renderPOSScreen(){
   const held = state.sales.filter(s=>s.status==='HELD');
   document.getElementById('topbar-actions').innerHTML = `
     <span class="shift-badge" title="Opened ${fmtDateTime(shift.opened_at)} by ${escapeHtml(shift.cashier_name)}">${escapeHtml(shift.shift_number||'')} · ${shiftDuration(shift)}</span>
-    ${held.length? `<button class="btn btn-outline" id="held-orders-btn">${icon('inbox')} Held (${held.length})</button>` : ''}`;
+    ${held.length? `<button class="btn btn-outline" id="held-orders-btn">${icon('inbox')} Held (${held.length})</button>` : ''}
+    <button class="btn btn-outline" id="waste-btn" title="Log waste: spilled, given free, calibration…">${icon('trash')} Log waste</button>`;
   if(held.length) document.getElementById('held-orders-btn').onclick = showHeldOrders;
+  document.getElementById('waste-btn').onclick = ()=> openWasteLog();
 
   const content = document.getElementById('content');
   const recipes = sellableRecipes();
@@ -1515,55 +1529,91 @@ async function onProductTap(recipeId){
     toast(`${recipe.name} is sold out, so it can't be added. When it's back, turn it on again in QR orders → Sold-out items.`, 'warn');
     return;
   }
-  if(recipeAvailability(recipe) <= 0){
+  const groups = recipeOptionGroups(recipe);
+  if(recipeAvailability(recipe) <= 0 && !(groups.length && hasSwapOption(recipe))){
     const p = cartStockProblems([{recipe_id: recipe.id, name: recipe.name, quantity: 1, modifiers: []}])[0];
     toast(`${recipe.name} is out of stock, so it can't be added${p ? ' (' + stockNeedText(p) + ')' : ''}.${isOnline() ? '' : ' This counter is offline: stock may be out of date.'}`, 'warn');
     return;
   }
-  const groups = recipe.modifier_groups || [];
   if(groups.length===0){ addToCart(recipe, 1, []); return; }
   openModifierPicker(recipe);
 }
 
-/* ================= Modifier picker ================= */
-function openModifierPicker(recipe, existingLine){
-  const groups = recipe.modifier_groups || [];
+// One line on its own, with these options: null when the stock can make it, else the words why not.
+function lineStockProblem(recipe, quantity, modifiers){
+  const p = cartStockProblems([{recipe_id: recipe.id, name: recipe.name, quantity, modifiers}])[0];
+  return p ? stockNeedText(p) : null;
+}
+// An option that can't be made now (its cup, lid or swap milk ran out on this counter): the
+// shared count with only that option chosen. When the item itself can't be made without a
+// swap (baseCount 0), only swap options are marked, so the sheet points at what still works.
+function optionOutOfStock(recipe, group, option, baseCount){
+  if(baseCount <= 0 && optionKind(option) !== 'SWAP') return false;
+  return recipeMakeableCount(recipe.id, [modifierFromOption(group, option)]) <= 0;
+}
+function optionPriceText(o){
+  const p = Number(o.price_delta) || 0;
+  return p ? ` (${p > 0 ? '+' : ''}${fmtMoney(p)})` : '';
+}
+
+/* ================= Modifier picker (the option sheet) =================
+   Release 1.4: library groups (lib_…) show like the item's own groups. Required groups (e.g.
+   Hot / Iced) must be chosen first (missingRequiredGroups). The cart keeps modifierFromOption's
+   snapshot (extras / removes), so cups, lids and swaps deduct the right stock, also offline.
+   opts (the waste log uses the same sheet):
+     {onDone({quantity, selections, modifiers, notes}), onCancel(), title, addLabel, maxQty, noNotes, noStockCheck} */
+function openModifierPicker(recipe, existingLine, opts){
+  opts = opts || {};
+  const groups = recipeOptionGroups(recipe);
   let selections = existingLine ? (existingLine.selections ? JSON.parse(JSON.stringify(existingLine.selections)) : []) : []; // [{group_id, option_id}]
   let qty = existingLine ? existingLine.quantity : 1;
-  function currentPrice(){
-    let p = Number(recipe.selling_price)||0;
-    selections.forEach(sel=>{
-      const g = groups.find(x=>x.id===sel.group_id); const o = g && (g.options||[]).find(x=>x.id===sel.option_id);
-      if(o) p += Number(o.price_delta)||0;
-    });
-    return p;
-  }
+  const maxQty = opts.maxQty || Infinity;
+  const baseCount = opts.noStockCheck ? 99 : recipeAvailability(recipe);
+  let finished = false;
+  function chosenModifiers(){ return modifiersFromSelections(recipe, selections); }
+  function currentPrice(){ return menuUnitPrice(recipe, chosenModifiers()); }
   const body = `
-    <div style="text-align:center;margin-bottom:10px;"><b style="font-size:17px;">${escapeHtml(recipe.name)}</b></div>
+    <div class="mod-head"><b>${escapeHtml(recipe.name)}</b>${!opts.noStockCheck && baseCount <= 0 ? `<div class="hint">Out of stock as it is. A swap below may still work.</div>` : ''}</div>
     ${groups.map(g=>`
-      <div class="mod-group" data-group="${g.id}">
+      <div class="mod-group" data-group="${escapeHtml(g.id)}">
         <div class="mod-group-title"><span>${escapeHtml(g.name)}${g.multi_select?' <span class="text-light" style="font-weight:500;">(pick any)</span>':''}</span>${g.required?'<span class="req">Required</span>':''}</div>
-        <div class="mod-options">${(g.options||[]).map(o=>`<button class="mod-opt" data-group="${g.id}" data-opt="${o.id}">${escapeHtml(o.label)}${Number(o.price_delta)?` (${o.price_delta>0?'+':''}${fmtMoney(o.price_delta)})`:''}</button>`).join('')}</div>
+        <div class="mod-options">${(g.options||[]).map(o=>{
+          const swap = optionKind(o) === 'SWAP';
+          const out = !opts.noStockCheck && optionOutOfStock(recipe, g, o, baseCount);
+          return `<button class="mod-opt${out?' mod-opt-out':''}" data-group="${escapeHtml(g.id)}" data-opt="${escapeHtml(o.id)}">${swap?`<span class="mod-swap">Swap</span> `:''}${escapeHtml(o.label)}${optionPriceText(o)}${out?' <small class="mod-out">Out of stock</small>':''}</button>`;
+        }).join('')}</div>
       </div>`).join('')}
-    <div class="form-row" style="margin-top:6px;"><label>Note (optional)</label><input id="mod-notes" maxlength="140" value="${escapeHtml(existingLine?existingLine.notes||'':'')}" placeholder="e.g. less ice"></div>
+    ${opts.noNotes ? '' : `<div class="form-row" style="margin-top:6px;"><label>Note (optional)</label><input id="mod-notes" maxlength="140" value="${escapeHtml(existingLine?existingLine.notes||'':'')}" placeholder="e.g. less ice"></div>`}
+    <div class="mod-missing" id="mod-missing" role="alert" hidden></div>
     <div class="qty-stepper">
-      <button class="qbig" id="mod-qty-minus">−</button><span class="qval" id="mod-qty-val">${qty}</span><button class="qbig" id="mod-qty-plus">+</button>
+      <button class="qbig" id="mod-qty-minus" aria-label="One less">−</button><span class="qval" id="mod-qty-val">${qty}</span><button class="qbig" id="mod-qty-plus" aria-label="One more">+</button>
     </div>
-    <div style="text-align:center;font-family:var(--font-display);font-size:22px;font-weight:700;color:var(--espresso);" id="mod-total-price">${fmtMoney(currentPrice()*qty)}</div>`;
-  const foot = `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="mod-add">${existingLine?'Update Item':'Add to Order'}</button>`;
-  openModal({title:'Customize', body, foot, onMount:(root)=>{
+    <div class="mod-total" id="mod-total-price">${fmtMoney(currentPrice()*qty)}</div>`;
+  const foot = `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="mod-add">${escapeHtml(opts.addLabel || (existingLine?'Update item':'Add to order'))}</button>`;
+  openModal({title: escapeHtml(opts.title || 'Customize'), body, foot,
+    onClose: ()=>{ if(!finished && opts.onCancel) opts.onCancel(); },
+    onMount:(root)=>{
     root.querySelector('[data-cancel]').onclick = closeModal;
+    const missingBox = root.querySelector('#mod-missing');
+    function showMissing(list){
+      root.querySelectorAll('.mod-group').forEach(n=> n.classList.toggle('mod-group-missing', list.some(m=>m.group_id===n.dataset.group)));
+      missingBox.hidden = !list.length;
+      missingBox.textContent = list.length ? `Choose ${list.map(m=>m.name).join(' and ')} first.` : '';
+    }
     function refreshUI(){
       root.querySelectorAll('.mod-opt').forEach(btn=>{
-        btn.classList.toggle('selected', selections.some(s=>s.group_id===btn.dataset.group && s.option_id===btn.dataset.opt));
+        const on = selections.some(s=>s.group_id===btn.dataset.group && s.option_id===btn.dataset.opt);
+        btn.classList.toggle('selected', on); btn.setAttribute('aria-pressed', String(on));
       });
       root.querySelector('#mod-qty-val').textContent = qty;
       root.querySelector('#mod-total-price').textContent = fmtMoney(currentPrice()*qty);
+      if(!missingBox.hidden) showMissing(missingRequiredGroups(recipe, selections));
     }
     root.querySelectorAll('.mod-opt').forEach(btn=>{
       btn.onclick = ()=>{
         const gid = btn.dataset.group, oid = btn.dataset.opt;
         const group = groups.find(g=>g.id===gid);
+        if(!group) return;
         const already = selections.some(s=>s.group_id===gid && s.option_id===oid);
         if(group.multi_select){
           if(already) selections = selections.filter(s=>!(s.group_id===gid && s.option_id===oid));
@@ -1576,18 +1626,23 @@ function openModifierPicker(recipe, existingLine){
       };
     });
     root.querySelector('#mod-qty-minus').onclick = ()=>{ qty = Math.max(1, qty-1); refreshUI(); };
-    root.querySelector('#mod-qty-plus').onclick = ()=>{ qty = qty+1; refreshUI(); };
+    root.querySelector('#mod-qty-plus').onclick = ()=>{ qty = Math.min(maxQty, qty+1); refreshUI(); };
     refreshUI();
     root.querySelector('#mod-add').onclick = ()=>{
-      const missing = groups.filter(g=>g.required && !selections.some(s=>s.group_id===g.id));
-      if(missing.length){ toast(`Please choose: ${missing.map(g=>g.name).join(', ')}`, 'error'); return; }
-      const modifiers = selections.map(s=>{
-        const g = groups.find(x=>x.id===s.group_id); const o = g.options.find(x=>x.id===s.option_id);
-        return {group:g.name, label:o.label, price_delta:Number(o.price_delta)||0, ingredient_id:o.ingredient_id||null, ingredient_qty_delta:Number(o.ingredient_qty_delta)||0};
-      });
-      const notes = root.querySelector('#mod-notes').value.trim();
+      const missing = missingRequiredGroups(recipe, selections);
+      if(missing.length){ showMissing(missing); toast(`Choose ${missing.map(m=>m.name).join(' and ')} first.`, 'error'); return; }
+      const modifiers = chosenModifiers();
+      if(!opts.noStockCheck){
+        // Out of stock with these options (e.g. no iced cups left): can't be added (Q6).
+        const why = lineStockProblem(recipe, qty, modifiers);
+        if(why){ toast(`${recipe.name}${modifiers.length ? ' (' + modifiers.map(m=>m.label).join(', ') + ')' : ''} can't be added: ${why}.${isOnline() ? '' : ' This counter is offline: stock may be out of date.'}`, 'warn'); return; }
+      }
+      const notesEl = root.querySelector('#mod-notes');
+      const notes = notesEl ? notesEl.value.trim() : '';
+      finished = true;
+      if(opts.onDone){ closeModal(); opts.onDone({quantity: qty, selections, modifiers, notes}); return; }
       if(existingLine){
-        Object.assign(existingLine, {quantity: qty, modifiers, selections, notes, unit_price: currentPrice()});
+        Object.assign(existingLine, {quantity: qty, modifiers, selections, notes, unit_price: menuUnitPrice(recipe, modifiers)});
       } else {
         addToCart(recipe, qty, modifiers, selections, notes);
       }
@@ -1599,7 +1654,7 @@ function openModifierPicker(recipe, existingLine){
 
 /* ================= Cart ================= */
 function addToCart(recipe, qty, modifiers, selections, notes){
-  const unit_price = Number(recipe.selling_price||0) + modifiers.reduce((s,m)=>s+(Number(m.price_delta)||0),0);
+  const unit_price = menuUnitPrice(recipe, modifiers);
   posState.cart.push({lineId: uid(), recipe_id: recipe.id, name: recipe.name, unit_price, quantity: qty, modifiers, selections: selections||[], notes: notes||''});
   renderCartPanel();
   toast(`Added ${recipe.name}`, 'success');
@@ -1890,7 +1945,7 @@ function renderCartPanel(){
   panel.querySelectorAll('[data-edit-line]').forEach(b=> b.onclick = ()=>{
     const line = posState.cart.find(x=>x.lineId===b.dataset.editLine);
     const recipe = state.recipes.find(r=>r.id===line.recipe_id);
-    if(recipe && (recipe.modifier_groups||[]).length && line.selections) openModifierPicker(recipe, line);
+    if(recipe && recipeOptionGroups(recipe).length && line.selections) openModifierPicker(recipe, line);
     else editLineNote(line);
   });
   panel.querySelectorAll('[data-reward]').forEach(b=> b.onclick = ()=>{
@@ -2055,6 +2110,13 @@ async function holdCurrentOrder(){
   clearCart();
   navigatePOS('pos');
 }
+// A held line's options as picker choices (1.4 modifiers keep group_id + option_id), so "Edit"
+// can open the option sheet again. Older lines without ids: none (Edit changes the note only).
+function heldSelections(mods){
+  const list = Array.isArray(mods) ? mods : [];
+  if(!list.length || !list.every(m => m && m.group_id && m.option_id)) return undefined;
+  return list.map(m => ({group_id: m.group_id, option_id: m.option_id}));
+}
 function showHeldOrders(){
   const held = state.sales.filter(s=>s.status==='HELD').sort((a,b)=> new Date(b.transaction_date)-new Date(a.transaction_date));
   openModal({title:'Held orders', body: held.length? `<div class="grid grid-2">${held.map(s=>{
@@ -2070,7 +2132,8 @@ function showHeldOrders(){
         const saleId = b.dataset.resume;
         const s = state.sales.find(x=>x.id===saleId);
         posState.cart = state.saleItems.filter(i=>i.sale_id===saleId).map(it=>({lineId: uid(), recipe_id: it.recipe_id, name: it.name,
-          unit_price: Number(it.unit_price), quantity: Number(it.quantity), modifiers: it.modifiers||[], notes: it.notes||''}));
+          unit_price: Number(it.unit_price), quantity: Number(it.quantity), modifiers: it.modifiers||[], notes: it.notes||'',
+          selections: heldSelections(it.modifiers)}));
         posState.resumingHeldSaleId = saleId;
         posState.customer = null; posState.reward = null;
         closeModal(); navigatePOS('pos');
@@ -3191,6 +3254,277 @@ function useCustomerForOrder(c){
 /* =====================================================================
    SHIFT & CASH
    ===================================================================== */
+/* =====================================================================
+   WASTE LOG (release 1.4, A15)
+   Menu items (with their options, on the same option sheet) or single stock ingredients,
+   a quantity and a reason. Queued as fo_sync op 'waste' (works offline); the server works out
+   the stock and cost itself. This counter takes the same stock off its own numbers right away
+   (wasteStockDeltas) until the next refresh. Only Complimentary needs a manager's approval,
+   exactly like a discount (OVERRIDE PIN online, or the signed-in manager's own sign-in).
+   The draft is kept on this counter (per staff member) so a reload loses nothing.
+   ===================================================================== */
+const WASTE_DRAFT_KEY = 'cccc.fo.wasteDraft';
+const WASTE_LOG_KEY = 'fo.wasteLog';          // what this counter logged (for the shift summary)
+function wasteDraft(){
+  const me = posState.currentUser;
+  let d = null;
+  try{ d = JSON.parse(localStorage.getItem(WASTE_DRAFT_KEY) || 'null'); }catch(e){ d = null; }
+  if(!d || !me || d.staff_id !== me.id || !Array.isArray(d.items)) d = {staff_id: me ? me.id : null, items: [], reason: '', note: ''};
+  return d;
+}
+function saveWasteDraft(d){ try{ localStorage.setItem(WASTE_DRAFT_KEY, JSON.stringify(d)); }catch(e){} }
+function clearWasteDraft(){ try{ localStorage.removeItem(WASTE_DRAFT_KEY); }catch(e){} }
+
+// Draft lines -> the items buildWasteData / wasteStockLines read. onlyFilled: leave out lines without an amount yet.
+function wasteItemsFromDraft(d, onlyFilled){
+  return d.items.filter(it => !onlyFilled || Number(it.quantity) > 0).map(it => {
+    if(it.type === 'recipe'){
+      const rec = state.recipes.find(r => r.id === it.recipe_id);
+      return {recipe_id: it.recipe_id, quantity: Number(it.quantity), modifiers: rec ? modifiersFromSelections(rec, it.selections || []) : []};
+    }
+    return {ingredient_id: it.ingredient_id, quantity: it.quantity === '' || it.quantity == null ? NaN : Number(it.quantity), unit: it.unit || null};
+  });
+}
+// Cost at today's costs, only when this counter knows the cost of every ingredient involved
+// (counters don't receive purchase prices, so usually it doesn't: the owner sees the cost in
+// Back Office → Waste report). -> {cost, known}
+function wasteCostInfo(items){
+  let lines = [];
+  try{ lines = wasteStockLines(items); }catch(e){ return {cost: 0, known: false}; }
+  if(!lines.length) return {cost: 0, known: true};
+  const known = lines.every(l => (ingredientCosting(l.ingredient_id).current || 0) > 0);
+  return {cost: known ? wasteCostPreview(items) : 0, known};
+}
+function wasteLineText(it){
+  if(it.type === 'recipe'){
+    const opts = (it.labels || []).length ? ` (${it.labels.join(', ')})` : '';
+    return `${Number(it.quantity) || 0} × ${it.name}${opts}`;
+  }
+  return `${it.quantity === '' || it.quantity == null ? '?' : Number(it.quantity)} ${unitLabel(it.unit || '')} ${it.name}`;
+}
+// Plain words for a waste entry that can't be saved (codes from buildWasteData).
+function wasteErrorText(e, d){
+  const code = (e && (e.code || e.message)) || '';
+  const nameOf = (rid) => { const r = state.recipes.find(x => x.id === rid); return r ? r.name : 'an item'; };
+  if(code === 'OPTION_REQUIRED') return `Choose ${(e.missing || []).map(m => m.name).join(' and ')} for ${nameOf(e.recipe_id)}: tap Options on that line.`;
+  if(code === 'BAD_WASTE' && e.problems) return `An option on ${nameOf(e.recipe_id)} is no longer on the menu. Remove that line and add it again.`;
+  if(code === 'BAD_WASTE' && !(d && d.items.length)) return 'Add at least one item first.';
+  if(code === 'BAD_WASTE') return 'A waste entry can have at most 30 lines. Log the rest as a second entry.';
+  if(code === 'UNKNOWN_RECIPE' || code === 'UNKNOWN_INGREDIENT') return 'One of the items is no longer on this counter\'s menu. Remove it and add it again.';
+  if(code === 'BAD_QUANTITY') return 'Check the amounts: each line needs an amount above 0 (at most 100 of a menu item).';
+  return friendlyError(e);
+}
+
+async function openWasteLog(focusIndex){
+  if(!posState.currentUser) return;
+  const d = wasteDraft();
+  const manager = hasRole('MANAGER');
+  const body = `
+    <p class="hint waste-intro">Drinks or food thrown away, given free, or made for calibration. The stock is taken off like a sale.</p>
+    <div class="waste-section-title">What was wasted</div>
+    <div class="waste-lines" id="waste-lines">${d.items.length ? d.items.map((it, i) => `
+      <div class="waste-line" data-i="${i}">
+        <div class="waste-line-main"><b>${escapeHtml(it.name)}</b>
+          ${it.type === 'recipe' ? ((it.labels || []).length ? `<small>${it.labels.map(escapeHtml).join(' · ')}</small>` : '') : '<small>Ingredient</small>'}</div>
+        <div class="waste-line-qty">${it.type === 'recipe'
+          ? `<button class="qty-btn" data-wdec="${i}" aria-label="One less ${escapeHtml(it.name)}">${icon('minus', {size: 18})}</button><span class="qty-val">${Number(it.quantity)}</span><button class="qty-btn" data-winc="${i}" aria-label="One more ${escapeHtml(it.name)}">${icon('plus', {size: 18})}</button>`
+          : `<input type="number" step="any" min="0" inputmode="decimal" class="waste-amount" data-wqty="${i}" value="${escapeHtml(it.quantity == null ? '' : String(it.quantity))}" placeholder="Amount" aria-label="Amount of ${escapeHtml(it.name)}">
+             <select data-wunit="${i}" aria-label="Unit">${unitsForIngredient(ingredientById(it.ingredient_id)).map(u => `<option value="${escapeHtml(u)}" ${u === it.unit ? 'selected' : ''}>${escapeHtml(unitLabel(u))}</option>`).join('')}</select>`}</div>
+        <div class="waste-line-acts">
+          ${it.type === 'recipe' && recipeOptionGroups(state.recipes.find(r => r.id === it.recipe_id)).length ? `<button class="btn btn-ghost btn-sm" data-wopts="${i}">${icon('edit', {size: 18})} Options</button>` : ''}
+          <button class="btn btn-ghost btn-sm icon-only" data-wrm="${i}" aria-label="Remove ${escapeHtml(it.name)}">${icon('trash', {size: 18})}</button>
+        </div>
+      </div>`).join('') : '<div class="waste-empty">Nothing added yet.</div>'}</div>
+    <div class="waste-add">
+      <button class="btn btn-outline btn-big" id="waste-add-menu">${icon('cup', {size: 20})} Add a menu item</button>
+      <button class="btn btn-outline btn-big" id="waste-add-ing">${icon('box', {size: 20})} Add an ingredient</button>
+    </div>
+    <div class="waste-section-title">Reason</div>
+    <div class="waste-reasons" role="radiogroup" aria-label="Reason">${WASTE_REASONS.map(r => `
+      <button class="waste-reason ${d.reason === r.id ? 'selected' : ''}" data-reason="${r.id}" role="radio" aria-checked="${d.reason === r.id}">${escapeHtml(r.label)}${r.needs_approval ? '<small>Manager approval</small>' : ''}${r.needs_note ? '<small>Add a note</small>' : ''}</button>`).join('')}</div>
+    <div id="waste-approval-note"></div>
+    <div class="form-row" style="margin-top:12px;"><label for="waste-note">Note <span class="text-light" id="waste-note-need">${d.reason === 'OTHER' ? '(needed)' : '(optional)'}</span></label>
+      <input id="waste-note" maxlength="${WASTE_NOTE_MAX}" value="${escapeHtml(d.note || '')}" placeholder="e.g. Dropped on the floor"></div>
+    ${manager ? '<div class="waste-cost" id="waste-cost"></div>' : ''}`;
+  openModal({title: 'Log waste', wide: true, body,
+    foot: `${d.items.length ? '<button class="btn btn-ghost" id="waste-clear">Clear</button>' : ''}<button class="btn btn-outline" data-close>Close</button><button class="btn btn-primary btn-big" id="waste-save">Log waste</button>`,
+    onMount: (root) => {
+      const save = () => saveWasteDraft(d);
+      const again = (fi) => { save(); openWasteLog(fi); };
+      root.querySelector('[data-close]').onclick = closeModal;
+      function approvalNote(){
+        const box = root.querySelector('#waste-approval-note');
+        if(d.reason !== 'COMPLIMENTARY'){ box.innerHTML = ''; return; }
+        const own = hasRole('MANAGER') && !shortPinUser() && ownLoginToken();
+        box.innerHTML = own
+          ? `<div class="notice">You approve this yourself (you are signed in as a ${escapeHtml(String(ROLE_WORDS[posState.currentUser.role] || '').toLowerCase())}).</div>`
+          : (!isOnline()
+            ? `<div class="notice warn">${icon('wifi-off', {size: 18})} Complimentary needs a manager's PIN, and checking it needs internet. Log it when the counter is back online, or ask a signed-in manager.</div>`
+            : `<div class="notice">A manager enters their PIN to approve when you tap Log waste.</div>`);
+      }
+      function costNote(){
+        const box = root.querySelector('#waste-cost');
+        if(!box) return;
+        const items = wasteItemsFromDraft(d, true).filter(it => !(it.ingredient_id && !(it.quantity > 0)));
+        if(!items.length){ box.innerHTML = ''; return; }
+        const c = wasteCostInfo(items);
+        box.innerHTML = c.known
+          ? `Cost at today's prices: <b>${fmtMoney(c.cost)}</b> <span class="text-light">(managers only)</span>`
+          : `<span class="text-light">The cost isn't available on this counter. The owner sees it in Back Office → Waste report.</span>`;
+      }
+      approvalNote(); costNote();
+      root.querySelectorAll('[data-winc]').forEach(b => b.onclick = () => { const it = d.items[+b.dataset.winc]; it.quantity = Math.min(WASTE_MAX_RECIPE_QTY, Number(it.quantity) + 1); again(); });
+      root.querySelectorAll('[data-wdec]').forEach(b => b.onclick = () => { const it = d.items[+b.dataset.wdec]; if(Number(it.quantity) > 1){ it.quantity = Number(it.quantity) - 1; again(); } });
+      root.querySelectorAll('[data-wrm]').forEach(b => b.onclick = () => { d.items.splice(+b.dataset.wrm, 1); again(); });
+      root.querySelectorAll('[data-wqty]').forEach(inp => inp.oninput = () => { d.items[+inp.dataset.wqty].quantity = inp.value; save(); costNote(); });
+      root.querySelectorAll('[data-wunit]').forEach(sel => sel.onchange = () => { d.items[+sel.dataset.wunit].unit = sel.value; save(); costNote(); });
+      root.querySelectorAll('[data-wopts]').forEach(b => b.onclick = () => {
+        const i = +b.dataset.wopts, it = d.items[i];
+        const rec = state.recipes.find(r => r.id === it.recipe_id);
+        if(!rec) return;
+        save();
+        openModifierPicker(rec, {quantity: Number(it.quantity) || 1, selections: it.selections || []}, wasteSheetOpts(rec, (r) => {
+          const dd = wasteDraft();
+          if(dd.items[i]) Object.assign(dd.items[i], {quantity: r.quantity, selections: r.selections, labels: r.modifiers.map(m => m.label)});
+          saveWasteDraft(dd); openWasteLog();
+        }, 'Update'));
+      });
+      root.querySelector('#waste-add-menu').onclick = () => { save(); openWasteMenuPicker(); };
+      root.querySelector('#waste-add-ing').onclick = () => { save(); openWasteIngredientPicker(); };
+      root.querySelectorAll('[data-reason]').forEach(b => b.onclick = () => {
+        d.reason = b.dataset.reason; save();
+        root.querySelectorAll('[data-reason]').forEach(x => { const on = x === b; x.classList.toggle('selected', on); x.setAttribute('aria-checked', String(on)); });
+        root.querySelector('#waste-note-need').textContent = d.reason === 'OTHER' ? '(needed)' : '(optional)';
+        approvalNote();
+      });
+      root.querySelector('#waste-note').oninput = (e) => { d.note = e.target.value; save(); };
+      const clr = root.querySelector('#waste-clear');
+      if(clr) clr.onclick = async () => {
+        const ok = await confirmDialog('Clear this waste entry? Nothing has been logged yet.', 'Clear');
+        if(ok){ clearWasteDraft(); toast('Waste entry cleared'); } else openWasteLog();
+      };
+      root.querySelector('#waste-save').onclick = (ev) => submitWaste(d, root, ev.currentTarget);
+      if(focusIndex != null){ const f = root.querySelector(`[data-wqty="${focusIndex}"]`); if(f) f.focus(); }
+    }});
+}
+// The option sheet in "waste" mode: no note, at most 100, no stock check (it already happened).
+function wasteSheetOpts(recipe, onDone, label){
+  return {title: 'Waste: ' + recipe.name, addLabel: label || 'Add to waste', maxQty: WASTE_MAX_RECIPE_QTY, noNotes: true, noStockCheck: true,
+    onDone, onCancel: () => openWasteLog()};
+}
+function addWasteRecipe(recipe, r){
+  const d = wasteDraft();
+  if(d.items.length >= WASTE_MAX_ITEMS){ toast('A waste entry can have at most 30 lines. Log this one first.', 'warn'); openWasteLog(); return; }
+  d.items.push({type: 'recipe', recipe_id: recipe.id, name: recipe.name, quantity: r.quantity, selections: r.selections, labels: r.modifiers.map(m => m.label)});
+  saveWasteDraft(d);
+  openWasteLog();
+}
+function openWasteMenuPicker(){
+  const list = state.recipes.filter(r => r.active !== false && !isProductionRecipe(r))
+    .sort((a, b) => subcategoryRank(posCategoryOf(a), state.recipes) - subcategoryRank(posCategoryOf(b), state.recipes) || String(a.name).localeCompare(String(b.name)));
+  openModal({title: 'Waste: pick a menu item', wide: true, body: `
+    <label class="pos-search waste-search">${icon('search')}<input type="search" id="waste-msearch" placeholder="Search the menu" aria-label="Search the menu" autocomplete="off"></label>
+    <div class="waste-pick-grid" id="waste-mlist">${list.map(r => `<button class="waste-pick" data-wrec="${escapeHtml(r.id)}" data-name="${escapeHtml(String(r.name).toLowerCase())}"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(posCategoryOf(r))}</small></button>`).join('') || '<p>No menu items.</p>'}</div>`,
+    foot: `<button class="btn btn-outline" data-back>Back</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-back]').onclick = () => openWasteLog();
+      root.querySelector('#waste-msearch').oninput = (e) => {
+        const t = e.target.value.trim().toLowerCase();
+        root.querySelectorAll('[data-wrec]').forEach(b => { b.hidden = !!t && !b.dataset.name.includes(t); });
+      };
+      root.querySelectorAll('[data-wrec]').forEach(b => b.onclick = () => {
+        const rec = state.recipes.find(r => r.id === b.dataset.wrec);
+        if(!rec) return;
+        if(recipeOptionGroups(rec).length) openModifierPicker(rec, null, wasteSheetOpts(rec, (r) => addWasteRecipe(rec, r)));
+        else addWasteRecipe(rec, {quantity: 1, selections: [], modifiers: []});
+      });
+    }});
+}
+function openWasteIngredientPicker(){
+  // Stock items only: no merged ones, no operating supplies (ingredientPickerList's default).
+  const list = ingredientPickerList().slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  openModal({title: 'Waste: pick an ingredient', wide: true, body: `
+    <label class="pos-search waste-search">${icon('search')}<input type="search" id="waste-isearch" placeholder="Search ingredients" aria-label="Search ingredients" autocomplete="off"></label>
+    <div class="waste-pick-grid" id="waste-ilist">${list.map(i => `<button class="waste-pick" data-wing="${escapeHtml(i.id)}" data-name="${escapeHtml(String(i.name).toLowerCase())}"><b>${escapeHtml(i.name)}</b><small>Counted in ${escapeHtml(unitLabel(i.base_unit))}${isProducedItem(i) ? ' · house-made' : ''}</small></button>`).join('') || '<p>No ingredients.</p>'}</div>`,
+    foot: `<button class="btn btn-outline" data-back>Back</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-back]').onclick = () => openWasteLog();
+      root.querySelector('#waste-isearch').oninput = (e) => {
+        const t = e.target.value.trim().toLowerCase();
+        root.querySelectorAll('[data-wing]').forEach(b => { b.hidden = !!t && !b.dataset.name.includes(t); });
+      };
+      root.querySelectorAll('[data-wing]').forEach(b => b.onclick = () => {
+        const ing = ingredientById(b.dataset.wing);
+        if(!ing) return;
+        const d = wasteDraft();
+        if(d.items.length >= WASTE_MAX_ITEMS){ toast('A waste entry can have at most 30 lines. Log this one first.', 'warn'); openWasteLog(); return; }
+        d.items.push({type: 'ingredient', ingredient_id: ing.id, name: ing.name, quantity: '', unit: ing.base_unit});
+        saveWasteDraft(d);
+        openWasteLog(d.items.length - 1);
+      });
+    }});
+}
+
+async function submitWaste(d, root, btn){
+  const me = posState.currentUser;
+  if(!me || btn.disabled) return;
+  d.note = (root.querySelector('#waste-note').value || '').trim();
+  saveWasteDraft(d);
+  if(!d.items.length){ toast('Add at least one item first.', 'error'); return; }
+  const empty = d.items.findIndex(it => it.type === 'ingredient' && !(Number(it.quantity) > 0));
+  if(empty >= 0){ toast(`Enter how much ${d.items[empty].name} was wasted.`, 'error'); const f = root.querySelector(`[data-wqty="${empty}"]`); if(f) f.focus(); return; }
+  if(!d.reason){ toast('Choose a reason.', 'error'); return; }
+  const shift = activeShift();
+  const input = {reason: d.reason, note: d.note, staff_id: me.id, shift_id: shift ? shift.id : null, items: wasteItemsFromDraft(d)};
+  let data, approverName = null;
+  try{
+    data = buildWasteData(input);
+  }catch(e){
+    if((e.code || e.message) !== 'APPROVAL_REQUIRED'){ toast(wasteErrorText(e, d), 'error'); return; }
+    // Complimentary: a manager approves, exactly like a discount (checked by the server on upload).
+    closeModal();
+    const approver = await requireOverride('MANAGER');
+    if(!approver){ openWasteLog(); return; }
+    try{ data = buildWasteData(Object.assign({}, input, {approved_by: approver.id, approval_token: approver.token})); }
+    catch(e2){ toast(wasteErrorText(e2, d), 'error'); openWasteLog(); return; }
+    approverName = approver.name;
+  }
+  btn.disabled = true;
+  const cost = wasteCostInfo(data.items);
+  await Sync.queue('waste', data);
+  await rememberWaste({id: data.id, shift_id: data.shift_id, reason: data.reason, logged_at: data.logged_at,
+    staff_name: me.name, lines: d.items.length, text: d.items.map(wasteLineText).join('; '), cost: cost.known ? cost.cost : null});
+  queueAudit('Waste logged', `${wasteReasonLabel(data.reason)}: ${d.items.map(wasteLineText).join('; ')}${data.note ? ' (note: ' + data.note + ')' : ''}${approverName ? ' (approved by ' + approverName + ')' : ''}`, data.id);
+  clearWasteDraft();
+  closeModal();
+  toast(`Waste logged: ${d.items.length} line${d.items.length === 1 ? '' : 's'} (${wasteReasonLabel(data.reason)})${isOnline() ? '' : '. It uploads when the internet is back.'}`, 'success');
+  if(posState.route === 'pos') renderProductGrid();
+  if(posState.route === 'shift') renderShiftScreen({local: true});
+}
+async function loadWasteLog(){ try{ const l = await LocalDB.get(WASTE_LOG_KEY); return Array.isArray(l) ? l : []; }catch(e){ return []; } }
+async function rememberWaste(entry){
+  const list = (await loadWasteLog()).filter(x => x.id !== entry.id);
+  list.push(entry);
+  try{ await LocalDB.set(WASTE_LOG_KEY, list.slice(-300)); }catch(e){}
+}
+// Shift & cash: what this counter logged as waste during the open shift.
+async function shiftWasteHtml(shift){
+  const list = (await loadWasteLog()).filter(x => x.shift_id === shift.id);
+  const manager = hasRole('MANAGER');
+  const lines = list.reduce((s, x) => s + (Number(x.lines) || 0), 0);
+  const allCosted = list.length && list.every(x => x.cost != null);
+  const cost = list.reduce((s, x) => s + (Number(x.cost) || 0), 0);
+  const byReason = WASTE_REASONS.map(r => ({label: r.label, n: list.filter(x => x.reason === r.id).length})).filter(r => r.n);
+  return `<div class="section-title">Waste this shift</div>
+    <div class="card drawer-card waste-summary">
+      ${list.length ? `<div class="drow"><span>Entries logged on this counter</span><b>${list.length} (${lines} line${lines === 1 ? '' : 's'})</b></div>
+        ${byReason.map(r => `<div class="drow"><span>${escapeHtml(r.label)}</span><b>${r.n}</b></div>`).join('')}
+        ${manager ? `<div class="drow"><span>Cost</span><b>${allCosted ? fmtMoney(cost) : '<span class="text-light" style="font-weight:500;">See Back Office → Waste report</span>'}</b></div>` : ''}
+        <details class="waste-list"><summary>Show entries</summary>${list.slice().reverse().map(x => `<div class="waste-entry"><span class="text-light">${fmtTime(x.logged_at)}</span> ${escapeHtml(wasteReasonLabel(x.reason))} · ${escapeHtml(x.text || '')} <span class="text-light">· ${escapeHtml(x.staff_name || '')}</span></div>`).join('')}</details>`
+        : '<div class="text-light">No waste logged on this counter this shift.</div>'}
+    </div>`;
+}
+
 function renderStartShiftGate(){
   const content = document.getElementById('content');
   content.className = '';
@@ -3240,11 +3574,15 @@ async function renderShiftScreen(opts){
   if(!shift){ renderStartShiftGate(); return; }
   const m = shiftMetrics(shift);
   const note = shiftFreshNote(posState.shiftCheckOk);
+  const wasteHtml = await shiftWasteHtml(shift);
+  if(posState.route !== 'shift') return;
   document.getElementById('topbar-actions').innerHTML = `
     <button class="btn btn-outline" id="cash-mgmt-btn">${icon('cash')} Pay in / pay out</button>
+    <button class="btn btn-outline" id="shift-waste-btn">${icon('trash')} Log waste</button>
     <button class="btn btn-outline" id="xreport-btn">${icon('printer')} Print X-report</button>
     <button class="btn btn-danger" id="close-shift-btn">Close shift</button>`;
   document.getElementById('cash-mgmt-btn').onclick = openCashManagementModal;
+  document.getElementById('shift-waste-btn').onclick = ()=> openWasteLog();
   document.getElementById('xreport-btn').onclick = printXReport;
   document.getElementById('close-shift-btn').onclick = openCloseShiftFlow;
   content.innerHTML = `
@@ -3265,7 +3603,8 @@ async function renderShiftScreen(opts){
       <div class="drow total"><span><b>Expected Cash in Drawer</b></span><b>${fmtMoney(m.expectedCash)}</b></div>
     </div>
     ${m.cashMovements.length?`<div class="section-title">Pay Ins / Pay Outs</div><div class="table-wrap"><table><thead><tr><th>Time</th><th>Type</th><th>Amount</th><th>Reason</th><th>By</th></tr></thead><tbody>
-      ${m.cashMovements.map(c=>`<tr><td>${fmtTime(c.at)}</td><td>${c.type==='PAY_IN'?'Pay In':'Pay Out'}</td><td>${fmtMoney(c.amount)}</td><td>${escapeHtml(c.reason)}</td><td>${escapeHtml(c.performed_by_name||'')}</td></tr>`).join('')}</tbody></table></div>`:''}`;
+      ${m.cashMovements.map(c=>`<tr><td>${fmtTime(c.at)}</td><td>${c.type==='PAY_IN'?'Pay In':'Pay Out'}</td><td>${fmtMoney(c.amount)}</td><td>${escapeHtml(c.reason)}</td><td>${escapeHtml(c.performed_by_name||'')}</td></tr>`).join('')}</tbody></table></div>`:''}
+    ${wasteHtml}`;
 }
 
 function openCashManagementModal(){
