@@ -145,7 +145,7 @@ function seed(){
     await page.fill('#si-rq', '24');
     await shot(page, 'supplied-form-1280');
     await page.click('#si-save'); await gone(page); await page.waitForTimeout(500);
-    const sr = one(`select r.id, r.supplied_ingredient_id, r.selling_price, i.base_unit, i.standard_cost from recipes r join ingredients i on i.id=r.supplied_ingredient_id where r.name='Ube Cheese Pandesal'`);
+    const sr = one(`select r.id, r.supplied_ingredient_id, r.selling_price, i.base_unit, (select standard_cost from ingredient_costs c where c.ingredient_id=i.id) as standard_cost from recipes r join ingredients i on i.id=r.supplied_ingredient_id where r.name='Ube Cheese Pandesal'`);
     ok(sr && sr.base_unit === 'pcs' && Number(sr.standard_cost) === 25, 'supplied item created (pcs, standard_cost 25)', sr);
     ok(Number(sql(`select coalesce(sum(quantity),0) from inventory_transactions where ingredient_id='${sr.supplied_ingredient_id}'`)) === 24, 'restock of 24 pcs recorded');
     ok(/Margin per piece/.test(await page.textContent('#content')), 'opens the supplied item page with margin');
@@ -265,8 +265,8 @@ function seed(){
     await shot(page, 'waste-1280');
 
     /* ---- backup includes the new tables ---- */
-    const bk = await page.evaluate(async () => { const b = await buildCloudBackup(); return Object.fromEntries(['option_groups','option_group_recipes','expenses','waste_logs','waste_log_items'].map(t => [t, (b.data[t] || []).length])); });
-    ok(bk.option_groups === 3 && bk.expenses === 1 && bk.waste_logs === 2 && bk.waste_log_items === 2 && bk.option_group_recipes >= 1, 'backup includes the 1.4 tables', bk);
+    const bk = await page.evaluate(async () => { const b = await buildCloudBackup(); return Object.fromEntries(['option_groups','option_group_recipes','expenses','waste_logs','waste_log_items','ingredient_costs'].map(t => [t, (b.data[t] || []).length])); });
+    ok(bk.option_groups === 3 && bk.expenses === 1 && bk.waste_logs === 2 && bk.waste_log_items === 2 && bk.option_group_recipes >= 1 && bk.ingredient_costs === 1, 'backup includes the 1.4 tables (incl. ingredient_costs)', bk);
 
     /* ---- 768 ---- */
     const {page: p2} = await open({width: 768, height: 1024});

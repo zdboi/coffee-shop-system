@@ -434,3 +434,16 @@ select test.login('00000000-0000-0000-0000-0000000000c1'); set role authenticate
 select test.chk((select count(*) from qr_orders) = 0 and jsonb_array_length(public.qr_my_orders(:'tok')->'orders') >= 1, 'R: customer reads no qr_orders rows directly; qr_my_orders still lists them');
 reset role;
 select test.chk(not exists (select 1 from pg_policies where tablename = 'qr_orders' and policyname = 'qr_orders_customer_read'), 'R: qr_orders_customer_read is gone');
+
+-- screens review M1: counters never see the typed cost per piece
+select test.chk(not exists (select 1 from information_schema.columns where table_name = 'ingredients' and column_name = 'standard_cost'), 'R2 M1: no standard_cost column on ingredients');
+select test.chk((select standard_cost from ingredient_costs where ingredient_id = :'sp_i') is not null, 'R2 M1: typed cost kept in ingredient_costs');
+select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
+select test.chk((select count(*) from ingredient_costs) = 0
+   and not exists (select 1 from jsonb_array_elements(public.fo_bootstrap('device-key-0001-abcdef')->'ingredients') x where x ? 'standard_cost')
+   and (select count(*) from ingredients where id = :'sp_i') = 1, 'R2 M1: counter reads ingredients but no costs (table or fo_bootstrap)');
+reset role;
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.chk((select (x->>'standard_cost') is not null from jsonb_array_elements(public.bo_bootstrap()->'ingredients') x where x->>'id' = :'sp_i'), 'R2 M1: owner gets standard_cost in bo_bootstrap rows');
+reset role;
+select test.chk((select not public from storage.buckets where id = 'expense-photos'), 'R2 L3: expense-photos stays private (limits set where Supabase has the columns)');

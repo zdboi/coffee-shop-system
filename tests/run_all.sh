@@ -120,6 +120,7 @@ run_node unit/units_check "$DIR/unit/units_check.js" "$REPO"
 run_node unit/shift_reward_check "$DIR/unit/shift_reward_check.js" "$REPO"        # 1.2: shift summary with stamp rewards
 REPO="$REPO" run_node unit/printer_check "$DIR/unit/printer_check.js"             # 1.3: receipt printer (ESC/POS, Bluetooth / Serial fakes)
 REPO="$REPO" run_node unit/menu_stock_check "$DIR/unit/menu_stock_check.js"       # 1.3: sub-category order + cart stock check
+run_node unit/storage_check "$DIR/unit/storage_check.js" "$REPO"                  # 1.4: cloud.download / remove / upload path check (fake fetch)
 run_node unit/core14_check "$DIR/unit/core14_check.js" "$REPO"                    # 1.4: units, options (extras / swaps / library groups), merged items, waste
 "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1          # parity check needs a shop (runs inside a rolled-back transaction)
 run_node unit/refund_parity_check "$DIR/unit/refund_parity_check.js" "$REPO" "$DB" 500
@@ -141,7 +142,9 @@ if [ "$BROWSER" = 1 ]; then
              "fo_release12.e2e:fo_release12.e2e.js:" "bo_release12.e2e:bo_release12.e2e.js:" "order_release12.e2e:order_release12.e2e.js:" \
              "money12.e2e:money12.e2e.js:" \
              "fo_release13.e2e:fo_release13.e2e.js:" "bo_release13.e2e:bo_release13.e2e.js:" "order_release13.e2e:order_release13.e2e.js:" \
-             "bo_modal_race.e2e:bo_modal_race.e2e.js:"; do
+             "bo_modal_race.e2e:bo_modal_race.e2e.js:" \
+             "fake_standin.e2e:fake_standin.e2e.js:" "fo_release14.e2e:fo_release14.e2e.js:" "bo_release14.e2e:bo_release14.e2e.js:" "order_release14.e2e:order_release14.e2e.js:" \
+             "money14.e2e:money14.e2e.js:"; do
       IFS=: read -r name file vp <<<"$t"
       "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1      # every browser suite starts from a fresh seed
       BO_VIEWPORT="${vp:-1280x900}" run_node "e2e/$name#$run" "$DIR/e2e/$file"
