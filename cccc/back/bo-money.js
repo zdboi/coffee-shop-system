@@ -87,8 +87,9 @@ async function fetchExpensePhoto(path){
   return URL.createObjectURL(await cloud.download('expense-photos', path));
 }
 // Old receipt files are removed AFTER the row change saved; a failure only goes to the console.
+// Only files in this shop's own folder ("<business_id>/...") are ever removed.
 function removeExpensePhoto(path){
-  if(!path) return;
+  if(!path || !state.business || String(path).indexOf(state.business.id + '/') !== 0 || /\.\./.test(String(path))) return;
   cloud.remove('expense-photos', [path]).catch(e => console.warn('old receipt photo not removed', path, e));
 }
 async function showExpensePhoto(x){

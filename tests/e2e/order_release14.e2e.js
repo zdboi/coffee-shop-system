@@ -100,8 +100,7 @@ require('child_process').execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U'
     const reply = await page.evaluate(async () => null);
     await shot(page, '390-05-ticket', true);
     // replies: only group/label/price_delta/kind
-    const r = await page.evaluaterequire('child_process').execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U', 'postgres', '-d', H.DB, '-q', '-v', 'ON_ERROR_STOP=1', '-f', path.join(__dirname, '..', 'sql', '23_seed_release14_qr.sql')], {stdio: 'ignore'});
-(async () => {
+    const r = await page.evaluate(async () => {
       const k = Object.keys(localStorage).find(x => x.startsWith('cccc.customer.session'));
       return null;
     });

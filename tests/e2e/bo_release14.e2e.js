@@ -224,13 +224,34 @@ function seed(){
     const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#exp-csv')]);
     const csv = require('fs').readFileSync(await dl.path(), 'utf8');
     ok(/"'=HYPERLINK/.test(csv), 'expenses CSV is formula-safe', csv.slice(0, 300));
+    // receipt photo: upload (private bucket, path only), view (cloud.download), replace -> old file removed, delete -> removed
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    const rent = one(`select id from expenses where category='RENT'`).id;
+    const storeReq = []; page.on('request', q => { if(/\/storage\/v1\/object\//.test(q.url())) storeReq.push(q.method() + ' ' + q.url().replace(/^https?:\/\/[^/]+/, '') + ' ' + (q.postData() && q.method() === 'DELETE' ? q.postData() : '')); });
+    await page.click(`[data-exp-edit="${rent}"]`); await page.waitForSelector('#ex-amount');
+    await page.setInputFiles('#ex-photo', {name: 'r.png', mimeType: 'image/png', buffer: png}); await page.waitForTimeout(400);
+    await page.click('#ex-save'); await gone(page); await page.waitForTimeout(800);
+    const ph1 = sql(`select photo_path from expenses where id='${rent}'`);
+    ok(ph1.startsWith(biz + '/' + rent + '-') && !/^http/.test(ph1), "receipt saved as a path in the shop folder", ph1);
+    await page.click(`[data-exp-photo="${rent}"]`); await page.waitForTimeout(800);
+    ok(await page.$('.exp-receipt'), 'receipt opens (cloud.download)');
+    await page.click('[data-cancel]'); await gone(page);
+    await page.click(`[data-exp-edit="${rent}"]`); await page.waitForSelector('#ex-amount');
+    await page.setInputFiles('#ex-photo', {name: 'r2.png', mimeType: 'image/png', buffer: png}); await page.waitForTimeout(400);
+    await page.click('#ex-save'); await gone(page); await page.waitForTimeout(1000);
+    const ph2 = sql(`select photo_path from expenses where id='${rent}'`);
+    ok(ph2 !== ph1 && storeReq.some(r => /^DELETE/.test(r) && r.includes(ph1)), 'replacing the photo removes the old file', storeReq);
+    await shot(page, 'expenses-photo-1280');
+    const nDel = storeReq.filter(r => /^DELETE/.test(r)).length;
+    await page.click(`[data-exp-del="${rent}"]`); await page.waitForSelector('[data-ok]'); await page.click('[data-ok]'); await page.waitForTimeout(1200);
+    ok(sql(`select count(*) from expenses where id='${rent}'`) === '0' && storeReq.filter(r => /^DELETE/.test(r)).length > nDel, 'deleting the expense removes its photo', storeReq);
     await page.click('[data-exp-edit]'); await page.waitForSelector('#ex-amount'); await page.click('[data-cancel]'); await gone(page);
     // net income
     await go(page, 'netIncome'); await page.waitForTimeout(800);
     const ni = await page.textContent('#ni-body');
-    ok(/Net income/.test(ni) && /Rent/.test(ni) && /Tax collected/.test(ni), 'net income report shows lines', ni.replace(/\s+/g, ' ').slice(0, 300));
+    ok(/Net income/.test(ni) && /Operating supplies/.test(ni) && /Tax collected/.test(ni), 'net income report shows lines', ni.replace(/\s+/g, ' ').slice(0, 300));
     const r = await page.evaluate(() => NET_LAST);
-    ok(r && Math.abs(r.expenses.total - 12150) < 0.01, 'net income: expenses 12,150 from the server', r && r.expenses);
+    ok(r && Math.abs(r.expenses.total - 150) < 0.01, 'net income: expenses 150 from the server (rent deleted above)', r && r.expenses);
     await shot(page, 'netincome-1280');
     const [dl2] = await Promise.all([page.waitForEvent('download'), page.click('#ni-csv')]);
     ok(/Net income/.test(require('fs').readFileSync(await dl2.path(), 'utf8')), 'net income CSV downloads');
@@ -245,7 +266,7 @@ function seed(){
 
     /* ---- backup includes the new tables ---- */
     const bk = await page.evaluate(async () => { const b = await buildCloudBackup(); return Object.fromEntries(['option_groups','option_group_recipes','expenses','waste_logs','waste_log_items'].map(t => [t, (b.data[t] || []).length])); });
-    ok(bk.option_groups === 3 && bk.expenses === 2 && bk.waste_logs === 2 && bk.waste_log_items === 2 && bk.option_group_recipes >= 1, 'backup includes the 1.4 tables', bk);
+    ok(bk.option_groups === 3 && bk.expenses === 1 && bk.waste_logs === 2 && bk.waste_log_items === 2 && bk.option_group_recipes >= 1, 'backup includes the 1.4 tables', bk);
 
     /* ---- 768 ---- */
     const {page: p2} = await open({width: 768, height: 1024});
