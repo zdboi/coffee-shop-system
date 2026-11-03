@@ -205,6 +205,11 @@ const ERROR_TEXT = {
   MERGE_UNIT_MISMATCH: 'These ingredients are counted in units that don\'t convert (for example grams and millilitres, or pieces and boxes). Merge only ingredients counted the same way.',
   // CAPTCHA (Cloudflare Turnstile) before an anonymous sign-in
   CAPTCHA_FAILED: 'We couldn\'t confirm you\'re a person. Check your internet and try again.',
+  // Files in private storage (release 1.4: expense receipt photos)
+  BAD_STORAGE_PATH: 'That file name is not valid. Choose the photo again.',
+  FILE_NOT_FOUND: 'That file is not there any more (it may have been deleted).',
+  FILE_NOT_ALLOWED: 'This login is not allowed to open or change that file. Only the owner\'s email login can.',
+  STORAGE_FAILED: 'The file could not be loaded or changed on the server. Please try again.',
   // Anything unexpected on the server
   SERVER_ERROR: 'Something went wrong on the server, so this wasn\'t saved. Please try again; if it keeps happening, tell the owner.',
 };
