@@ -422,6 +422,7 @@ tr.picked-row td{background:var(--cc-terracotta-tint);}
 .exp-note{max-width:320px;white-space:pre-wrap;word-break:break-word;}
 .exp-receipt{max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:var(--cc-radius-sm);}
 .ni-statement{max-width:720px;}
+.ni-cost-note{margin-top:6px;font-size:12px;line-height:1.35;color:var(--cc-muted);}
 .ni-title{font-size:16px;margin:0 0 10px;}
 .ni-table{width:100%;border-collapse:collapse;font-size:14.5px;}
 .ni-table td{padding:8px 4px;border-top:1px solid var(--cc-line);}

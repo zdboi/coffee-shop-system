@@ -232,7 +232,7 @@ function netIncomeHtml(r){
   return `
     <div class="grid grid-4 kpi-sans" style="margin-bottom:16px;">
       ${statCard('Net sales', fmtMoney(S.net), plural(num(S.count), 'sale') + ' · tax taken out')}
-      ${statCard('Ingredients used', fmtMoney(I.used), `${fmtMoney(I.sold)} sold · ${fmtMoney(I.wasted)} wasted`)}
+      ${statCard('Ingredients used', fmtMoney(I.used), `${fmtMoney(I.sold)} sold · ${fmtMoney(I.wasted)} wasted<div class="ni-cost-note">Costed at this month's ingredient cost, so wasted amounts can differ slightly from the Waste report, which keeps the cost on the day it was logged.</div>`)}
       ${statCard('Expenses', fmtMoney(E.total), '<a class="linklike" id="ni-exp-link">see the list</a>')}
       ${statCard('Net income', `<span class="${ni < 0 ? 'text-red' : 'text-green'}">${signed(ni)}</span>`, esc(monthLabel(r.month || netState.month)))}
     </div>
@@ -328,7 +328,8 @@ async function drawWasteReport(){
         <td>${esc(x.staff_name || (x.source === 'OFFICE' ? 'Back Office' : '—'))}${x.approved_by_name ? `<div class="hint">Approved by ${esc(x.approved_by_name)}</div>` : ''}
           ${x.needs_review ? `<div class="review-flag">${icon('alert', {size: 16})} ${esc(reviewReasonText(flags[x.id] || ''))}</div>` : ''}</td>
         <td class="num"><b>${fmtMoney(x.cost)}</b></td></tr>`).join('')}</tbody></table></div>
-    <p class="hint" style="margin-top:8px;">Counter waste is taken from stock the same way a sale is (recipe and options). Stamp-card freebies are not waste: they show as ₱0 sales with a loyalty reward.</p>`;
+    <p class="hint wr-cost-note" style="margin-top:8px;">Costs here are kept at the ingredient cost on the day the waste was logged, so they can differ slightly from Net income, which values the month's waste at that month's cost.</p>
+    <p class="hint" style="margin-top:4px;">Counter waste is taken from stock the same way a sale is (recipe and options). Stamp-card freebies are not waste: they show as ₱0 sales with a loyalty reward.</p>`;
 }
 function exportWasteCSV(){
   const r = WR_LAST;
