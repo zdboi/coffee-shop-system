@@ -22,10 +22,10 @@
 //   buy foil (an Operating supplies item) for ₱150 -> a SUPPLIES expense, no stock; expenses Rent 5,000 + Utilities 1,234.56
 // Net income for this month (hand math):
 //   gross 231.80 + 280.60 + 347.70 + 109.80 = 969.90 · refunds 134.20 · tax 95.40 - 13.20 = 82.20 · net 753.50
-//   sold: usage beans 90 g = 81.00, oat 420 = 84.00, dairy 0, cup 5, lid 2, pandesal 2 x 25 = 50 -> 222.20
-//         minus refund beans 18 = 16.20 -> 206.00
-//   wasted (month-end costs): beans 36 = 32.40, milk 180 x 0.12 = 21.60, cup 5, lid 2 -> 61.00 · used 267.00
-//   expenses 150 + 5000 + 1234.56 = 6,384.56 · net income 753.50 - 267.00 - 6384.56 = -5,898.06
+//   sold: usage beans 90 g = 81.00, oat 420 = 84.00, dairy 0, cup 5, lid 2, pandesal 2 x 25 = 50 -> 222.00
+//         minus refund beans 18 = 16.20 -> 205.80
+//   wasted (month-end costs): beans 36 = 32.40, milk 180 x 0.12 = 21.60, cup 5, lid 2 -> 61.00 · used 266.80
+//   expenses 150 + 5000 + 1234.56 = 6,384.56 · net income 753.50 - 266.80 - 6384.56 = -5,897.86
 // Waste report (cost stored when logged, at THAT day's costs, before the merge): W1 16.20 + 18.00 + 5 + 2 = 41.20, W2 16.20 -> 57.40
 // Stock at the end: beans 1000 - 90 + 18 - 36 = 892 · Full Cream Milk 5000 + 5000 - 180 = 9,820 mL · oat 580 · cups 48 · lids 48 · pandesal 22
 // Needs a fresh seed:  tests/e2e_reset.sh [db] && tests/restart_fake.sh [port] [db]
@@ -56,9 +56,9 @@ const X = {
 X.gross = r2(X.S1.total + X.S2.total + X.S3.total + X.S4.total);        // 969.90
 X.tax = r2(X.S1.tax + X.S2.tax + X.S3.tax + X.S4.tax - X.refundTax);    // 82.20
 X.net = r2(X.gross - X.refund - X.tax);                                 // 753.50
-X.sold = 206.00; X.wasted = 61.00; X.used = 267.00;   // 1.4 swap rule (lead-approved 2026-11-03): was 201.00 / 262.00
+X.sold = 205.80; X.wasted = 61.00; X.used = 266.80;   // 1.4 swap rule (lead-approved 2026-11-03): was 201.00 / 262.00
 X.expenses = 6384.56;
-X.netIncome = r2(X.net - X.used - X.expenses);                          // -5898.06
+X.netIncome = r2(X.net - X.used - X.expenses);                          // -5897.86
 X.cash = r2(X.S1.total + X.S3.total + X.S4.total);                      // 689.30
 X.expectedCash = r2(1000 + X.cash - X.refund);                          // 1555.10
 X.wasteReport = 57.40;
