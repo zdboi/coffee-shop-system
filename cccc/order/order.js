@@ -70,6 +70,7 @@
     // (a name is needed to order), so point to the counter instead.
     TOO_MANY_SIGNUPS: 'Lots of people are joining right now. Please wait a few minutes, or order at the counter.',
     BAD_OPTION: 'Something on the menu changed. Please remove that item and add it again.',
+    // (OPTION_REQUIRED is worded in errText with the group's name, e.g. "Choose Hot or iced for Latte.")
     BAD_QUANTITY: 'Please order 1 to 20 of each item.',
     TOO_MANY_OPEN_ORDERS: 'You already have 3 orders waiting. Please pay for those at the counter first.',
     // Also the shop-wide / per-table limit (F5): many orders in a short time.
@@ -103,7 +104,7 @@
     if(/captcha/i.test(String(r.code || '')) || /captcha/i.test(String(r.error || r.message || ''))) return MSG.CAPTCHA_FAILED;
     const code = codeOf(r);
     if(code === 'ITEM_UNAVAILABLE') return `${r.name || 'An item'} just sold out. Remove it to continue.`;
-    if(code === 'OPTION_REQUIRED') return `Choose a ${r.group || 'option'} for ${r.name}.`;
+    if(code === 'OPTION_REQUIRED') return r.group ? `Choose ${r.group} for ${r.name || 'your item'}.` : `Choose an option for ${r.name || 'your item'}.`;
     return MSG[code] || FALLBACK;
   }
   // The server limits number checks (register, save number, "ordered here before") per phone.
@@ -176,21 +177,60 @@
   }
   function saveCart(){ try{ localStorage.setItem(CART_KEY, JSON.stringify(S.cart)); }catch(e){} }
   function itemById(id){ return S.menu.items.find(i => i.id === id); }
+  // An item's option groups as get_qr_menu sends them (shared "library" groups first, then the
+  // item's own). A group with no options is left out. The page reads only id, name, required,
+  // multi_select and each option's id, label, price_delta and kind.
+  function optionGroups(item){
+    const gs = item && Array.isArray(item.modifier_groups) ? item.modifier_groups : [];
+    return gs.filter(g => g && g.id != null && Array.isArray(g.options) && g.options.some(o => o && o.id != null))
+      .map(g => Object.assign({}, g, {options: g.options.filter(o => o && o.id != null)}));
+  }
+  function findOption(item, sel){
+    const g = sel && optionGroups(item).find(x => x.id === sel.group_id);
+    const o = g && g.options.find(x => x.id === sel.option_id);
+    return o ? {g, o} : null;
+  }
+  // Display price only (menu price + chosen options); the server prices the order.
   function unitPrice(item, selections){
     let p = Number(item.price) || 0;
-    (selections || []).forEach(sel => {
-      const g = item.modifier_groups.find(x => x.id === sel.group_id);
-      const o = g && g.options.find(x => x.id === sel.option_id);
-      if(o) p += Number(o.price_delta) || 0;
-    });
+    (selections || []).forEach(sel => { const f = findOption(item, sel); if(f) p += Number(f.o.price_delta) || 0; });
     return p;
   }
   function selectionLabels(item, selections){
-    return (selections || []).map(sel => {
-      const g = item.modifier_groups.find(x => x.id === sel.group_id);
-      const o = g && g.options.find(x => x.id === sel.option_id);
-      return o ? o.label : null;
-    }).filter(Boolean);
+    return sortSelections(item, selections).map(sel => { const f = findOption(item, sel); return f ? f.o.label : null; }).filter(Boolean);
+  }
+  // Choices in menu order (group, then option), so "Iced, Non-dairy milk, Half sweet" reads the
+  // same on the cart, the ticket and the counter, and equal lines can be merged.
+  function sortSelections(item, selections){
+    const groups = optionGroups(item);
+    const pos = (s) => {
+      const gi = groups.findIndex(g => g.id === s.group_id);
+      const oi = gi < 0 ? -1 : groups[gi].options.findIndex(o => o.id === s.option_id);
+      return gi < 0 || oi < 0 ? 1e9 : gi * 1000 + oi;
+    };
+    return (selections || []).filter(s => s && s.group_id != null).map(s => ({group_id: s.group_id, option_id: s.option_id}))
+      .sort((a, b) => pos(a) - pos(b));
+  }
+  // The choices that are still on the menu (at most one in a pick-one group, no repeats).
+  function cleanSelections(item, selections){
+    const out = [];
+    sortSelections(item, selections).forEach(s => {
+      const f = findOption(item, s);
+      if(!f) return;
+      if(out.some(x => x.group_id === s.group_id && (x.option_id === s.option_id || !f.g.multi_select))) return;
+      out.push(s);
+    });
+    return out;
+  }
+  // A saved cart line the menu no longer accepts as it is: an option was taken off or changed,
+  // or the shop made a group required (e.g. Hot or iced). The cart asks to "Choose again".
+  function lineNeedsChoice(l){
+    const it = itemById(l.recipe_id);
+    if(!it) return false;
+    const sels = l.modifiers || [];
+    const clean = cleanSelections(it, sels);
+    if(clean.length !== sels.length) return true;
+    return optionGroups(it).some(g => g.required && !clean.some(s => s.group_id === g.id));
   }
   function cartTotals(){
     const subtotal = S.cart.reduce((s, l) => { const it = itemById(l.recipe_id); return s + (it ? unitPrice(it, l.modifiers) * l.quantity : 0); }, 0);
@@ -778,62 +818,117 @@
   function closeSheet(){ const r = $('#sheet-root'); r.innerHTML = ''; r.dataset.kind = ''; document.body.style.overflow = ''; }
   document.addEventListener('keydown', e => { if(e.key === 'Escape') closeSheet(); });
 
-  function openItemSheet(itemId){
+  // The item sheet. Option groups come from get_qr_menu as they are: the shop's shared groups
+  // ("library", e.g. Hot or iced, Milk) and the item's own groups look and work the same.
+  // Each option is {id, label, price_delta, kind}; kind SWAP (e.g. non-dairy milk) only changes
+  // what is shown. Prices here are for display: qr_place_order works out the real total.
+  // editKey: a cart line to change (its "Choose again" button); the line is replaced on save.
+  function openItemSheet(itemId, editKey){
     const it = itemById(itemId);
     if(!it) return;
-    let selections = [];
-    let qty = 1;
-    const groups = it.modifier_groups || [];
+    const editing = editKey ? S.cart.find(l => l.key === editKey) : null;
+    const groups = optionGroups(it);
+    // Start from the line's choices that are still on the menu (one per pick-one group).
+    let selections = editing ? cleanSelections(it, editing.modifiers) : [];
+    let qty = editing ? editing.quantity : 1;
+    let tried = false;   // "Add" was tapped with a required group still empty
     const body = `
-      ${it.image_url ? `<img class="sheet-photo" src="${esc(it.image_url)}" alt="">` : ''}
+      ${it.image_url ? `<img class="sheet-photo" src="${esc(it.image_url)}" alt="" loading="lazy" decoding="async">` : ''}
       ${it.description ? `<p class="sheet-desc">${esc(it.description)}</p>` : ''}
-      ${groups.map(g => `<div class="group" data-group="${esc(g.id)}">
-        <div class="group-title"><span>${esc(g.name)}</span><small class="${g.required ? 'req' : ''}">${g.required ? 'Choose 1' : (g.multi_select ? 'Optional · any' : 'Optional')}</small></div>
-        <div class="opts">${g.options.map(o => `<button class="opt ${g.multi_select ? 'multi' : ''}" aria-pressed="false" data-g="${esc(g.id)}" data-o="${esc(o.id)}">
-          <span class="tick">${ico('check', {size: 14})}</span><span class="opt-label">${esc(o.label)}</span>${Number(o.price_delta) ? `<span class="delta">+${money(o.price_delta)}</span>` : ''}</button>`).join('')}</div></div>`).join('')}
+      ${groups.map((g, gi) => groupHtml(g, gi)).join('')}
       <div class="field gap-top"><label for="it-note">Special request (optional)</label>
         <input class="input" id="it-note" maxlength="140" placeholder="e.g. less ice"></div>
-      <div class="qty"><button id="q-minus" aria-label="One less">${ico('minus', {size: 22})}</button><span id="q-val" aria-live="polite">1</span><button id="q-plus" aria-label="One more">${ico('plus', {size: 22})}</button></div>`;
-    openSheet(it.name, body, `<button class="btn btn-main" id="it-add"></button>`, (sheet) => {
+      <div class="qty" role="group" aria-label="How many"><button id="q-minus" aria-label="One less">${ico('minus', {size: 22})}</button><span id="q-val" aria-live="polite">1</span><button id="q-plus" aria-label="One more">${ico('plus', {size: 22})}</button></div>`;
+    openSheet(it.name, body, `<p class="foot-msg" id="it-msg" role="alert"></p><button class="btn btn-main" id="it-add"></button>`, (sheet) => {
       $('#sheet-root').dataset.kind = 'order';
+      if(editing && editing.notes) $('#it-note').value = editing.notes;
+      const groupEl = (g) => sheet.querySelector(`.group[data-group="${CSS.escape(g.id)}"]`);
+      function missingGroups(){ return groups.filter(g => g.required && !selections.some(s => s.group_id === g.id)); }
       function refresh(){
         sheet.querySelectorAll('.opt').forEach(b => b.setAttribute('aria-pressed', String(selections.some(s => s.group_id === b.dataset.g && s.option_id === b.dataset.o))));
+        const missing = missingGroups();
+        groups.forEach(g => {
+          const el = groupEl(g); if(!el) return;
+          const need = tried && missing.includes(g);
+          el.classList.toggle('need', need);
+          const small = el.querySelector('small');
+          if(small){
+            const done = g.required && !missing.includes(g);
+            small.className = 'g-hint' + (need ? ' need' : done ? ' done' : g.required ? ' req' : '');
+            small.innerHTML = need ? (g.multi_select ? 'Please choose at least 1' : 'Please choose 1')
+              : done ? `${ico('check', {size: 14})}<span>Chosen</span>` : esc(groupHint(g));
+          }
+        });
+        // The message above the button goes away once every required group has a choice.
+        const msg = $('#it-msg');
+        msg.textContent = tried && missing.length ? `Choose ${joinAnd(missing.map(g => g.name))} first.` : '';
         $('#q-val').textContent = qty;
-        $('#it-add').textContent = `Add ${qty > 1 ? qty + ' ' : ''}to order · ${money(unitPrice(it, selections) * qty)}`;
+        $('#it-add').textContent = `${editing ? 'Update' : 'Add'} ${qty > 1 ? qty + ' ' : ''}${editing ? 'in' : 'to'} order · ${money(unitPrice(it, selections) * qty)}`;
       }
       sheet.querySelectorAll('.opt').forEach(b => b.onclick = () => {
         const g = groups.find(x => x.id === b.dataset.g);
+        if(!g) return;
         const has = selections.some(s => s.group_id === g.id && s.option_id === b.dataset.o);
         if(g.multi_select){
           selections = has ? selections.filter(s => !(s.group_id === g.id && s.option_id === b.dataset.o)) : selections.concat([{group_id: g.id, option_id: b.dataset.o}]);
         } else {
           selections = selections.filter(s => s.group_id !== g.id);
+          // Pick-one: tapping the chosen option again clears it, unless the group is required.
           if(!has || g.required) selections.push({group_id: g.id, option_id: b.dataset.o});
         }
-        const small = sheet.querySelector(`.group[data-group="${CSS.escape(g.id)}"] small`);
-        if(small) small.classList.remove('need');
         refresh();
       });
       $('#q-minus').onclick = () => { qty = Math.max(1, qty - 1); refresh(); };
       $('#q-plus').onclick = () => { qty = Math.min(20, qty + 1); refresh(); };
       $('#it-add').onclick = () => {
-        const missing = groups.filter(g => g.required && !selections.some(s => s.group_id === g.id));
+        const missing = missingGroups();
         if(missing.length){
-          missing.forEach(g => { const sm = sheet.querySelector(`.group[data-group="${CSS.escape(g.id)}"] small`); if(sm){ sm.classList.add('need'); sm.textContent = 'Please choose 1'; } });
-          sheet.querySelector(`.group[data-group="${CSS.escape(missing[0].id)}"]`).scrollIntoView({block: 'center'});
+          // Say what's missing next to the button, and take them to (and focus) the first empty group.
+          tried = true; refresh();
+          const first = groupEl(missing[0]);
+          if(first){
+            first.scrollIntoView({block: 'center', behavior: reducedMotion() ? 'auto' : 'smooth'});
+            first.focus({preventScroll: true});
+          }
           return;
         }
         const notes = $('#it-note').value.trim();
-        const same = S.cart.find(l => l.recipe_id === it.id && !l.notes && !notes && JSON.stringify(l.modifiers) === JSON.stringify(selections));
-        if(same) same.quantity = Math.min(20, same.quantity + qty);
-        else S.cart.push({key: Math.random().toString(36).slice(2), recipe_id: it.id, quantity: qty, modifiers: selections, notes});
+        const mods = sortSelections(it, selections);
+        const others = S.cart.filter(l => l !== editing);
+        const same = others.find(l => l.recipe_id === it.id && !l.notes && !notes && JSON.stringify(sortSelections(it, l.modifiers)) === JSON.stringify(mods));
+        if(same){ same.quantity = Math.min(20, same.quantity + qty); if(editing) S.cart = others; }
+        else if(editing) Object.assign(editing, {quantity: qty, modifiers: mods, notes});
+        else S.cart.push({key: Math.random().toString(36).slice(2), recipe_id: it.id, quantity: qty, modifiers: mods, notes});
         saveCart();
+        if(editing){ render(true); openCartSheet(); toast(`Updated ${it.name}`); return; }
         closeSheet();
         toast(`Added ${it.name}`);
         render(true);
       };
       refresh();
     });
+  }
+  // One option group in the item sheet. Short labels (Hot / Iced, sizes) sit two to a row so a
+  // drink with many groups stays short; long labels get the full width.
+  function groupHtml(g, gi){
+    const short = g.options.length >= 2 && g.options.length <= 6 &&g.options.every(o => String(o.label || '').length <= 14);
+    const titleId = 'g-title-' + gi;
+    return `<section class="group${g.required ? ' is-req' : ''}" data-group="${esc(g.id)}" role="group" aria-labelledby="${titleId}" tabindex="-1">
+      <div class="group-title"><h4 id="${titleId}">${esc(g.name)}</h4><small class="g-hint${g.required ? ' req' : ''}">${esc(groupHint(g))}</small></div>
+      <div class="opts${short ? ' opts-2' : ''}">${g.options.map(o => optionHtml(g, o)).join('')}</div></section>`;
+  }
+  function groupHint(g){
+    if(g.required) return g.multi_select ? 'Required · choose 1 or more' : 'Required · choose 1';
+    return g.multi_select ? 'Optional · choose any' : 'Optional · choose 1';
+  }
+  function optionHtml(g, o){
+    const delta = Number(o.price_delta) || 0;
+    // A swap (e.g. "Non-dairy milk") replaces something in the drink: say so under the label.
+    const swap = String(o.kind || '').toUpperCase() === 'SWAP';
+    return `<button class="opt${g.multi_select ? ' multi' : ''}${swap ? ' swap' : ''}" aria-pressed="false" data-g="${esc(g.id)}" data-o="${esc(o.id)}">
+      <span class="tick">${ico('check', {size: 14})}</span>
+      <span class="opt-label">${esc(o.label)}${swap ? '<span class="opt-sub">In place of the usual</span>' : ''}</span>
+      ${delta ? `<span class="delta">${delta > 0 ? '+' : '−'}${money(Math.abs(delta))}</span>` : ''}</button>`;
   }
 
   function openCartSheet(){
@@ -844,9 +939,11 @@
         const it = itemById(l.recipe_id);
         if(!it) return '';
         const labels = selectionLabels(it, l.modifiers);
-        return `<div class="cart-line"><div class="grow"><b>${esc(it.name)}</b>
+        const fix = lineNeedsChoice(l);
+        return `<div class="cart-line${fix ? ' fix' : ''}"><div class="grow"><b>${esc(it.name)}</b>
           ${labels.length ? `<div class="mods">${esc(labels.join(', '))}</div>` : ''}
           ${l.notes ? `<div class="mods">“${esc(l.notes)}”</div>` : ''}
+          ${fix ? `<div class="fix-note"><span>The choices for this item changed.</span><button class="btn btn-quiet fix-btn" data-fix="${esc(l.key)}">Choose again</button></div>` : ''}
           <div class="mini-qty"><button data-dec="${esc(l.key)}" aria-label="One less">${ico('minus', {size: 20})}</button><span>${l.quantity}</span><button data-inc="${esc(l.key)}" aria-label="One more">${ico('plus', {size: 20})}</button></div></div>
           <div class="line-total">${money(unitPrice(it, l.modifiers) * l.quantity)}</div></div>`;
       }).join('')}
@@ -876,6 +973,11 @@
         saveCart(); render(true);
         if(S.cart.length) openCartSheet(); else closeSheet();
       });
+      sheet.querySelectorAll('[data-fix]').forEach(b => b.onclick = () => {
+        const l = S.cart.find(x => x.key === b.dataset.fix);
+        S.note = $('#c-note').value;
+        if(l) openItemSheet(l.recipe_id, l.key);
+      });
       sheet.querySelectorAll('[data-type]').forEach(b => b.onclick = () => {
         S.orderType = b.dataset.type;
         sheet.querySelectorAll('[data-type]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
@@ -887,6 +989,15 @@
   async function placeOrder(){
     const btn = $('#c-place'), err = $('#c-err');
     S.note = $('#c-note').value.trim();
+    // A line whose choices the menu no longer accepts would be refused: ask first.
+    const fix = S.cart.find(lineNeedsChoice);
+    if(fix){
+      const it = itemById(fix.recipe_id);
+      err.textContent = `Tap "Choose again" on ${it ? it.name : 'the marked item'} first.`;
+      const b = document.querySelector(`[data-fix="${CSS.escape(fix.key)}"]`);
+      if(b){ b.scrollIntoView({block: 'center', behavior: reducedMotion() ? 'auto' : 'smooth'}); b.focus({preventScroll: true}); }
+      return;
+    }
     btn.disabled = true; err.textContent = '';
     btn.textContent = 'Sending…';
     try{
@@ -898,7 +1009,17 @@
       if(r.error){
         err.textContent = errText(r);
         btn.disabled = false; btn.textContent = `Place order · ${money(cartTotals().total)}`;
-        if(r.error === 'ITEM_UNAVAILABLE' || r.error === 'BAD_OPTION'){ refreshMenuQuietly(); }
+        if(r.error === 'ITEM_UNAVAILABLE'){ refreshMenuQuietly(); }
+        if(r.error === 'BAD_OPTION' || r.error === 'OPTION_REQUIRED'){
+          // The item's choices changed (e.g. the shop made Hot or iced required): fetch the menu,
+          // then show the cart again with "Choose again" on the lines that need it.
+          const text = err.textContent;
+          await refreshMenuQuietly();
+          if($('#c-place')){
+            openCartSheet();
+            $('#c-err').textContent = S.cart.some(lineNeedsChoice) ? 'Some choices changed. Tap "Choose again" on the marked item.' : text;
+          }
+        }
         if(r.error === 'REGISTER_FIRST'){ S.customer = null; closeSheet(); render(); }
         if(r.error === 'SHOP_CLOSED'){
           // The last shift closed while they were ordering: show the closed screen. The cart
