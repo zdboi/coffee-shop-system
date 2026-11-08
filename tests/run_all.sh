@@ -119,6 +119,7 @@ run_node unit/captcha_check "$DIR/unit/captcha_check.js" "$REPO"
 run_node unit/units_check "$DIR/unit/units_check.js" "$REPO"
 run_node unit/shift_reward_check "$DIR/unit/shift_reward_check.js" "$REPO"        # 1.2: shift summary with stamp rewards
 REPO="$REPO" run_node unit/printer_check "$DIR/unit/printer_check.js"             # 1.3: receipt printer (ESC/POS, Bluetooth / Serial fakes)
+REPO="$REPO" run_node unit/printer_usb_check "$DIR/unit/printer_usb_check.js"     # 1.4: USB printer, barista ticket + X / Z goldens, print queue, no print screen by itself
 REPO="$REPO" run_node unit/menu_stock_check "$DIR/unit/menu_stock_check.js"       # 1.3: sub-category order + cart stock check
 run_node unit/storage_check "$DIR/unit/storage_check.js" "$REPO"                  # 1.4: cloud.download / remove / upload path check (fake fetch)
 run_node unit/core14_check "$DIR/unit/core14_check.js" "$REPO"                    # 1.4: units, options (extras / swaps / library groups), merged items, waste

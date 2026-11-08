@@ -1,4 +1,4 @@
-// Counter release 1.4 printing (adopted from front-office-dev's fo14_print.js, 2026-11-08): fake WebUSB printer (navigator.usb) injected before load.
+// Counter release 1.4 printing (adopted from front-office-dev's fo14_print.js, 2026-11-09): fake WebUSB printer (navigator.usb) injected before load.
 // Needs a fresh seed:  tests/e2e_reset.sh [db] && tests/restart_fake.sh [port] [db]
 // Run:                 FAKE_PORT=8787 FAKE_DB=cccc node tests/e2e/fo_print14.e2e.js
 const H = require('./lib/h');
@@ -97,7 +97,7 @@ function fakeUsb(){
     ok(s0.first === 'pr-usb' && s0.usbPrimary && s0.rec && s0.usbAll, 'printer screen: "Connect USB printer" first, primary, "Recommended on computers", "Show all USB devices"', s0);
     ok(/Brave/.test(s0.help) && /brave:\/\/flags/.test(s0.help) && /Brave/.test(s0.support), 'printer screen: Brave help steps + notes shown (Printer.helpSteps / supportText)', s0.help.slice(0, 200));
     ok(/ONE counter only/.test(s0.qrHelp), 'QR switch says: turn on for ONE counter only', s0.qrHelp);
-    ok(!s0.auto && s0.ticket && s0.qr && s0.shift, 'defaults (shared): receipt off, ticket / QR / shift report on', s0);
+    ok(!s0.auto && s0.ticket && !s0.qr && s0.shift, 'defaults (shared): receipt off, QR off, ticket / shift report on', s0);
     await shots('printer-not-set-up');
     await page.click('#pr-test'); await page.waitForTimeout(300);
     ok(/No printer yet/.test(await toasts()), 'test slip before connecting -> plain message', await toasts());
@@ -116,11 +116,11 @@ function fakeUsb(){
     await page.click('label[for="pr-auto"]'); await page.waitForTimeout(150);
     await page.click('label[for="pr-ticket"]'); await page.waitForTimeout(150); await page.click('label[for="pr-ticket"]'); await page.waitForTimeout(150);
     await page.click('label[for="pr-shift"]'); await page.waitForTimeout(150); await page.click('label[for="pr-shift"]'); await page.waitForTimeout(150);
-    await page.click('label[for="pr-qr"]'); await page.waitForTimeout(150); await page.click('label[for="pr-qr"]'); await page.waitForTimeout(150);
+    await page.click('label[for="pr-qr"]'); await page.waitForTimeout(150);
     const set1 = await page.evaluate(() => Printer.settings());
     ok(set1.auto_print && set1.auto_print_ticket && set1.auto_print_shift && set1.auto_print_qr, 'switches saved with the printer settings', set1);
-    await must(() => Number(sql(`select count(*) from audit_log where action in ('Print barista ticket after each sale: off','Print barista ticket after each sale: on','Print shift report when the shift is closed: off','Print shift report when the shift is closed: on','Print QR orders when they arrive: off','Print QR orders when they arrive: on','Receipt printer connected')`)) >= 7, 'audit', 25000).catch(() => {});
-    ok(Number(sql(`select count(*) from audit_log where action in ('Print barista ticket after each sale: off','Print barista ticket after each sale: on','Print shift report when the shift is closed: off','Print shift report when the shift is closed: on','Print QR orders when they arrive: off','Print QR orders when they arrive: on','Receipt printer connected')`)) >= 7, 'switch changes + "Receipt printer connected" are audited');
+    await must(() => Number(sql(`select count(*) from audit_log where action in ('Print barista ticket after each sale: off','Print barista ticket after each sale: on','Print shift report when the shift is closed: off','Print shift report when the shift is closed: on','Print QR orders when they arrive: on','Receipt printer connected')`)) >= 6, 'audit', 25000).catch(() => {});
+    ok(Number(sql(`select count(*) from audit_log where action in ('Print barista ticket after each sale: off','Print barista ticket after each sale: on','Print shift report when the shift is closed: off','Print shift report when the shift is closed: on','Print QR orders when they arrive: on','Receipt printer connected')`)) >= 6, 'switch changes + "Receipt printer connected" are audited');
     ok(await page.$eval('#pr-drawer', i => i.disabled), 'drawer switch stays manager-only');
     await shots('printer-usb-connected');
 
@@ -271,6 +271,42 @@ function fakeUsb(){
     ok(any.conn === 'dialog', 'forget -> no printer');
     ok(errors.length === 0, 'no browser errors', errors);
     console.log('window.open total', await opens(), 'popups', popups);
+
+    /* ---- a counter that can't print directly (iPad / Safari): taps open the print screen, auto prints skip ---- */
+    sql(`insert into device_pairing_codes(code, business_id, device_name, expires_at) values ('TESTCC', '${BIZ}', 'iPad Counter', now() + interval '1 day')`);
+    const ictx = await browser.newContext({viewport: {width: 1024, height: 768}, timezoneId: 'Asia/Manila', serviceWorkers: 'block'});
+    await ictx.addInitScript(() => {
+      ['usb', 'serial', 'bluetooth'].forEach(k => { try{ Object.defineProperty(navigator, k, {configurable: true, value: undefined}); }catch(e){} });
+      let n = 0; const ro = window.open.bind(window);
+      window.open = function(){ n++; sessionStorage.setItem('__opens', String(Number(sessionStorage.getItem('__opens') || 0) + 1)); return ro.apply(null, arguments); };
+    });
+    const ip = await ictx.newPage(); const ierr = []; H.attach(ip, ierr, 'IPAD');
+    ictx.on('page', p => { if(p !== ip) p.waitForLoadState().then(() => p.close()).catch(() => {}); });
+    const iop = () => ip.evaluate(() => Number(sessionStorage.getItem('__opens') || 0));
+    await H.pairCounter(ip, 'TESTCC'); await typePin(ip, '1111'); await H.startShift(ip, 500);
+    await ip.evaluate(() => Printer.saveSettings({auto_print: true}));
+    ok(await ip.evaluate(() => !canPrintDirectHere()), 'iPad-like browser: no direct printing');
+    const sell = async () => { await ip.click('.pos-product-card:has-text("Americano")'); await ip.waitForTimeout(150); await ip.click('#checkout-btn'); await ip.click('[data-quick]'); await ip.click('#complete-sale-btn'); await ip.waitForTimeout(800); };
+    await sell();
+    const note = await ip.evaluate(() => [...document.querySelectorAll('.toast')].map(t => t.textContent).join(' | '));
+    ok(/Automatic printing needs a computer/.test(note) && !(await ip.$('#print-problem')) && await iop() === 0, 'auto receipt on an iPad: skips quietly, gentle note, no box, no print screen', note);
+    await ip.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+    await sell();
+    const note2 = await ip.evaluate(() => [...document.querySelectorAll('.toast')].map(t => t.textContent).join(' | '));
+    ok(!/Automatic printing needs/.test(note2) && await iop() === 0, 'the note shows once per session', note2);
+    await ip.click('#print-last'); await until(async () => (await iop()) === 1, 5000);
+    ok(await iop() === 1 && !(await ip.$('#print-problem')), 'tap Print receipt -> print screen straight away');
+    await ip.click('.nav-item[data-route="shift"]'); await ip.waitForSelector('#xreport-btn'); await ip.waitForTimeout(300);
+    await ip.click('#xreport-btn'); await until(async () => (await iop()) === 2, 8000);
+    ok(await iop() === 2, 'tap Print X-report -> print screen straight away');
+    await ip.click('#close-shift-btn'); await ip.waitForSelector('#cs-declared');
+    await ip.fill('#cs-declared', String(await ip.evaluate(() => shiftMetrics(activeShift()).expectedCash))); await ip.click('#cs-confirm');
+    await ip.waitForSelector('#sr-print'); await ip.waitForTimeout(800);
+    ok(await iop() === 2 && !(await ip.$('#sr-print-status .pr-inline')), 'shift closed on an iPad: Z report skips quietly');
+    await ip.click('#sr-print'); await until(async () => (await iop()) === 3, 5000);
+    ok(await iop() === 3, 'tap Print in the shift report -> print screen');
+    ok(ierr.length === 0, 'iPad: no browser errors', ierr);
+    await ictx.close();
   }catch(e){ await page.screenshot({path: `${SHOTDIR}/stopped.png`}).catch(() => {}); await browser.close(); H.abort(NAME, e); }
   await browser.close();
   process.exit(H.summary(NAME));

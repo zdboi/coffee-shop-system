@@ -239,9 +239,7 @@ async function manilaClock(){
     ok(eq2(money(await stat('Net sales')), X.net) && Number(await stat('Transactions')) === 3 && eq2(money(await stat('Refunds')), X.refunds), `counter shift screen: net ${peso(X.net)}, 3 transactions, refunds ${peso(X.refunds)}`, [await stat('Net sales'), await stat('Transactions'), await stat('Refunds')]);
     ok(eq2(money(await stat('Cash')), X.cash) && eq2(money(await stat('GCash / Maya / Other')), X.other) && eq2(money(await stat('Card')), 0), `counter payment breakdown: cash ${peso(X.cash)}, GCash ${peso(X.other)}`);
     ok(eq2(money(drawer[drawer.length - 1]), X.expectedCash) && drawer.some(d => new RegExp('Cash Sales.*' + X.cashLessRefunds.toFixed(2).replace('.', '\\.')).test(d)) && drawer.some(d => /Pay Ins \(1\).*100\.00/.test(d)) && drawer.some(d => /Pay Outs \(1\).*50\.00/.test(d)), `counter drawer: 2000 + ${X.cashLessRefunds} (cash sales less cash refunds) + 100 - 50 = ${peso(X.expectedCash)} after restart`, drawer);
-    await fo.click('#xreport-btn');   // 1.4 (lead-approved 2026-11-08): no printer -> the counter asks first; "Use print screen" opens the pop-up
-    await fo.waitForSelector('#pr-dialog', {timeout: 10000});
-    const [xr] = await Promise.all([fctx.waitForEvent('page'), fo.click('#pr-dialog')]);
+    const [xr] = await Promise.all([fctx.waitForEvent('page'), fo.click('#xreport-btn')]);
     await xr.waitForLoadState();
     const xrow = await xr.$$eval('.row', rs => Object.fromEntries(rs.map(r => [r.querySelector('span').textContent.trim(), r.querySelector('b').textContent.trim()])));
     const xv = (k) => money(xrow[k]);
