@@ -29,7 +29,15 @@ function unitFamily(unit){
 }
 // How many of the family's small unit one unit is (kg = 1000 g, L = 1000 mL); counts: 1.
 function unitFactor(unit){ const k = _unitNorm(unit); return (k === 'kg' || k === 'l') ? 1000 : 1; }
-function _unitRound(n){ return Math.round(n * 1e6) / 1e6; }
+// Rounded to 6 decimals the way the database's round(x, 6) does: binary noise removed first
+// (16.3636365 stored as 16.36363649… gives 16.363637), halves away from zero.
+function _unitRound(n){
+  n = Number(n);
+  if(!isFinite(n) || n === 0) return n === 0 ? 0 : n;
+  const parts = Math.abs(n).toPrecision(15).split('e');
+  const out = Number(Math.round(Number(parts[0] + 'e' + ((Number(parts[1]) || 0) + 6))) + 'e-6');
+  return (n < 0 && out) ? -out : out;
+}
 // toBaseQty(qty, unit, baseUnit, gPerMl?) -> qty in baseUnit, or null when it can't be converted.
 // unit empty / missing = already in baseUnit. qty missing / not a number -> null.
 function toBaseQty(qty, unit, baseUnit, gPerMl){
