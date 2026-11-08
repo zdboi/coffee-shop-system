@@ -2465,6 +2465,18 @@ function printerDirect(){
 }
 // Has a printer been chosen on this counter (even if it isn't reachable right now)?
 function printerChosen(){ return typeof Printer !== 'undefined' && Printer.settings().connection !== 'dialog'; }
+// Can this browser print straight to a receipt printer at all (USB, Bluetooth or a port)?
+// No on iPad / iPhone and Safari: there, automatic prints skip quietly (one gentle note per session).
+function canPrintDirectHere(){
+  if(typeof Printer === 'undefined') return false;
+  const s = Printer.support();
+  return !s.apple_mobile && !!(s.usb || s.bluetooth || s.serial);
+}
+const AUTO_PRINT_NOTE_KEY = 'cccc.print.autoNote';
+function autoPrintNoteOnce(){
+  try{ if(sessionStorage.getItem(AUTO_PRINT_NOTE_KEY)) return; sessionStorage.setItem(AUTO_PRINT_NOTE_KEY, '1'); }catch(e){}
+  toast('Automatic printing needs a computer with Google Chrome and a USB receipt printer. Here, tap Print receipt (or Print ticket) to use the print screen.', 'warn');
+}
 
 /* ---- print jobs ----
    job: {label: 'The receipt', title: 'The receipt did not print', name: 'Receipt T-0001',
@@ -2520,6 +2532,10 @@ function printProblemText(res){
 async function runPrintJobs(jobs, ctx){
   ctx = ctx || {};
   if(typeof Printer === 'undefined' || !jobs.length) return true;
+  // A print the cashier TAPPED, on a counter without a usable receipt printer (iPad, Safari, or
+  // none chosen): that is the person asking, so the print screen opens straight away (still
+  // inside the tap, before anything is awaited, so the browser allows the window).
+  if(ctx.manual && !printerDirect()){ jobs[0].screen(); return true; }
   for(let i = 0; i < jobs.length; i++){
     let res;
     try{ res = await jobs[i].run(); }
@@ -2618,7 +2634,8 @@ function inlinePrintProblem(box, problem, retryLabel){
     printInto(box, problem.jobs);
   };
 }
-async function printInto(box, jobs){
+async function printInto(box, jobs, manual){
+  if(manual && !printerDirect()){ jobs[0].screen(); return true; }      // a tap with no usable printer: the print screen
   if(box) box.innerHTML = `<div class="hint pr-inline-ok">${icon('printer', {size: 18})} Printing…</div>`;
   const ok = await runPrintJobs(jobs, {onProblem: (p)=> inlinePrintProblem(box, p)});
   if(ok && box && document.body.contains(box)) box.innerHTML = `<div class="hint pr-inline-ok">${icon('check', {size: 18})} Printed on the receipt printer.</div>`;
@@ -2631,7 +2648,7 @@ async function showReceipt(saleId, opts, dataset){
   if(!parts){ toast('Sale not found on this counter', 'error'); return; }
   const first = !!(opts && opts.first);
   // "Print receipt" right after the sale: not marked (Reprint); the drawer already opened.
-  await runPrintJobs([receiptJob(parts, first ? {openDrawer: false} : {reprint: true})], {okToast: 'Receipt printed'});
+  await runPrintJobs([receiptJob(parts, first ? {openDrawer: false} : {reprint: true})], {okToast: 'Receipt printed', manual: true});
 }
 // Right after a sale: the receipt (if on), then the barista ticket (if on). A cash sale with the
 // receipt switched off still opens the drawer (when that setting is on).
@@ -2642,6 +2659,7 @@ async function printAfterSale(saleId, opts){
   const st = Printer.settings();
   const cash = parts.payments.some(p => p && p.method === 'CASH');
   const q = parts.ropts.qrOrder;
+  if(!canPrintDirectHere()){ if(st.auto_print || (st.auto_print_ticket && printerChosen())) autoPrintNoteOnce(); return; }
   const jobs = [];
   if(st.auto_print) jobs.push(receiptJob(parts));
   // QR order: its ticket printed when it arrived -> receipt only (no second ticket).
@@ -2699,7 +2717,7 @@ const QR_OPEN = ['PENDING', 'PREPARING', 'READY'];
 function autoPrintQrArrivals(list){
   if(typeof Printer === 'undefined' || !printerReady) return;
   const st = Printer.settings();
-  if(!st.auto_print_qr || !printerChosen()) return;
+  if(!st.auto_print_qr || !printerChosen() || !canPrintDirectHere()) return;
   const v = qrTicketLog();
   const from = Math.max(Date.parse(v.since) || 0, Date.now() - QR_TICKET_MAX_AGE_MS);
   const fresh = (list || []).filter(o => o && o.id && QR_OPEN.includes(o.status) && !v.ids[o.id] && (Date.parse(o.created_at) || 0) >= from)
@@ -2714,7 +2732,7 @@ function autoPrintQrArrivals(list){
 // The "Print ticket" / "Reprint ticket" button on a QR order card.
 async function printQrTicket(o){
   const again = qrTicketPrinted(o.id);
-  await runPrintJobs([ticketJob(o, {source: 'QR', reprint: again}, ()=> markQrTicketPrinted(o.id))], {okToast: 'Ticket printed'});
+  await runPrintJobs([ticketJob(o, {source: 'QR', reprint: again}, ()=> markQrTicketPrinted(o.id))], {okToast: 'Ticket printed', manual: true});
 }
 
 /* ---- Printer status (sidebar) and screen ---- */
@@ -4021,10 +4039,13 @@ function showShiftReport(shiftId, opts){
     root.querySelector('[data-done]').onclick = ()=>{ closeModal(); navigatePOS('pos'); };
     root.querySelector('#sr-print').onclick = async (ev)=>{
       const b = ev.currentTarget; b.disabled = true;
-      await printInto(box, [shiftReportJob(shift.id, false)]);
+      await printInto(box, [shiftReportJob(shift.id, false)], true);
       if(document.body.contains(b)) b.disabled = false;
     };
-    if(opts && opts.justClosed && typeof Printer !== 'undefined' && Printer.settings().auto_print_shift) printInto(box, [shiftReportJob(shift.id, false)]);
+    if(opts && opts.justClosed && typeof Printer !== 'undefined' && Printer.settings().auto_print_shift){
+      if(canPrintDirectHere()) printInto(box, [shiftReportJob(shift.id, false)]);
+      else autoPrintNoteOnce();
+    }
   }});
 }
 function shiftReportHtml(shift, m, isX){
@@ -4053,7 +4074,24 @@ async function printXReport(ev){
   const shift = activeShift();
   if(!shift) return;
   const btn = ev && ev.currentTarget;
-  if(btn){ if(btn.disabled) return; btn.disabled = true; }
+  if(btn && btn.disabled) return;
+  if(!printerDirect()){
+    // No usable receipt printer: the tap opens the print screen. The window opens right away
+    // (allowed only straight after a tap) and is filled once the latest figures are in.
+    if(!isOnline() || Date.now() - posState.shiftSyncedAt < 20000){ shiftReportJob(shift.id, true).screen(); return; }
+    const win = window.open('', '_blank');
+    if(!win){ toast('Please allow pop-ups to view/print', 'error'); return; }
+    try{ win.document.write('<p style="font-family:sans-serif;margin:24px;">Getting the latest figures…</p>'); }catch(e){}
+    posState.shiftCheckOk = await refreshOpenShift({timeout: SHIFT_CHECK_MS});
+    const cur = activeShift() || shift;
+    try{
+      win.document.open(); win.document.write(shiftReportHtml(cur, shiftMetrics(cur), true)); win.document.close();
+      win.focus(); setTimeout(()=>{ try{ win.print(); }catch(e){} }, 350);
+    }catch(e){ console.warn('could not fill the X-report', e); }
+    if(posState.route === 'shift' && !document.getElementById('active-modal-overlay')) renderShiftScreen({local: true});
+    return;
+  }
+  if(btn) btn.disabled = true;
   let refreshed = false;
   try{
     if(isOnline() && Date.now() - posState.shiftSyncedAt >= 20000){

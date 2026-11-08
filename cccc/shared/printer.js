@@ -53,7 +53,7 @@ const Printer = (() => {
     usb_serial: '',              // Brave changes the serial it reports (fingerprint shield): matched only as a tie-breaker
     usb_chunk: 1024,             // bytes per USB write
     auto_print_ticket: true,     // barista order ticket after each counter sale
-    auto_print_qr: true,         // barista order ticket when a QR order arrives
+    auto_print_qr: false,        // barista order ticket when a QR order arrives (OFF by default, lead 2026-11-08: else every counter prints every QR order)
     auto_print_shift: true,      // Z report right after closing the shift
     ticket_copies: 1,            // 1..3
   };
@@ -556,7 +556,7 @@ const Printer = (() => {
     s.usb_vendor_id = id16(s.usb_vendor_id); s.usb_product_id = id16(s.usb_product_id);
     s.usb_serial = String(s.usb_serial || '');
     s.usb_chunk = Math.max(64, Math.min(16384, Math.round(Number(s.usb_chunk)) || 1024));
-    s.auto_print_ticket = s.auto_print_ticket !== false; s.auto_print_qr = s.auto_print_qr !== false; s.auto_print_shift = s.auto_print_shift !== false;
+    s.auto_print_ticket = s.auto_print_ticket !== false; s.auto_print_qr = s.auto_print_qr === true; s.auto_print_shift = s.auto_print_shift !== false;
     s.ticket_copies = Math.max(1, Math.min(3, Math.round(Number(s.ticket_copies)) || 1));
     s.paper_width = Number(s.paper_width) === 80 ? 80 : 58;
     s.peso_style = ['P', 'PHP', 'none'].includes(s.peso_style) ? s.peso_style : 'P';
