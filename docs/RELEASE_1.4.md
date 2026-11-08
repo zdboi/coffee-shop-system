@@ -23,6 +23,10 @@ Your current live version (1.3) is saved as the **last working version** (see `d
   - **Net income:** per month. Sales without tax, minus the ingredients used (sold and wasted), minus expenses.
   - **Waste report:** per day and per reason, with its cost.
 - **Operating supplies** (foil, dish soap, sponges…): put them in the **Operating supplies** category. Buying them then counts as an expense, not stock.
+- **Thermal printing on your MacBook (USB):** connect the Xprinter with its USB cable. After that it reconnects by itself when the app opens or the cable is plugged back in.
+  - **Prints by itself**, each with its own switch: the receipt after payment, a barista ticket (items, options, table, name, no prices, with a big **PAID** or **NOT PAID – PAY AT COUNTER** line), QR orders as they arrive (one counter only), and the shift report when you close the shift.
+  - The X report prints on the thermal printer when you tap it.
+  - **The print window never opens by itself**, so no more "Save as PDF". If the printer is off or unplugged, the counter says so, offers **Reconnect**, and keeps selling. On an iPad or in Safari, tapping Print opens the print window, because they can't reach the printer directly.
 - **Safety:**
   - Counters never see what you pay suppliers.
   - Customers' phones only see option names and prices, never recipe amounts.
@@ -62,7 +66,20 @@ Back Office → **Backup & import** → **Download a backup**. Keep the file.
    ```
    You should see `false`, `5242880` and `{image/jpeg,image/png,image/webp}`. Send C a screenshot if it looks different.
 
-### 6. Set it up (in this order; take your time)
+### 6. Connect the receipt printer on the MacBook (3 min)
+Use **Google Chrome** (most reliable) or Brave; Safari can't print to these printers.
+1. Plug the Xprinter into the Mac with the USB cable, switch it on, and check it has paper.
+2. Open the counter app, go to **Printer** in the side menu, and tap **Connect USB printer**.
+3. A small box lists USB devices. Click the printer (often "Printer POS-58", "USB Printing Support" or "XP-58"), then click **Connect**.
+4. Tap **Print test slip**.
+5. Under **Print by itself**, switch on what you want: receipt after each sale, barista ticket, shift report when the shift closes, and **QR orders when they arrive** (turn this one on for ONE counter only). A manager can also switch on the cash drawer.
+
+**If something goes wrong:**
+- **"Another program is using the USB printer":** the Mac has the Xprinter set up as a normal printer. Open **System Settings → Printers & Scanners**, click the receipt printer, then **Remove Printer**. Unplug the cable, wait 5 seconds, plug it back in, and tap **Connect USB printer** again.
+- **The list doesn't appear, or the printer is greyed out:** in Chrome open `chrome://settings/content/usbDevices` (in Brave `brave://settings/content/usbDevices`). Choose "Sites can ask to connect to USB devices", and check the app isn't under "Not allowed".
+- **"Tap Connect USB printer" after a restart:** some Xprinters have no serial number, and the browser only remembers those until it closes. Tap it once.
+
+### 7. Set it up (in this order; take your time)
 1. **Operating supplies:**
    1. Back Office → **Ingredients** → **Manage categories**.
    2. Move foil, dish soap, sponges and similar items from "Others" into **Operating supplies**.
@@ -87,17 +104,17 @@ Back Office → **Backup & import** → **Download a backup**. Keep the file.
    1. Recipes & menu → **+ Supplied item**, once for each pastry or food you buy and resell.
    2. Enter the restock amount to start its stock.
 
-### 7. Quick check (5 min)
+### 8. Quick check (5 min)
 1. **Counter:**
    1. Open a shift.
-   2. Sell an iced latte with oat milk to take away, and check the receipt.
+   2. Sell an iced latte with oat milk to take away. The receipt and the barista ticket (with **PAID**) should print by themselves.
    3. Log one "Spillage" waste.
    4. Void the sale.
 2. **Back Office:**
    1. **Waste report** shows the spillage.
    2. **Inventory** shows a cup and a lid taken off, then put back by the void.
 3. **QR page:** on your phone, open a drink. "Hot or iced" must be chosen before you can add it.
-4. Close the shift.
+4. Close the shift. The shift report should print by itself.
 
 ## If something goes wrong
 Tell C what you see (a photo of the screen helps). To undo the apps, tell C: **"Go back to the last working version."**
