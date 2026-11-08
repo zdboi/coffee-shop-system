@@ -2510,7 +2510,7 @@ function ticketJob(order, topts, onPrinted){
       if(r && r.ok && onPrinted) onPrinted(r);
       return r;
     },
-    screen: ()=> openPrintWindow(ticketHtml(order), true)};
+    screen: ()=> openPrintWindow(ticketHtml(order, topts), true)};
 }
 function shiftReportJob(shiftId, isX){
   const get = ()=> state.shifts.find(s=>s.id===shiftId);
@@ -2664,7 +2664,7 @@ async function printAfterSale(saleId, opts){
   if(st.auto_print) jobs.push(receiptJob(parts));
   // QR order: its ticket printed when it arrived -> receipt only (no second ticket).
   if(st.auto_print_ticket && printerChosen() && !(q && qrTicketPrinted(q.id))){
-    jobs.push(q ? ticketJob(q, {source: 'QR', paid: true}, ()=> markQrTicketPrinted(q.id))
+    jobs.push(q ? ticketJob(Object.assign({}, q, {paid_at: q.paid_at || parts.sale.transaction_date}), {source: 'QR', paid: true}, ()=> markQrTicketPrinted(q.id))
                 : ticketJob(saleTicketOrder(parts), {source: 'COUNTER', paid: true, customerName: parts.ropts.customerName || ''}));
   }
   try{
@@ -3258,17 +3258,32 @@ function qrAutoTicketChip(){
   const why = typeof Printer === 'undefined' ? '' : !Printer.settings().auto_print_qr ? 'Tickets: tap Print ticket' : !printerChosen() ? 'No printer: tickets don\'t print' : 'Tickets print when orders arrive';
   return `<button class="btn btn-ghost btn-sm qr-auto ${on?'on':''}" id="qr-auto-chip" title="Change this on the Printer screen">${icon('printer', {size: 18})} ${escapeHtml(why)}</button>`;
 }
-// The order ticket on the print screen (only from a "Use print screen" tap). QR order or counter sale.
-function ticketHtml(o){
+// The order ticket on the print screen (only from a "Use print screen" tap). QR order or counter
+// sale. Same lines as the paper ticket (Printer.ticketBytes): the payment status is its own fixed
+// line, from paid_at / topts.paid ONLY (security L1: a nickname like "Ana PAID" can't look like it),
+// and the customer's name is labelled "Name:".
+function ticketHtml(o, topts){
+  topts = topts || {};
+  const qr = String(topts.source || o.source || (o.order_number ? 'QR' : 'COUNTER')).toUpperCase() === 'QR';
   const no = o.order_number || o.transaction_number || '';
-  const type = o.order_type==='TAKEAWAY' ? 'TAKEAWAY' : o.order_type ? 'DINE-IN' : '';
+  const type = o.order_type==='TAKEAWAY' ? 'TAKEAWAY' : o.order_type==='DINE_IN' ? 'DINE-IN' : '';
+  const where = [o.table_label||'', type].filter(Boolean).join(' - ');
+  const paid = !!(o.paid_at || topts.paid);
+  const status = paid ? 'PAID' : (qr ? 'NOT PAID - PAY AT COUNTER' : '');
+  const nick = o.customer_nickname || o.customer_name || topts.customerName || '';
+  const when = o.created_at || o.transaction_date;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(no)}</title>
-    <style>body{font-family:'Courier New',monospace;width:280px;margin:16px auto;font-size:14px;} h1{font-size:26px;margin:0;} .big{font-size:16px;font-weight:700;} hr{border:none;border-top:1px dashed #888;} .mod{padding-left:14px;font-size:12.5px;} @media print{body{width:${(typeof Printer!=='undefined' && Printer.settings().paper_width===80)?'72':'48'}mm;margin:0;}}</style></head><body>
-    <h1>${escapeHtml(no)}</h1>
-    <div class="big">${escapeHtml([o.table_label||'', type].filter(Boolean).join(' · ') || (o.order_number ? '' : 'COUNTER ORDER'))}</div>
-    <div>${escapeHtml(o.customer_nickname||'')} · ${fmtTime(o.created_at || o.transaction_date)} ${o.paid_at?'· PAID':''}</div><hr>
-    ${(o.items||[]).map(it=>`<div class="big">${Number(it.quantity)} × ${escapeHtml(it.name)}</div>${(it.modifiers||[]).map(m=>`<div class="mod">- ${escapeHtml(m.label)}</div>`).join('')}${it.notes?`<div class="mod">“${escapeHtml(it.notes)}”</div>`:''}`).join('')}
-    ${o.customer_note?`<hr><div>Note: ${escapeHtml(o.customer_note)}</div>`:''}
+    <style>body{font-family:'Courier New',monospace;width:280px;margin:16px auto;font-size:14px;} h1{font-size:26px;margin:0;text-align:center;} .c{text-align:center;} .big{font-size:16px;font-weight:700;} .status{font-size:20px;font-weight:700;text-align:center;padding:4px 0;border-top:1px dashed #888;border-bottom:1px dashed #888;margin:6px 0;} hr{border:none;border-top:1px dashed #888;} .mod{padding-left:14px;font-size:12.5px;} @media print{body{width:${(typeof Printer!=='undefined' && Printer.settings().paper_width===80)?'72':'48'}mm;margin:0;}}</style></head><body>
+    <h1>${escapeHtml(no || 'ORDER')}</h1>
+    <div class="c big">${qr ? 'QR ORDER' : 'COUNTER ORDER'}</div>
+    ${where ? `<div class="c big">${escapeHtml(where)}</div>` : ''}
+    ${status ? `<div class="status">${status}</div>` : ''}
+    ${nick ? `<div>Name: ${escapeHtml(nick)}</div>` : ''}
+    ${when ? `<div>${escapeHtml(fmtDateTime(when))}</div>` : ''}<hr>
+    ${(o.items||[]).map(it=>`<div class="big">${Number(it.quantity)} x ${escapeHtml(it.name)}</div>${(it.modifiers||[]).map(m=>`<div class="mod">- ${escapeHtml(m.label||m.name||'')}</div>`).join('')}${it.notes?`<div class="mod">"${escapeHtml(it.notes)}"</div>`:''}`).join('')}
+    <hr>${(o.customer_note||o.notes)?`<div class="big">Note: ${escapeHtml(o.customer_note||o.notes)}</div><hr>`:''}
+    <div>${(o.items||[]).reduce((n,it)=>n+(Number(it.quantity)||1),0)} item(s)</div>
+    ${topts.reprint?'<div class="c">(Reprint)</div>':''}
     </body></html>`;
 }
 function openSoldOutManager(){
