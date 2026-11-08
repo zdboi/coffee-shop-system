@@ -233,7 +233,9 @@ async function manilaClock(){
       `counter shift screen: Sales ${peso(X.sales)}, Refunds ${peso(X.refundD)}, Net ${peso(X.net)}, 4 transactions`, [await stat('Sales'), await stat('Refunds'), await stat('Net sales'), await stat('Transactions')]);
     ok(eq2(money(await stat('Cash')), X.cash) && eq2(money(await stat('GCash / Maya / Other')), X.other), `counter payment breakdown: cash ${peso(X.cash)}, GCash ${peso(X.other)}`, [await stat('Cash'), await stat('GCash / Maya / Other')]);
     ok(eq2(money(await fo.textContent('.drawer-card .drow.total')), X.expectedCash), `counter drawer: expected cash 1000 + ${X.cash} - ${X.refundD} = ${peso(X.expectedCash)}`, await fo.textContent('.drawer-card .drow.total'));
-    const [xr] = await Promise.all([fctx.waitForEvent('page'), fo.click('#xreport-btn')]);
+    await fo.click('#xreport-btn');   // 1.4 (lead-approved 2026-11-08): no printer -> the counter asks first; "Use print screen" opens the pop-up
+    await fo.waitForSelector('#pr-dialog', {timeout: 10000});
+    const [xr] = await Promise.all([fctx.waitForEvent('page'), fo.click('#pr-dialog')]);
     await xr.waitForLoadState();
     Object.assign(xrow, await xr.$$eval('.row', rs => Object.fromEntries(rs.map(r => [r.querySelector('span').textContent.trim(), r.querySelector('b').textContent.trim()]))));
     const xv = (k) => money(xrow[k]);
