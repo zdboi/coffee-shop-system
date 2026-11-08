@@ -3,11 +3,20 @@
    (release 1.3, P1). Used by the counter (Front Office).
 
    Connection types (chosen per counter, saved on this device only):
+     'usb'       : WebUSB (release 1.4): a USB-cable receipt printer (USB printer class, e.g.
+                   Xprinter XP-58). Chrome / Edge / Brave on a Mac or computer. Reconnects by
+                   itself on page load and when the cable is plugged back in (no chooser).
      'bluetooth' : Web Bluetooth (BLE printers). Chrome / Edge on Android, Windows, Mac.
-     'serial'    : Web Serial (Chrome / Edge on a computer): a printer paired as a
+                   (Brave: off until brave://flags/#brave-web-bluetooth-api is Enabled.)
+     'serial'    : Web Serial (Chrome / Edge / Brave 1.69+ on a computer): a printer paired as a
                    Bluetooth (classic / SPP) or USB serial port, e.g. a COM port on Windows.
-     'dialog'    : the browser's print screen (receiptHtml + openPrintWindow). Works
-                   everywhere, incl. iPad / iPhone. Also the fallback when direct printing fails.
+     'dialog'    : no printer chosen. Release 1.4 (owner: "not prompt me to save it as PDF"):
+                   NOTHING opens the browser's print screen by itself any more. printReceipt /
+                   printTicket / printShiftReport open it only with opts.fallback === true (an
+                   explicit staff tap on "Use print screen"); otherwise they answer
+                   {ok:false, error:'NOT_CONNECTED'} straight away.
+   Jobs: receipts, barista order tickets (printTicket) and X / Z shift reports
+   (printShiftReport) go through one queue, so two jobs never mix on the paper.
    Printers: any ESC/POS receipt printer (Xprinter, Epson TM, Star in ESC/POS mode,
    Rongta, GOOJPRT, MUNBYN, HOIN, generic "Printer001" / "BlueTooth Printer" / "MTP-…" / "PT-210").
 
@@ -26,7 +35,7 @@
 const Printer = (() => {
   const SETTINGS_KEY = 'cccc.printer.settings';   // LocalDB (this counter only, never the server)
   const DEFAULTS = {
-    connection: 'dialog',        // 'dialog' | 'bluetooth' | 'serial'
+    connection: 'dialog',        // 'dialog' (none chosen) | 'usb' | 'bluetooth' | 'serial'
     paper_width: 58,             // 58 | 80 (mm)
     peso_style: 'P',             // 'P' -> P150.00 | 'PHP' -> PHP 150.00 | 'none' -> 150.00
     auto_print: false,           // print the receipt right after a sale
@@ -38,8 +47,44 @@ const Printer = (() => {
     serial_baud: 9600,           // Bluetooth SPP ignores it; USB serial printers often use 9600 or 115200
     ble_chunk: 180,              // bytes per Bluetooth write (drops to 20 by itself if the printer needs it)
     ble_delay_ms: 20,            // pause between Bluetooth writes (cheap printers have small buffers)
+    // release 1.4: USB printer + more auto prints
+    usb_vendor_id: 0,            // remembered USB printer (vendor / product / serial number)
+    usb_product_id: 0,
+    usb_serial: '',              // Brave changes the serial it reports (fingerprint shield): matched only as a tie-breaker
+    usb_chunk: 1024,             // bytes per USB write
+    auto_print_ticket: true,     // barista order ticket after each counter sale
+    auto_print_qr: true,         // barista order ticket when a QR order arrives
+    auto_print_shift: true,      // Z report right after closing the shift
+    ticket_copies: 1,            // 1..3
   };
   const CHARS = {58: 32, 80: 48};   // characters per line, font A
+
+  // USB (release 1.4). Chooser filters: any USB printer-class device (class 7, matched on the
+  // device or any of its interfaces), plus makers of ESC/POS receipt printers whose cheap
+  // models report a vendor-specific class. The printer class filter is the main one.
+  const USB_PRINTER_CLASS = 7;
+  const USB_VENDORS = [
+    0x0483,   // STMicroelectronics chip: Xprinter, many "POS-58" / "POS-80" printers
+    0x0416,   // Winbond (Nuvoton) chip: Xprinter, ZJiang, GOOJPRT, HOIN "POS58"
+    0x1fc9,   // NXP chip: newer Xprinter XP-58 / XP-80
+    0x0fe6,   // ICS Advent chip: generic "USB Printer P", Xprinter, Rongta
+    0x28e9,   // GigaDevice chip: newer Xprinter / Rongta
+    0x6868,   // ZJiang / generic Chinese 58 mm printers
+    0x154f,   // SNBC
+    0x04b8,   // Epson (TM series)
+    0x0519,   // Star Micronics
+    0x1504,   // Bixolon
+    0x0419,   // Samsung / older Bixolon SRP
+    0x1d90,   // Citizen
+    0x2730,   // Citizen (CT-S)
+    0x0dd4,   // Custom Engineering
+  ];
+  const USB_FILTERS = [{classCode: USB_PRINTER_CLASS}].concat(USB_VENDORS.map(v => ({vendorId: v})));
+  // Interface classes the browser never lets a page claim (audio, HID, mass storage, smart card,
+  // video, A/V, wireless): never picked.
+  const USB_PROTECTED = [0x01, 0x03, 0x08, 0x0B, 0x0E, 0x10, 0xE0];
+  const USB_TIMEOUT_MS = 15000;    // one USB write: a printer out of paper stops taking data
+  const USB_PLUG_DELAY_MS = 250;   // after the cable is plugged in, give the Mac a moment
 
   // Known receipt-printer Bluetooth services (16-bit numbers or full ids) and their
   // usual "write" characteristics (preferred when present).
@@ -173,6 +218,14 @@ const Printer = (() => {
       line(s){ wrap(toAscii(s, this.peso), this.cols()).forEach(l => { this.text(l); this.bytes.push(0x0A); }); return this; },
       // Shop settings text (receipt_header / receipt_footer): keeps the owner's own line breaks.
       lines(s){ wrap(toAscii(s, this.peso, true), this.cols()).forEach(l => { this.text(l); this.bytes.push(0x0A); }); return this; },
+      // One data field, wrapped lines after the first indented by `indent` (ticket item names).
+      hang(s, indent){
+        indent = Math.max(0, Math.min(8, indent | 0)); const w = this.cols();
+        const all = wrap(toAscii(s, this.peso), w);
+        const rest = all.length > 1 ? wrap(all.slice(1).join(' '), Math.max(1, w - indent)).map(l => ' '.repeat(indent) + l) : [];
+        [all[0]].concat(rest).forEach(l => { this.text(l); this.bytes.push(0x0A); });
+        return this;
+      },
       lr(left, right, indent){ leftRight(toAscii(left, this.peso), toAscii(right, this.peso), this.cols(), indent).forEach(l => { this.text(l); this.bytes.push(0x0A); }); return this; },
       sep(ch){ return this.text((ch || '-').repeat(this.cols())).raw([0x0A]); },
       feed(n){ return this.raw([ESC, 0x64, Math.max(0, Math.min(255, n == null ? 1 : n))]); },  // ESC d n
@@ -319,6 +372,168 @@ const Printer = (() => {
     if(st.cut !== false) b.cut();
     return b.toUint8();
   }
+  /* ------------------------------------------------------------------
+     Barista order ticket (release 1.4). No prices.
+     order: a QR order (qr_orders row: order_number, table_label, order_type, customer_nickname,
+       created_at, paid_at, customer_note, items[{name, quantity, modifiers[{label}], notes}])
+       or a counter sale ({transaction_number, transaction_date, items, ...}).
+     opts: {copies, reprint, source: 'QR'|'COUNTER', customerName, paid, + any setting}.
+     ------------------------------------------------------------------ */
+  function _ticketSource(order, opts){
+    const s = String(opts.source || order.source || (order.order_number ? 'QR' : 'COUNTER')).toUpperCase();
+    return s === 'QR' ? 'QR' : 'COUNTER';
+  }
+  function _ticketBody(b, order, opts){
+    const src = _ticketSource(order, opts);
+    const num = order.order_number || order.ticket_number || order.transaction_number || '';
+    b.align('center').bold(true).size(2, 2).line(num || 'ORDER').size(1, 1);
+    b.line(src === 'QR' ? 'QR ORDER' : 'COUNTER ORDER');
+    const type = order.order_type === 'TAKEAWAY' ? 'TAKEAWAY' : order.order_type === 'DINE_IN' ? 'DINE-IN' : '';
+    const where = [order.table_label, type].filter(Boolean).join(' - ');
+    const nick = order.customer_nickname || order.customer_name || opts.customerName || '';
+    if(where || nick){ b.size(1, 2); if(where) b.line(where); if(nick) b.line(nick); b.size(1, 1); }
+    b.bold(false);
+    const when = order.created_at || order.transaction_date || '';
+    const paid = !!(order.paid_at || opts.paid);
+    const whenText = [_dateText(when), _timeText(when)].filter(Boolean).join(' ');
+    if(whenText || paid) b.line(whenText + (paid ? (whenText ? '  ' : '') + 'PAID' : ''));
+    b.align('left').sep();
+    let count = 0;
+    (order.items || []).forEach(it => {
+      const q = Number(it.quantity != null ? it.quantity : it.qty) || 1;
+      count += q;
+      b.bold(true).size(1, 2).hang(q + ' x ' + (it.name || it.item_name || it.recipe_name || ''), 4).size(1, 1).bold(false);
+      (it.modifiers || []).forEach(m => b.line('  - ' + ((m && (m.label || m.name)) || '')));
+      if(it.notes) b.line('  "' + it.notes + '"');
+    });
+    b.sep();
+    const note = order.customer_note || order.notes || '';
+    if(note){ b.bold(true).line('Note: ' + note).bold(false).sep(); }
+    b.line(count + (count === 1 ? ' item' : ' items'));
+    if(opts.reprint) b.align('center').line('(Reprint)').align('left');
+  }
+  function ticketBytes(order, opts){
+    opts = opts || {};
+    const st = Object.assign({}, current, _pick(opts));
+    const b = EscPos(st);
+    b.init();
+    const copies = Math.max(1, Math.min(3, Number(opts.copies || st.ticket_copies) || 1));
+    for(let c = 0; c < copies; c++){
+      _ticketBody(b, order || {}, opts);
+      b.feed(4);
+      if(st.cut !== false) b.cut();
+    }
+    return b.toUint8();
+  }
+
+  /* ------------------------------------------------------------------
+     X / Z shift report (release 1.4). Same lines as the counter's X/Z report
+     (front.js shiftReportHtml): salesSummaryRows + Voids + Transactions, Cash / Card /
+     Other, then the cash drawer. For a CLOSED shift the figures saved when it closed are
+     used (cash_sales, card_sales, other_sales, expected_cash, declared_cash, cash_variance,
+     voids_total, transaction_count), exactly like that report. Nothing is recalculated
+     here: every figure comes from shiftMetrics() / salesSummaryRows() (logic.js) or the shift.
+     report: {shift, metrics (= shiftMetrics(shift)), isX, device_name, waste_count}
+       or just the shift (metrics then come from shiftMetrics(shift), or opts.metrics).
+     opts: {isX, metrics, device_name, waste_count, copies, + any setting}.
+     ------------------------------------------------------------------ */
+  function _shiftInput(report, opts){
+    report = report || {}; opts = opts || {};
+    const shift = report.shift || report;
+    let m = report.metrics || report.m || opts.metrics || null;
+    if(!m && typeof shiftMetrics === 'function'){ try{ m = shiftMetrics(shift); }catch(e){ m = null; } }
+    const pick = (...xs) => xs.find(x => x !== undefined && x !== null);
+    let isX = pick(report.shift ? report.isX : undefined, report.is_x, opts.isX);
+    if(isX === undefined) isX = shift.status !== 'CLOSED';
+    let dev = pick(report.shift ? report.device_name : undefined, opts.device_name);
+    if(dev === undefined){ try{ dev = (typeof state !== 'undefined' && state && state.device && state.device.device_name) || ''; }catch(e){ dev = ''; } }
+    const waste = pick(report.shift ? report.waste_count : undefined, opts.waste_count);
+    return {shift, m: m || {}, isX: !!isX, device_name: dev || '', waste_count: waste};
+  }
+  function _dt(d){ return [_dateText(d), _timeText(d)].filter(Boolean).join(' '); }
+  function _shiftBody(b, r, opts){
+    const {shift, m, isX} = r;
+    const closed = shift.status === 'CLOSED';
+    const v = (k, live) => (closed && shift[k] !== null && shift[k] !== undefined && shift[k] !== '') ? Number(shift[k]) : Number(live);
+    const signed = (n) => { n = Number(n) || 0; return (n >= 0 ? '+' : '') + b.money(n); };
+    b.align('center').bold(true).size(2, 2).line(isX ? 'X REPORT' : 'Z REPORT').size(1, 1);
+    b.line(_shopName() || 'Shift report').bold(false);
+    b.line(isX ? 'Mid-shift (shift still open)' : (closed ? 'Shift closed' : 'Shift report'));
+    b.align('left').sep();
+    if(shift.shift_number) b.lr('Shift', shift.shift_number);
+    b.lr('Cashier', shift.cashier_name || '');
+    if(shift.closed_by_name && shift.closed_by_name !== shift.cashier_name) b.lr('Closed by', shift.closed_by_name);
+    if(r.device_name) b.lr('Counter', r.device_name);
+    b.lr('Opened', _dt(shift.opened_at));
+    if(closed) b.lr('Closed', _dt(shift.closed_at));
+    else b.lr('Up to', _dt(opts.now || new Date()));
+    if(typeof shiftDuration === 'function' && shift.opened_at){
+      try{ b.lr('Length', shiftDuration(closed ? shift : Object.assign({}, shift, {closed_at: new Date(opts.now || Date.now()).toISOString()}))); }catch(e){}
+    }
+    b.sep().bold(true).line('SALES').bold(false);
+    const rows = typeof salesSummaryRows === 'function' ? salesSummaryRows(m, shift) : [];
+    rows.forEach(row => {
+      if(row.total) b.bold(true);
+      b.lr(row.label, row.sign + b.money(row.amount));
+      if(row.total) b.bold(false);
+      if(row.key === 'taxAndService' && (Number(m.taxTotal) > 0 || Number(m.serviceTotal) > 0)){
+        b.lr('  Tax', b.money(m.taxTotal));
+        b.lr('  Service charge', b.money(m.serviceTotal));
+      }
+    });
+    const voids = closed && shift.voids_total !== null && shift.voids_total !== undefined ? Number(shift.voids_total) : m.voids;
+    const count = closed && shift.transaction_count !== null && shift.transaction_count !== undefined ? shift.transaction_count : m.transactionCount;
+    b.lr((typeof SALES_LABELS !== 'undefined' && SALES_LABELS.voids) || 'Voids', b.money(voids));
+    b.lr('Transactions', String(Number(count) || 0));
+    b.sep().bold(true).line('PAYMENTS').bold(false);
+    b.lr('Cash', b.money(v('cash_sales', m.cashGross)));
+    b.lr('Card', b.money(v('card_sales', m.cardGross)));
+    b.lr('GCash / Maya / Other', b.money(v('other_sales', m.otherGross)));
+    b.sep().bold(true).line('CASH DRAWER').bold(false);
+    b.lr('Opening cash', b.money(shift.opening_cash));
+    b.lr('Cash sales', b.money(v('cash_sales', m.cashGross)));
+    const cashRefunds = (Number(m.cashGross) || 0) - (Number(m.netCashFromSales) || 0);
+    if(cashRefunds > 0.005) b.lr('Cash refunds', '-' + b.money(cashRefunds));
+    b.lr('Pay ins (' + (Number(m.payInCount) || 0) + ')', '+' + b.money(m.payIns));
+    b.lr('Pay outs (' + (Number(m.payOutCount) || 0) + ')', '-' + b.money(m.payOuts));
+    b.bold(true).lr('Expected cash', b.money(v('expected_cash', m.expectedCash))).bold(false);
+    if(closed){
+      b.lr('Counted cash', b.money(shift.declared_cash));
+      b.bold(true).size(1, 2).lr('Difference', signed(shift.cash_variance)).size(1, 1).bold(false);
+    }
+    if(r.waste_count !== undefined && r.waste_count !== null && r.waste_count !== ''){ b.sep(); b.lr('Waste entries', String(Number(r.waste_count) || 0)); }
+    if(shift.notes){ b.sep(); b.line('Notes: ' + shift.notes); }
+    b.sep().align('center');
+    if(isX) b.line('Not final: the shift is still open.');
+    b.line('Printed ' + _dt(opts.now || new Date()));
+    if(opts.reprint) b.line('(Reprint)');
+    b.align('left');
+  }
+  function shiftReportBytes(report, opts){
+    opts = opts || {};
+    const r = _shiftInput(report, opts);
+    const st = Object.assign({}, current, _pick(opts));
+    const b = EscPos(st);
+    b.init();
+    const copies = Math.max(1, Math.min(3, Number(opts.copies) || 1));
+    for(let c = 0; c < copies; c++){
+      _shiftBody(b, r, opts);
+      b.feed(4);
+      if(st.cut !== false) b.cut();
+    }
+    return b.toUint8();
+  }
+  // Plain print-screen page with the same text as the paper (only for opts.fallback === true
+  // when the caller gives no opts.html of its own).
+  function _escHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c])); }
+  function textHtml(title, bytes, paper){
+    const text = describe(bytes).replace(/\[(INIT|ALIGN [LCR]|B|\/B|SIZE \dx\d|FEED \d+|CUT|DRAWER)\]/g, '').replace(/\[QR [^\]]*\]/g, '');
+    const w = Number(paper) === 80 ? 80 : 58;
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + _escHtml(title || 'Print') + '</title><style>@page{size:' + w + 'mm auto;margin:0}'
+      + 'body{margin:0;padding:4mm;width:' + (w - 8) + 'mm;font:12px/1.35 "Courier New",monospace;white-space:pre-wrap;color:#000}</style></head><body>'
+      + _escHtml(text) + '</body></html>';
+  }
+
   function state_device_name(){ return conn.name || current.device_name || ''; }
   const SETTING_KEYS = Object.keys(DEFAULTS);
   function _pick(o){ const out = {}; SETTING_KEYS.forEach(k => { if(o && o[k] !== undefined) out[k] = o[k]; }); return out; }
@@ -336,7 +551,13 @@ const Printer = (() => {
   let current = Object.assign({}, DEFAULTS);
   function cleanSettings(o){
     const s = Object.assign({}, DEFAULTS, _pick(o || {}));
-    if(!['dialog', 'bluetooth', 'serial'].includes(s.connection)) s.connection = 'dialog';
+    if(!['dialog', 'usb', 'bluetooth', 'serial'].includes(s.connection)) s.connection = 'dialog';
+    const id16 = (x) => { const n = Math.round(Number(x)); return n >= 0 && n <= 0xFFFF ? n : 0; };
+    s.usb_vendor_id = id16(s.usb_vendor_id); s.usb_product_id = id16(s.usb_product_id);
+    s.usb_serial = String(s.usb_serial || '');
+    s.usb_chunk = Math.max(64, Math.min(16384, Math.round(Number(s.usb_chunk)) || 1024));
+    s.auto_print_ticket = s.auto_print_ticket !== false; s.auto_print_qr = s.auto_print_qr !== false; s.auto_print_shift = s.auto_print_shift !== false;
+    s.ticket_copies = Math.max(1, Math.min(3, Math.round(Number(s.ticket_copies)) || 1));
     s.paper_width = Number(s.paper_width) === 80 ? 80 : 58;
     s.peso_style = ['P', 'PHP', 'none'].includes(s.peso_style) ? s.peso_style : 'P';
     s.auto_print = !!s.auto_print; s.open_drawer_on_cash = !!s.open_drawer_on_cash; s.cut = s.cut !== false;
@@ -362,8 +583,11 @@ const Printer = (() => {
   /* ------------------------------------------------------------------
      Status + events
      ------------------------------------------------------------------ */
-  const conn = {type: null, connected: false, connecting: false, name: '', device: null, characteristic: null, withoutResponse: false, port: null, writer: null};
-  let lastError = '', lastPrintedAt = null, busy = false;
+  const conn = {type: null, connected: false, connecting: false, name: '', device: null, characteristic: null, withoutResponse: false, port: null, writer: null,
+    usb: null, usbInterface: null, usbEndpoint: null};
+  let lastError = '', lastPrintedAt = null, busy = false, pending = 0;
+  let usbNeedsTap = false;        // the remembered USB printer isn't in the browser's allowed list right now
+  let reconnectError = null;      // why the last quiet reconnect failed (e.g. USB_BUSY), for the job's message
   const listeners = {status: [], error: [], printed: []};
   function on(type, fn){ (listeners[type] = listeners[type] || []).push(fn); return () => off(type, fn); }
   function off(type, fn){ listeners[type] = (listeners[type] || []).filter(f => f !== fn); }
@@ -379,51 +603,165 @@ const Printer = (() => {
     const n = _nav(); const ua = String(n.userAgent || '');
     return /iPad|iPhone|iPod/.test(ua) || (n.platform === 'MacIntel' && Number(n.maxTouchPoints) > 1);
   }
+  // Which browser is this? Brave hides itself in the user agent (it says "Chrome"), but has
+  // navigator.brave. 'brave' | 'edge' | 'chrome' | 'safari' | 'firefox' | 'other'
+  function browserName(){
+    const n = _nav(); const ua = String(n.userAgent || '');
+    if(n.brave && typeof n.brave.isBrave === 'function') return 'brave';
+    if(/Firefox\/|FxiOS/.test(ua)) return 'firefox';
+    if(/Edg(e|A|iOS)?\//.test(ua)) return 'edge';
+    if(/OPR\/|Opera/.test(ua)) return 'other';
+    if(/Chrome\/|Chromium\/|CriOS/.test(ua)) return 'chrome';
+    if(/Safari\//.test(ua) || /^Apple/.test(String(n.vendor || ''))) return 'safari';
+    return 'other';
+  }
+  function _platform(){
+    const n = _nav(); const ua = String(n.userAgent || ''); const p = String((n.userAgentData && n.userAgentData.platform) || n.platform || '');
+    if(isAppleMobile()) return 'ios';
+    if(/Mac/.test(p) || /Macintosh|Mac OS X/.test(ua)) return 'mac';
+    if(/Win/.test(p) || /Windows/.test(ua)) return 'windows';
+    if(/Android/.test(ua)) return 'android';
+    return 'other';
+  }
   function support(){
     const n = _nav();
     const secure = typeof window === 'undefined' || window.isSecureContext !== false;
+    const browser = browserName();
     return {
+      usb: !!(n.usb && typeof n.usb.requestDevice === 'function') && secure,
+      usb_remember: !!(n.usb && typeof n.usb.getDevices === 'function'),
       bluetooth: !!(n.bluetooth && typeof n.bluetooth.requestDevice === 'function') && secure,
       bluetooth_remember: !!(n.bluetooth && typeof n.bluetooth.getDevices === 'function'),
       serial: !!(n.serial && typeof n.serial.requestPort === 'function') && secure,
       dialog: true, apple_mobile: isAppleMobile(), secure,
+      browser, brave: browser === 'brave', safari: browser === 'safari', platform: _platform(),
     };
   }
-  // Plain words about what this browser can do (for the counter's printer settings).
+  // Plain words about what this browser can do (for the counter's printer screen).
+  // helpSteps() has the step-by-step version.
   function supportText(){
     const s = support();
-    if(s.apple_mobile) return 'iPad and iPhone don\'t let any browser connect to Bluetooth or USB printers. Receipts open the print screen instead (works with AirPrint printers).';
-    if(!s.secure) return 'Direct printing needs the secure (https) address of the app. Receipts open the print screen instead.';
-    if(s.bluetooth && s.serial) return 'This browser can print by Bluetooth or through a printer port (Bluetooth or USB).';
-    if(s.bluetooth) return 'This browser can print to Bluetooth (BLE) receipt printers.';
-    if(s.serial) return 'This browser can print through a printer port (Bluetooth or USB), but not Bluetooth directly.';
-    return 'This browser can\'t connect to receipt printers. Use Chrome or Edge on an Android tablet or a Windows / Mac computer. Receipts open the print screen instead.';
+    if(s.apple_mobile) return 'iPad and iPhone don\'t let any browser connect to USB or Bluetooth receipt printers. Use "Use print screen" to print (works with AirPrint printers).';
+    if(s.safari) return 'Safari can\'t print straight to a receipt printer (Apple doesn\'t allow it). Open the counter app in Google Chrome on this Mac instead.';
+    if(!s.secure) return 'Direct printing needs the secure (https) address of the app.';
+    if(s.brave){
+      return (s.usb ? 'Brave can print to a USB receipt printer: tap Connect USB printer. ' : '')
+        + 'Bluetooth printers need a Brave setting (brave://flags/#brave-web-bluetooth-api, then Enabled and Relaunch). '
+        + 'For the counter, Google Chrome is the most reliable browser.';
+    }
+    const ways = [];
+    if(s.usb) ways.push('USB cable');
+    if(s.bluetooth) ways.push('Bluetooth');
+    if(s.serial) ways.push('a printer port (Bluetooth or USB)');
+    if(ways.length) return 'This browser can print by ' + (ways.length > 1 ? ways.slice(0, -1).join(', ') + ' or ' + ways[ways.length - 1] : ways[0]) + '.';
+    return 'This browser can\'t connect to receipt printers. Use Google Chrome or Edge on a Mac or Windows computer, or Chrome on an Android tablet.';
+  }
+  // Step-by-step help for this browser: {browser, platform, title, steps: [..], notes: [..]}.
+  // Facts checked 2026-11-08 against Brave's own source and issue tracker:
+  //   WebUSB: on in Brave (desktop); Brave's fingerprint shield changes the USB serial number a
+  //     site sees (so we don't rely on it). Web Serial: on by default since Brave 1.69 (2024);
+  //     before that it needed brave://flags/#brave-web-serial-api. Web Bluetooth: OFF by
+  //     default; brave://flags/#brave-web-bluetooth-api.
+  function helpSteps(){
+    const s = support();
+    const b = s.browser, mac = s.platform === 'mac';
+    const comp = mac ? 'the Mac' : 'the computer';
+    const settingsUrl = (b === 'brave' ? 'brave' : b === 'edge' ? 'edge' : 'chrome') + '://settings/content/usbDevices';
+    if(s.apple_mobile) return {browser: b, platform: s.platform, title: 'iPad / iPhone', steps: [
+      'iPad and iPhone can\'t connect to USB or Bluetooth receipt printers from any browser.',
+      'To print, tap "Use print screen" and choose an AirPrint printer.',
+      'For automatic printing, run the counter on a Mac or Windows computer with Google Chrome.'], notes: []};
+    if(b === 'safari') return {browser: b, platform: s.platform, title: 'Safari', steps: [
+      'Safari can\'t talk to USB, Bluetooth or printer-port receipt printers (Apple doesn\'t allow it).',
+      'Install Google Chrome on this Mac (google.com/chrome), open the counter app there and pair the counter again.',
+      'Then go to Printer and tap Connect USB printer.'], notes: []};
+    if(b === 'firefox' || b === 'other' || (!s.usb && !s.serial && !s.bluetooth)) return {browser: b, platform: s.platform, title: 'This browser', steps: [
+      'This browser can\'t connect to receipt printers.',
+      'Install Google Chrome, open the counter app there and pair the counter again.',
+      'Then go to Printer and tap Connect USB printer.'], notes: []};
+    const name = b === 'brave' ? 'Brave' : b === 'edge' ? 'Edge' : 'Chrome';
+    const steps = [
+      'Plug the printer\'s USB cable into ' + comp + ', switch the printer on and check it has paper.',
+      'Open the counter app in ' + name + ' (the https address), go to Printer and tap Connect USB printer.',
+      name + ' shows a small box listing USB devices. Click the receipt printer (its name is often "Printer POS-58", "USB Printing Support", "XP-58" or similar), then click Connect.',
+      'Tap Print test slip. If the slip comes out, you\'re done: receipts, order tickets, QR orders and the shift report now print by themselves (switches on the Printer screen).',
+      name + ' remembers the printer for this app. It reconnects by itself when the page opens and when the cable is plugged back in. If the Printer screen ever says "Tap Connect USB printer", tap it once (printers without a serial number are only remembered until they are unplugged or ' + name + ' is closed).',
+    ];
+    const notes = [
+      'If the box never appears or the printer is greyed out: open ' + settingsUrl + ' and choose "Sites can ask to connect to USB devices"; check the app\'s address isn\'t under "Not allowed".',
+      'If it says another program is using the printer: ' + (mac ? 'open System Settings > Printers & Scanners, click the receipt printer, click Remove Printer, then ' : 'close the printer\'s own app and ') + 'unplug the cable, wait 5 seconds, plug it back in and tap Connect USB printer again.',
+    ];
+    if(b === 'brave'){
+      notes.push('Brave Shields don\'t need to be changed for USB printing.');
+      notes.push('Bluetooth printers in Brave: type brave://flags/#brave-web-bluetooth-api in the address bar, set "Web Bluetooth API" to Enabled, click Relaunch.');
+      notes.push('Printer ports (Connect printer port) work in Brave 1.69 or newer. Older Brave: update it (brave://settings/help).');
+      notes.push('For the counter, Google Chrome is the most reliable browser. Brave works for USB printing.');
+    } else if(b === 'chrome'){
+      notes.push('Chrome is the recommended browser for the counter.');
+    }
+    if(s.platform === 'windows') notes.push('On Windows the printer\'s own driver usually blocks USB printing from the browser. Use Connect printer port (USB serial) or a Bluetooth printer instead.');
+    return {browser: b, platform: s.platform, title: name + (mac ? ' on a Mac' : '') + ' + USB receipt printer', steps, notes};
   }
   function status(){
     return {
       connection: current.connection, connected: !!conn.connected, connecting: !!conn.connecting,
       type: conn.type, name: conn.name || current.device_name || '', remembered: !!(current.device_id || current.device_name),
-      paper_width: current.paper_width, chars: CHARS[current.paper_width], busy, last_error: lastError, last_printed_at: lastPrintedAt,
+      paper_width: current.paper_width, chars: CHARS[current.paper_width], busy, pending, last_error: lastError, last_printed_at: lastPrintedAt,
+      usb_needs_tap: current.connection === 'usb' && usbNeedsTap && !conn.connected,
       support: support(), support_text: supportText(),
     };
   }
 
+  function _usbBusyText(){
+    const p = _platform();
+    if(p === 'windows') return 'Another program or the Windows printer driver is using the USB printer, so the app can\'t reach it. Close the printer\'s own app, unplug the cable, plug it back in and tap Connect USB printer. If it keeps happening, use Connect printer port instead.';
+    return 'Another program is using the USB printer, so the app can\'t reach it. 1) Close other browser tabs or apps that print to it. '
+      + '2) ' + (p === 'mac' ? 'On the Mac, open System Settings > Printers & Scanners; if the receipt printer is listed, click it and click Remove Printer (the app prints to it by itself). ' : 'Remove the receipt printer from the computer\'s printer list. ')
+      + '3) Unplug the USB cable, wait 5 seconds, plug it back in. 4) Tap Connect USB printer again.';
+  }
+  function _notConnectedText(where){
+    if(where === 'usb'){
+      if(usbNeedsTap) return 'The browser needs you to choose the USB printer again (once). Tap Connect USB printer.';
+      return 'The USB printer isn\'t connected. Check the cable is plugged in and the printer is switched on' + (state_device_name() ? ' ("' + state_device_name() + '")' : '') + ', then tap Connect USB printer.';
+    }
+    if(where === 'serial') return 'The printer port isn\'t open. Check the printer is switched on, then tap Connect printer port.';
+    if(where === 'bluetooth') return 'The printer isn\'t connected. Tap Connect Bluetooth printer.';
+    return 'No receipt printer is connected. Open the Printer screen and tap Connect USB printer.';
+  }
   function friendly(e, where){
     const name = e && e.name, msg = String((e && e.message) || e || '');
+    const code = _code(e);
+    if(/globally disabled/i.test(msg) || (support().brave && where === 'bluetooth' && name === 'NotFoundError' && /disabled/i.test(msg)))
+      return 'Bluetooth printing is switched off in Brave. Type brave://flags/#brave-web-bluetooth-api in the address bar, set "Web Bluetooth API" to Enabled, click Relaunch, then try again. (Or use Google Chrome.)';
+    if(where === 'usb'){
+      if(code === 'USB_BUSY') return _usbBusyText();
+      if(code === 'NO_USB_OUT') return 'This USB device doesn\'t take print data. Tap Connect USB printer and choose the receipt printer (its name often has "Printer", "POS" or "XP-" in it).';
+      if(code === 'USB_TIMEOUT') return 'The printer stopped taking data. Check it has paper, the lid is closed and its light isn\'t flashing, then print again.';
+      if(code === 'USB_LOST') return 'The USB printer was unplugged or switched off while printing. Plug it back in (it reconnects by itself), then print again.';
+      if(code === 'NOT_CONNECTED') return _notConnectedText('usb');
+      if(code === 'NOT_SUPPORTED') return supportText();
+      if(name === 'NotFoundError') return 'No printer was chosen. If your printer wasn\'t in the list, check the USB cable and that the printer is on, then try again (or tap "Show all USB devices").';
+      if(name === 'SecurityError') return 'The browser blocked the USB printer. Open the app from its https address and try again.' + (_platform() === 'windows' ? ' On Windows the printer\'s own driver can block it: use Connect printer port instead.' : '');
+      if(name === 'NotAllowedError') return 'The browser didn\'t allow the USB printer. Tap Connect USB printer and click Connect in the box.';
+      if(name === 'NetworkError' && /claim/i.test(msg)) return _usbBusyText();
+      return msg ? 'Printing failed: ' + msg : 'Printing failed.';
+    }
     if(name === 'NotFoundError' && /cancel|chosen|no device|User/i.test(msg)) return 'No printer was chosen.';
     if(name === 'NotFoundError' && where === 'serial') return 'No printer port was chosen.';
     if(name === 'NotFoundError') return 'No printer was chosen.';
     if(name === 'SecurityError') return 'The browser blocked the printer connection. Open the app from its https address and tap the button again.';
     if(name === 'NotAllowedError') return 'The browser didn\'t allow the printer connection. Tap Connect Bluetooth printer and allow it.';
     if(name === 'InvalidStateError' && where === 'serial') return 'The printer port is in use by another app or browser tab. Close it and try again.';
-    if(name === 'NetworkError' || /disconnect|GATT|connection/i.test(msg) || (e && e.code === 'NOT_CONNECTED' && state_device_name())) return 'Couldn\'t reach the printer' + (state_device_name() ? ' "' + state_device_name() + '"' : '') + '. Check it is switched on, has paper and is close by, then tap Connect Bluetooth printer.';
-    if(e && e.code === 'NO_WRITE') return 'This Bluetooth device doesn\'t accept print data. Choose your receipt printer (or tap "Show all Bluetooth devices").';
-    if(e && e.code === 'BT_OFF') return 'Bluetooth is off on this device. Turn it on and try again.';
-    if(e && e.code === 'NOT_SUPPORTED') return supportText();
-    if(e && e.code === 'NOT_CONNECTED') return 'The printer isn\'t connected. Tap Connect Bluetooth printer.';
+    if(name === 'NetworkError' || /disconnect|GATT|connection/i.test(msg) || (code === 'NOT_CONNECTED' && where === 'bluetooth' && state_device_name())) return 'Couldn\'t reach the printer' + (state_device_name() ? ' "' + state_device_name() + '"' : '') + '. Check it is switched on, has paper and is close by, then tap Connect Bluetooth printer.';
+    if(code === 'NO_WRITE') return 'This Bluetooth device doesn\'t accept print data. Choose your receipt printer (or tap "Show all Bluetooth devices").';
+    if(code === 'BT_OFF') return 'Bluetooth is off on this device. Turn it on and try again.';
+    if(code === 'NOT_SUPPORTED') return supportText();
+    if(code === 'NOT_CONNECTED') return _notConnectedText(where);
     return msg ? 'Printing failed: ' + msg : 'Printing failed.';
   }
   function fail(code){ const e = new Error(code); e.code = code; return e; }
+  // Our own error codes are strings (a browser DOMException has a NUMBER in e.code: ignored).
+  function _code(e){ return e && typeof e.code === 'string' ? e.code : ''; }
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   function withTimeout(p, ms){ return Promise.race([p, new Promise((_, rej) => setTimeout(() => { const e = new Error('connection timed out'); e.name = 'NetworkError'; rej(e); }, ms))]); }
 
@@ -592,39 +930,193 @@ const Printer = (() => {
   }
 
   /* ------------------------------------------------------------------
+     WebUSB (release 1.4): USB-cable receipt printers (printer class 7)
+     Never calls device.reset(): on macOS (Chromium 157 / Brave 1.99 regression) a reset
+     leaves the printer unusable until it is unplugged.
+     ------------------------------------------------------------------ */
+  function _hex4(n){ return (Number(n) || 0).toString(16).padStart(4, '0'); }
+  function _usbId(d){ return 'usb:' + _hex4(d.vendorId) + ':' + _hex4(d.productId); }
+  function _usbName(d){ return String(d.productName || d.manufacturerName || ('USB printer ' + _hex4(d.vendorId) + ':' + _hex4(d.productId))).trim(); }
+  // The interface + bulk OUT endpoint to print to: a printer-class interface first,
+  // then a vendor-specific one; never a protected class. -> {iface, alt, ep, cls} | null
+  function _pickUsbInterface(cfg){
+    let best = null, bestScore = -1;
+    ((cfg && cfg.interfaces) || []).forEach(itf => {
+      const alts = (itf.alternates && itf.alternates.length) ? itf.alternates : (itf.alternate ? [itf.alternate] : []);
+      alts.forEach(alt => {
+        const cls = Number(alt.interfaceClass);
+        if(USB_PROTECTED.includes(cls)) return;
+        const ep = (alt.endpoints || []).find(e => e.direction === 'out' && e.type === 'bulk');
+        if(!ep) return;
+        const score = (cls === USB_PRINTER_CLASS ? 20 : cls === 0xFF ? 10 : 1) + (Number(alt.alternateSetting) === 0 ? 1 : 0);
+        if(score > bestScore){ bestScore = score; best = {iface: itf.interfaceNumber, alt: Number(alt.alternateSetting) || 0, ep: ep.endpointNumber, cls, claimed: !!itf.claimed}; }
+      });
+    });
+    return best;
+  }
+  async function _openUsb(device){
+    conn.connecting = true; emit('status');
+    try{
+      if(!device.opened) await device.open();
+      if(!device.configuration){
+        const cv = (device.configurations && device.configurations[0] && device.configurations[0].configurationValue) || 1;
+        await device.selectConfiguration(cv);
+      }
+      const pick = _pickUsbInterface(device.configuration);
+      if(!pick){ try{ await device.close(); }catch(e){} throw fail('NO_USB_OUT'); }
+      if(!pick.claimed){
+        try{ await device.claimInterface(pick.iface); }
+        catch(e){ try{ await device.close(); }catch(x){} const err = fail('USB_BUSY'); err.cause = e; err.detail = String((e && e.message) || e); throw err; }
+      }
+      if(pick.alt){ try{ await device.selectAlternateInterface(pick.iface, pick.alt); }catch(e){} }
+      Object.assign(conn, {type: 'usb', usb: device, usbInterface: pick.iface, usbEndpoint: pick.ep, connected: true, name: _usbName(device),
+        device: null, characteristic: null, port: null});
+      lastError = ''; usbNeedsTap = false; reconnectError = null;
+      return true;
+    } finally { conn.connecting = false; emit('status'); }
+  }
+  function _usbRemembered(){ return !!(current.usb_vendor_id || current.usb_product_id); }
+  function _usbMatches(d){ return !!d && _usbRemembered() && d.vendorId === current.usb_vendor_id && d.productId === current.usb_product_id; }
+  function _pickRemembered(list){
+    const same = (list || []).filter(_usbMatches);
+    return same.find(d => current.usb_serial && d.serialNumber === current.usb_serial) || same[0] || null;
+  }
+  async function _rememberUsb(device){
+    await saveSettings({connection: 'usb', device_id: _usbId(device), device_name: _usbName(device),
+      usb_vendor_id: device.vendorId || 0, usb_product_id: device.productId || 0, usb_serial: device.serialNumber || ''});
+  }
+  // Opens the browser's USB chooser (must run from a tap). opts.showAll: list every USB device.
+  async function chooseUsb(opts){
+    opts = opts || {};
+    const s = support();
+    if(!s.usb){ const m = s.apple_mobile || s.safari || !s.secure ? supportText() : 'This browser can\'t connect to USB printers. Use Google Chrome on this computer.'; setError(m); throw Object.assign(new Error(m), {friendly: m, code: 'NOT_SUPPORTED'}); }
+    try{
+      const device = await _nav().usb.requestDevice({filters: opts.showAll ? [] : USB_FILTERS});
+      await _disconnectQuiet();
+      try{ await _openUsb(device); }
+      catch(e){ if(_code(e) === 'USB_BUSY') await _rememberUsb(device); throw e; }   // allowed: keep it, so it reconnects once free
+      await _rememberUsb(device);
+      return status();
+    }catch(e){
+      const m = friendly(e, 'usb'); setError(m);
+      throw Object.assign(e instanceof Error ? e : new Error(m), {friendly: m});
+    }
+  }
+  // Quiet reconnect to the remembered USB printer: getDevices() only lists printers this app
+  // was allowed before, so no chooser ever opens.
+  async function _reconnectUsb(){
+    if(conn.type === 'usb' && conn.usb && conn.usb.opened && conn.connected) return true;
+    const usb = _nav().usb;
+    if(!usb || typeof usb.getDevices !== 'function') return false;
+    let list = [];
+    try{ list = await usb.getDevices(); }catch(e){ return false; }
+    const dev = _pickRemembered(list);
+    if(!dev){ usbNeedsTap = _usbRemembered(); emit('status'); return false; }
+    try{ return await _openUsb(dev); }
+    catch(e){
+      reconnectError = e;
+      lastError = friendly(e, 'usb'); emit('status');
+      return false;
+    }
+  }
+  // A USB write error as our own error: unplugged / switched off -> code USB_LOST.
+  function _usbErr(e){
+    if(_code(e)) return e;
+    const name = e && e.name;
+    const err = new Error(String((e && e.message) || e || 'USB write failed'));
+    err.name = name || 'Error'; err.cause = e;
+    if(name === 'NotFoundError' || name === 'NetworkError' || name === 'InvalidStateError') err.code = 'USB_LOST';
+    return err;
+  }
+  async function _writeUsb(bytes){
+    const d = conn.usb, ep = conn.usbEndpoint;
+    if(!d || !d.opened) throw fail('NOT_CONNECTED');
+    const size = current.usb_chunk || 1024;
+    let off = 0, stalls = 0, empty = 0;
+    while(off < bytes.length){
+      const part = bytes.subarray ? bytes.subarray(off, off + size) : bytes.slice(off, off + size);
+      let res;
+      try{
+        res = await Promise.race([d.transferOut(ep, part), new Promise((_, rej) => setTimeout(() => rej(fail('USB_TIMEOUT')), USB_TIMEOUT_MS))]);
+      }catch(e){
+        const err = _usbErr(e);
+        if(err.code === 'USB_LOST'){ conn.connected = false; }
+        throw _withWritten(err, off);
+      }
+      if(res && res.status === 'stall'){
+        if(++stalls > 2) throw _withWritten(Object.assign(fail('USB_TIMEOUT'), {message: 'endpoint stalled'}), off);
+        try{ await d.clearHalt('out', ep); }catch(e){}
+        continue;
+      }
+      const n = res && typeof res.bytesWritten === 'number' ? res.bytesWritten : part.length;
+      if(n <= 0){ if(++empty > 3) throw _withWritten(fail('USB_TIMEOUT'), off); continue; }
+      off += n;
+    }
+  }
+  function _onUsbConnect(e){
+    const d = e && e.device;
+    if(current.connection !== 'usb' || !_usbMatches(d)) return;
+    if(conn.type === 'usb' && conn.connected && conn.usb && conn.usb.opened) return;
+    setTimeout(() => { _openUsb(d).catch(err => { reconnectError = err; lastError = friendly(err, 'usb'); emit('status'); }); }, USB_PLUG_DELAY_MS);
+  }
+  function _onUsbDisconnect(e){
+    const d = e && e.device;
+    if(conn.type === 'usb' && (!d || d === conn.usb)){ conn.connected = false; conn.usb = null; emit('status'); }
+  }
+
+  /* ------------------------------------------------------------------
      Connect / print
      ------------------------------------------------------------------ */
   async function _disconnectQuiet(){
     try{ if(conn.type === 'bluetooth' && conn.device && conn.device.gatt && conn.device.gatt.connected) conn.device.gatt.disconnect(); }catch(e){}
     try{ if(conn.type === 'serial' && conn.port && conn.port.writable) await conn.port.close(); }catch(e){}
-    Object.assign(conn, {type: null, connected: false, device: null, characteristic: null, port: null, name: ''});
+    try{
+      if(conn.type === 'usb' && conn.usb && conn.usb.opened){
+        try{ if(conn.usbInterface !== null && conn.usbInterface !== undefined) await conn.usb.releaseInterface(conn.usbInterface); }catch(e){}
+        await conn.usb.close();
+      }
+    }catch(e){}
+    Object.assign(conn, {type: null, connected: false, device: null, characteristic: null, port: null, name: '', usb: null, usbInterface: null, usbEndpoint: null});
   }
   // Reconnects to the remembered printer without asking (page load / before printing).
   // Returns true when connected. Never opens a chooser.
   async function reconnect(){
+    reconnectError = null;
+    if(current.connection === 'usb' && support().usb) return !!(await _reconnectUsb());
     if(current.connection === 'bluetooth' && support().bluetooth) return !!(await _reconnectBle());
     if(current.connection === 'serial' && support().serial) return !!(await _reconnectSerial());
     return false;
   }
   async function disconnect(){ await _disconnectQuiet(); emit('status'); }
-  // Forget the printer on this counter (back to the print screen).
+  // Forget the printer on this counter.
   async function forget(){
-    const dev = conn.device;
+    const dev = conn.device || conn.usb;
     await _disconnectQuiet();
     try{ if(dev && typeof dev.forget === 'function') await dev.forget(); }catch(e){}
-    await saveSettings({connection: 'dialog', device_id: '', device_name: ''});
+    await saveSettings({connection: 'dialog', device_id: '', device_name: '', usb_vendor_id: 0, usb_product_id: 0, usb_serial: ''});
+    usbNeedsTap = false; reconnectError = null;
     lastError = ''; emit('status');
   }
+  let listening = false;
   // Load settings and reconnect quietly. Call once when the counter starts.
   async function init(){
     await loadSettings();
-    if(typeof navigator !== 'undefined' && navigator.serial && typeof navigator.serial.addEventListener === 'function'){
-      try{ navigator.serial.addEventListener('disconnect', (e) => { if(conn.type === 'serial' && (!e || e.target === conn.port || e.port === conn.port)){ conn.connected = false; conn.port = null; emit('status'); } }); }catch(e){}
+    const n = _nav();
+    if(!listening){
+      listening = true;
+      if(n.serial && typeof n.serial.addEventListener === 'function'){
+        try{ n.serial.addEventListener('disconnect', (e) => { if(conn.type === 'serial' && (!e || e.target === conn.port || e.port === conn.port)){ conn.connected = false; conn.port = null; emit('status'); } }); }catch(e){}
+      }
+      if(n.usb && typeof n.usb.addEventListener === 'function'){
+        try{ n.usb.addEventListener('connect', _onUsbConnect); n.usb.addEventListener('disconnect', _onUsbDisconnect); }catch(e){}
+      }
     }
     reconnect().catch(() => false);
     return status();
   }
-  function directMode(){ return (current.connection === 'bluetooth' && support().bluetooth) || (current.connection === 'serial' && support().serial); }
+  function directMode(){
+    return (current.connection === 'usb' && support().usb) || (current.connection === 'bluetooth' && support().bluetooth) || (current.connection === 'serial' && support().serial);
+  }
 
   // Errors from a print job carry how many bytes reached the printer before it stopped
   // (e.written; 0 = nothing was sent, so nothing came out of the printer).
@@ -634,13 +1126,16 @@ const Printer = (() => {
     return e;
   }
   let queue = Promise.resolve();
-  // Send raw bytes (one job at a time). Reconnects quietly first.
+  // Send raw bytes. One job at a time (receipt, ticket, report never mix on the paper);
+  // each job gets its own result / error. Reconnects quietly first.
   function sendBytes(bytes){
+    pending++; emit('status');
     const job = queue.then(async () => {
       busy = true; emit('status');
       try{
-        if(!conn.connected && !(await reconnect())) throw fail('NOT_CONNECTED');
-        if(conn.type === 'bluetooth') await _writeBle(bytes);
+        if(!conn.connected && !(await reconnect())) throw (_code(reconnectError) ? reconnectError : fail('NOT_CONNECTED'));
+        if(conn.type === 'usb') await _writeUsb(bytes);
+        else if(conn.type === 'bluetooth') await _writeBle(bytes);
         else if(conn.type === 'serial') await _writeSerial(bytes);
         else throw fail('NOT_CONNECTED');
         lastPrintedAt = new Date().toISOString(); lastError = '';
@@ -650,7 +1145,7 @@ const Printer = (() => {
         e = _withWritten(e, e && e.written);
         e.partial = e.written > 0;
         throw e;
-      } finally { busy = false; emit('status'); }
+      } finally { busy = false; pending = Math.max(0, pending - 1); emit('status'); }
     });
     queue = job.catch(() => null);
     return job;
@@ -664,35 +1159,73 @@ const Printer = (() => {
   function _drawerSent(bytes, written){
     return written >= DRAWER_END && bytes[2] === ESC && bytes[3] === 0x70;
   }
-  // Print a receipt. Same arguments as receiptHtml, plus the extra opts of receiptBytes, and:
-  //   auto: true      -> printing by itself after a sale: never opens the print screen on failure
-  //   fallback: false -> never open the print screen on failure (same as auto)
-  // Returns {ok, method: 'bluetooth'|'serial'|'dialog', partial?, error?, drawer_kick_sent}.
-  //   Print screen chosen (or direct printing impossible here) -> the print screen, ok true
-  //     (for auto prints too: that is the counter's chosen way to print).
-  //   Direct printing fails BEFORE any byte reached the printer -> last_error set; the print
-  //     screen opens (unless auto / fallback false): {ok:false, method:'dialog', error}.
-  //   Fails PART-WAY (some paper came out) -> never the print screen by itself (it would
-  //     print a second copy): {ok:false, partial:true, method, error}. The counter offers
-  //     "Print again" / "Use print screen" (printReceipt(..., {fallback:false}) / receiptHtml).
-  //   drawer_kick_sent: the cash drawer command reached the printer (the drawer opened).
-  async function printReceipt(sale, items, payments, opts){
+  // One print job for printReceipt / printTicket / printShiftReport.
+  //   makeBytes(): the ESC/POS bytes; openDialog(): the print screen (used ONLY when
+  //   opts.fallback === true). Answer: {ok, method, partial, error, code, message, written}
+  //   - no printer set up / not reachable: {ok:false, error:'NOT_CONNECTED', code:'NOT_CONNECTED', message}
+  //   - failed before any byte for another reason: error = message (plain words), code = e.g. USB_BUSY
+  //   - stopped part-way: {ok:false, partial:true, code:'PARTIAL', error: message} (never the print screen: it would print twice)
+  async function _job(makeBytes, openDialog, opts){
     opts = opts || {};
-    if(!directMode()){ _dialog(sale, items, payments, opts); return {ok: true, method: 'dialog', drawer_kick_sent: false}; }
-    const bytes = receiptBytes(sale, items, payments, opts);
+    const allowDialog = opts.fallback === true && typeof openDialog === 'function';
+    if(!directMode()){
+      const m = friendly(fail('NOT_CONNECTED'), current.connection === 'dialog' ? '' : current.connection);
+      if(allowDialog){ openDialog(); return {ok: true, partial: false, method: 'dialog', written: 0, bytes: null}; }
+      return {ok: false, partial: false, method: 'none', error: 'NOT_CONNECTED', code: 'NOT_CONNECTED', message: current.connection === 'dialog' || directSupported() ? m : supportText(), written: 0, bytes: null};
+    }
+    const bytes = makeBytes();
     try{
       await sendBytes(bytes);
-      return {ok: true, method: conn.type, drawer_kick_sent: _drawerSent(bytes, bytes.length)};
+      return {ok: true, partial: false, method: conn.type, written: bytes.length, bytes};
     }catch(e){
       const written = (e && e.written) || 0;
       const partial = written > 0;
-      const m = partial ? 'Printing stopped part-way. ' + friendly(e, current.connection) : friendly(e, current.connection);
+      const code = partial ? 'PARTIAL' : (_code(e) || 'PRINT_FAILED');
+      const m = (partial ? 'Printing stopped part-way. ' : '') + friendly(e, current.connection);
       setError(m);
-      const drawer = _drawerSent(bytes, written);
-      if(partial) return {ok: false, partial: true, method: current.connection, error: m, drawer_kick_sent: drawer};
-      if(opts.fallback !== false && !opts.auto){ _dialog(sale, items, payments, opts); return {ok: false, partial: false, method: 'dialog', error: m, drawer_kick_sent: false}; }
-      return {ok: false, partial: false, method: current.connection, error: m, drawer_kick_sent: false};
+      const base = {ok: false, partial, code, message: m, written, bytes};
+      if(partial) return Object.assign(base, {method: current.connection, error: m});
+      const error = code === 'NOT_CONNECTED' ? 'NOT_CONNECTED' : m;
+      if(allowDialog){ openDialog(); return Object.assign(base, {method: 'dialog', error}); }
+      return Object.assign(base, {method: current.connection, error});
     }
+  }
+  function directSupported(){ const s = support(); return s.usb || s.bluetooth || s.serial; }
+  // Print a receipt. Same arguments as receiptHtml, plus the extra opts of receiptBytes, and:
+  //   fallback: true -> only then may the print screen open (no printer, or it failed before
+  //                     any paper came out). Nothing else ever opens it (release 1.4).
+  //   auto: kept for older callers (same as the default now).
+  // Returns {ok, method: 'usb'|'bluetooth'|'serial'|'dialog'|'none', partial, error, code, message, drawer_kick_sent}.
+  //   No printer: {ok:false, method:'none', error:'NOT_CONNECTED', message}, at once.
+  //   Fails PART-WAY: {ok:false, partial:true, ...}; the counter offers "Print again" /
+  //     "Use print screen" (printReceipt(..., {fallback:true, openDrawer:false})).
+  //   drawer_kick_sent: the cash drawer command reached the printer (the drawer opened).
+  async function printReceipt(sale, items, payments, opts){
+    opts = opts || {};
+    const res = await _job(() => receiptBytes(sale, items, payments, opts), () => _dialog(sale, items, payments, opts), opts);
+    res.drawer_kick_sent = !!res.bytes && _drawerSent(res.bytes, res.written);
+    delete res.bytes;
+    return res;
+  }
+  // Barista order ticket (no prices). order + opts: see ticketBytes. opts.fallback === true
+  // allows the print screen (opts.html, else a plain text page). Same answers as printReceipt.
+  async function printTicket(order, opts){
+    opts = opts || {};
+    const res = await _job(() => ticketBytes(order, opts), () => _openHtml(opts.html, () => textHtml('Order ' + ((order && (order.order_number || order.transaction_number)) || ''), ticketBytes(order, opts), current.paper_width)), opts);
+    delete res.bytes;
+    return res;
+  }
+  // X / Z shift report. report + opts: see shiftReportBytes. opts.fallback === true allows the
+  // print screen (opts.html, e.g. the counter's shiftReportHtml, else a plain text page).
+  async function printShiftReport(report, opts){
+    opts = opts || {};
+    const res = await _job(() => shiftReportBytes(report, opts), () => _openHtml(opts.html, () => textHtml(_shiftInput(report, opts).isX ? 'X report' : 'Z report', shiftReportBytes(report, opts), current.paper_width)), opts);
+    delete res.bytes;
+    return res;
+  }
+  function _openHtml(html, make){
+    if(typeof openPrintWindow !== 'function') return null;
+    return openPrintWindow(html || make(), true);
   }
   // A short test slip. opts.openDrawer: also kick the drawer (the counter makes that
   // manager-only and writes the audit entry). Returns
@@ -702,7 +1235,7 @@ const Printer = (() => {
   async function printTest(opts){
     opts = opts || {};
     const base = {drawer_requested: !!opts.openDrawer, drawer_kick_sent: false, printer_name: state_device_name(), at: new Date().toISOString()};
-    if(!directMode()) return Object.assign(base, {ok: false, partial: false, method: current.connection, error: current.connection === 'dialog' ? 'Choose a Bluetooth printer or printer port first.' : supportText()});
+    if(!directMode()) return Object.assign(base, {ok: false, partial: false, method: current.connection, code: 'NOT_CONNECTED', error: current.connection === 'dialog' ? 'Choose a Bluetooth printer, a USB printer or a printer port first.' : supportText()});
     const bytes = testBytes(opts);
     try{
       await sendBytes(bytes);
@@ -710,7 +1243,7 @@ const Printer = (() => {
     }catch(e){
       const written = (e && e.written) || 0;
       const m = (written > 0 ? 'Printing stopped part-way. ' : '') + friendly(e, current.connection); setError(m);
-      return Object.assign(base, {ok: false, partial: written > 0, method: current.connection, error: m, drawer_kick_sent: !!opts.openDrawer && _drawerSent(bytes, written)});
+      return Object.assign(base, {ok: false, partial: written > 0, method: current.connection, code: written > 0 ? 'PARTIAL' : (_code(e) || 'PRINT_FAILED'), error: m, drawer_kick_sent: !!opts.openDrawer && _drawerSent(bytes, written)});
     }
   }
 
@@ -718,11 +1251,12 @@ const Printer = (() => {
     // setup
     init, loadSettings, settings, saveSettings, DEFAULTS: Object.freeze(Object.assign({}, DEFAULTS)),
     // connection
-    choose, chooseSerial, reconnect, disconnect, forget, support, supportText, status, on, off,
-    // printing
-    printReceipt, printTest, sendBytes, receiptBytes, testBytes,
+    choose, chooseSerial, chooseUsb, reconnect, disconnect, forget, support, supportText, helpSteps, status, on, off,
+    isDirect: directMode, browserName,
+    // printing (one queue)
+    printReceipt, printTicket, printShiftReport, printTest, sendBytes, receiptBytes, ticketBytes, shiftReportBytes, testBytes, textHtml,
     // building blocks (pure; tests and other tickets)
     EscPos, describe, chunk, toAscii, money, wrap, leftRight, CHARS,
-    BLE_SERVICES, BLE_FILTER_SERVICES, BLE_NAME_PREFIXES, cleanSettings,
+    BLE_SERVICES, BLE_FILTER_SERVICES, BLE_NAME_PREFIXES, USB_FILTERS, USB_VENDORS, cleanSettings,
   };
 })();
