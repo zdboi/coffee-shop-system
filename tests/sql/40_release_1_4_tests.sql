@@ -447,3 +447,45 @@ select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticate
 select test.chk((select (x->>'standard_cost') is not null from jsonb_array_elements(public.bo_bootstrap()->'ingredients') x where x->>'id' = :'sp_i'), 'R2 M1: owner gets standard_cost in bo_bootstrap rows');
 reset role;
 select test.chk((select not public from storage.buckets where id = 'expense-photos'), 'R2 L3: expense-photos stays private (limits set where Supabase has the columns)');
+
+-- ============================ SW. swap = whole line (lead decision 2026-11-03) ============================
+-- 16oz (+60 mL milk extra) + non-dairy swap: all 240 mL dairy become 0.24 L non-dairy
+select test.chk(public._recipe_stock_lines(:'biz', '33333333-0000-0000-0000-000000000001', 1,
+     '[{"group_id":"g-size","option_id":"o-16"},{"group_id":"lib_b1000000-0000-0000-0000-000000000003","option_id":"oat"}]'::jsonb)
+   = '[{"ingredient_id":"22222222-0000-0000-0000-000000000001","quantity":18},{"ingredient_id":"a1000000-0000-0000-0000-000000000013","quantity":0.24}]'::jsonb,
+   'SW: 16oz + swap -> no dairy at all, 0.24 L non-dairy',
+   public._recipe_stock_lines(:'biz', '33333333-0000-0000-0000-000000000001', 1, '[{"group_id":"g-size","option_id":"o-16"},{"group_id":"lib_b1000000-0000-0000-0000-000000000003","option_id":"oat"}]'::jsonb)::text);
+-- option order doesn't matter (swap applied after all extras)
+select test.chk(public._recipe_stock_lines(:'biz', '33333333-0000-0000-0000-000000000001', 3,
+     '[{"group":"Milk","label":"Non-dairy milk"},{"group":"Size","label":"16oz"}]'::jsonb)
+   = '[{"ingredient_id":"22222222-0000-0000-0000-000000000001","quantity":54},{"ingredient_id":"a1000000-0000-0000-0000-000000000013","quantity":0.72}]'::jsonb,
+   'SW: swap chosen first still converts the size''s extra milk (x3)');
+-- a second swap of the same "from": only the first moves stock
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select public.apply_changes(jsonb_build_array(
+  jsonb_build_object('op','upsert','table','ingredients','row', jsonb_build_object('id','a1000000-0000-0000-0000-000000000014','name','Soy milk','base_unit','ml')),
+  jsonb_build_object('op','upsert','table','option_groups','row', jsonb_build_object('id','b1000000-0000-0000-0000-000000000004','name','Soy','sort_order',4,
+     'applies_to', '{"subcategories":["Iced"]}'::jsonb,
+     'options', '[{"id":"soy","label":"Soy milk","kind":"SWAP","price_delta":20,"swap_from_ingredient_id":"22222222-0000-0000-0000-000000000002","swap_to_ingredient_id":"a1000000-0000-0000-0000-000000000014"}]'::jsonb))));
+reset role;
+select test.chk(public._recipe_stock_lines(:'biz', '33333333-0000-0000-0000-000000000001', 1,
+     '[{"group":"Soy","label":"Soy milk"},{"group":"Milk","label":"Non-dairy milk"}]'::jsonb)
+   = '[{"ingredient_id":"22222222-0000-0000-0000-000000000001","quantity":18},{"ingredient_id":"a1000000-0000-0000-0000-000000000014","quantity":180}]'::jsonb,
+   'SW: two swaps of the same "from": only the first (soy) moves stock');
+select test.chk((select o->>'swap_rule' from recipes r, jsonb_array_elements(r.modifier_groups) g, jsonb_array_elements(g->'options') o
+                 where r.id = '33333333-0000-0000-0000-000000000001' and o->>'id' = 'oat') = 'LINE_TOTAL', 'SW: swap options carry swap_rule LINE_TOTAL');
+-- waste follows the rule; a QR order stores the swap ids for the counter
+select test.stock('a1000000-0000-0000-0000-000000000013') as nd0 \gset
+select test.stock('22222222-0000-0000-0000-000000000002') as dm0 \gset
+select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
+select test.op('waste', jsonb_build_object('id','d1000000-0000-0000-0000-0000000000b1','reason','SPILLAGE','staff_id','66666666-0000-0000-0000-000000000001',
+   'items','[{"recipe_id":"33333333-0000-0000-0000-000000000001","quantity":1,"modifiers":[{"group":"Size","label":"16oz"},{"group":"Hot / Iced","label":"Hot"},{"group":"Milk","label":"Non-dairy milk"}]}]'::jsonb))->>'status' as sw1 \gset
+reset role;
+select test.chk(:'sw1' = 'ok' and test.stock('22222222-0000-0000-0000-000000000002') = :'dm0'::numeric
+   and test.stock('a1000000-0000-0000-0000-000000000013') = :'nd0'::numeric - 0.24, 'SW: waste of a 16oz non-dairy latte takes 0.24 L non-dairy, no dairy', :'sw1');
+select test.login('00000000-0000-0000-0000-0000000000c1'); set role authenticated;
+select public.qr_place_order(:'tok', '[{"recipe_id":"33333333-0000-0000-0000-000000000001","quantity":1,"modifiers":[{"group_id":"g-size","option_id":"o-16"},{"group_id":"lib_b1000000-0000-0000-0000-000000000001","option_id":"hot"},{"group_id":"lib_b1000000-0000-0000-0000-000000000003","option_id":"oat"}]}]')->'order'->>'id' as swq \gset
+reset role;
+select test.chk((select m from qr_orders q, jsonb_array_elements(q.items->0->'modifiers') m where q.id = :'swq' and m->>'kind' = 'SWAP')
+   @> '{"swap_from_ingredient_id":"22222222-0000-0000-0000-000000000002","swap_to_ingredient_id":"a1000000-0000-0000-0000-000000000013","swap_rule":"LINE_TOTAL"}'::jsonb,
+   'SW: stored QR order keeps swap from / to / rule for the counter');

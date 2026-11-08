@@ -89,16 +89,37 @@ eq('own option extras typed in g (caramel pump 10 g = 0.008 L) + shot; napkin (o
 eq('...the napkin is kept with {raw:true} (server _recipe_stock_lines)', r(`inventoryLinesForSaleLine('latte', 1, [{group_id:'own1', option_id:'nap'}], {raw:true})`).some(l => l.ingredient_id === 'napkin'), true);
 eq('an option no longer on the menu takes nothing', lines(`inventoryLinesForSaleLine('latte', 1, [{group:'Gone', label:'Gone'}])`), ['beans:18', 'cara:0.02', 'milk:200', 'sugar:10']);
 eq('1.3 snapshot (ingredient_id + delta) is used as it was sold (not the menu now)', lines(`inventoryLinesForSaleLine('latte', 1, [{group:'Hot or iced', label:'Iced', ingredient_id:'cup', ingredient_qty_delta:1}])`), ['beans:18', 'cara:0.02', 'cup:1', 'milk:200', 'sugar:10']);
-eq('1.4 snapshot (extras/removes) wins over the menu', lines(`inventoryLinesForSaleLine('latte', 1, [{group:'Milk', label:'Oat milk', extras:[{ingredient_id:'oat', quantity:0.15}], removes:[{ingredient_id:'milk', quantity:150}]}])`), ['beans:18', 'cara:0.02', 'milk:50', 'oat:0.15', 'sugar:10']);
+eq('snapshot with extras/removes but no swap_rule (older rule) is used as stored', lines(`inventoryLinesForSaleLine('latte', 1, [{group:'Milk', label:'Oat milk', extras:[{ingredient_id:'oat', quantity:0.15}], removes:[{ingredient_id:'milk', quantity:150}]}])`), ['beans:18', 'cara:0.02', 'milk:50', 'oat:0.15', 'sugar:10']);
 eq('kind / label kept for notes', r(`inventoryLinesForSaleLine('latte', 1, [{group:'Hot or iced', label:'Iced'}]).filter(l => l.ingredient_id === 'cup').map(l => l.kind + ' ' + l.label)`), ['modifier Iced']);
 eq('merged ingredient: a recipe line on Arla (L) goes to Fresh milk (mL) x1000', (r(`state.recipeIngredients.push({recipe_id:'ens-r', ingredient_id:'arla', quantity:0.05})`), lines(`inventoryLinesForSaleLine('ens-r', 1, [])`)), ['ens:1', 'milk:50']);
 r(`state.recipeIngredients.pop()`);
 eq('mergeTarget(arla) = milk x1000', r(`(function(){ const t = mergeTarget('arla'); return [t.id, t.factor]; })()`), ['milk', 1000]);
 
 /* ---------- modifiers, validator, price ---------- */
-eq('modifierFromOption(swap): 1.3 fields empty, extras/removes snapshot', r(`modifierFromOption(LAT.modifier_groups[1], LAT.modifier_groups[1].options[0])`),
+eq('modifierFromOption(swap): 1.3 fields empty, extras/removes for display, swap_* + swap_rule LINE_TOTAL', r(`modifierFromOption(LAT.modifier_groups[1], LAT.modifier_groups[1].options[0])`),
   {group:'Milk', label:'Oat milk', price_delta:25, group_id:'lib_g2', option_id:'oat', kind:'SWAP', ingredient_id:null, ingredient_qty_delta:0,
-   extras:[{ingredient_id:'oat', quantity:0.2}], removes:[{ingredient_id:'milk', quantity:200}]});
+   extras:[{ingredient_id:'oat', quantity:0.2}], removes:[{ingredient_id:'milk', quantity:200}],
+   swap_from_ingredient_id:'milk', swap_to_ingredient_id:'oat', swap_rule:'LINE_TOTAL'});
+/* ---------- the LINE_TOTAL swap rule (010, contract A9 "stock rule") ---------- */
+r(`state.ingredients.push({id:'soy', name:'Soy milk', base_unit:'ml', category_id:'c1'});
+   LAT.modifier_groups.push({id:'lib_size', library_group_id:'size', name:'Size', required:false, multi_select:false, options:[
+     {id:'16', label:'16 oz', price_delta:20, kind:'EXTRA', ingredient_id:'milk', ingredient_qty_delta:60, extras:[{ingredient_id:'milk', quantity:60}], removes:[]}]},
+     {id:'lib_alt', library_group_id:'alt', name:'Alt', required:false, multi_select:true, options:[
+     {id:'soy', label:'Soy', price_delta:20, kind:'SWAP', ingredient_id:null, ingredient_qty_delta:0, extras:[{ingredient_id:'soy', quantity:200}], removes:[{ingredient_id:'milk', quantity:200}], swap_from_ingredient_id:'milk', swap_to_ingredient_id:'soy', swap_rule:'LINE_TOTAL'},
+     {id:'c2m', label:'Caramel to milk', price_delta:0, kind:'SWAP', extras:[], removes:[], swap_from_ingredient_id:'cara', swap_to_ingredient_id:'milk', swap_rule:'LINE_TOTAL'},
+     {id:'m2c', label:'Milk to cups', price_delta:0, kind:'SWAP', extras:[], removes:[], swap_from_ingredient_id:'milk', swap_to_ingredient_id:'cup', swap_rule:'LINE_TOTAL'}]});`);
+eq('16 oz + soy: the WHOLE milk (200 + 60) moves to soy; the swap\'s own extras/removes are not used', lines(`inventoryLinesForSaleLine('latte', 1, [{group_id:'lib_size', option_id:'16'}, {group_id:'lib_alt', option_id:'soy'}])`), ['beans:18', 'cara:0.02', 'soy:260', 'sugar:10']);
+eq('order of size and swap does not matter (swaps run after all extras)', lines(`inventoryLinesForSaleLine('latte', 2, [{group_id:'lib_alt', option_id:'soy'}, {group_id:'lib_size', option_id:'16'}])`), ['beans:36', 'cara:0.04', 'soy:520', 'sugar:20']);
+eq('two swaps of one "from": only the first chosen moves (oat then soy)', lines(`inventoryLinesForSaleLine('latte', 1, [{group:'Milk', label:'Oat milk'}, {group_id:'lib_alt', option_id:'soy'}, {group_id:'lib_size', option_id:'16'}])`), ['beans:18', 'cara:0.02', 'oat:0.26', 'sugar:10']);
+eq('...soy then oat: soy wins', lines(`inventoryLinesForSaleLine('latte', 1, [{group_id:'lib_alt', option_id:'soy'}, {group:'Milk', label:'Oat milk'}])`), ['beans:18', 'cara:0.02', 'soy:200', 'sugar:10']);
+eq('swap L -> mL through "from"\'s weighs: 0.02 L caramel (1.25) = 20 mL added to milk', lines(`inventoryLinesForSaleLine('latte', 1, [{group_id:'lib_alt', option_id:'c2m'}])`), ['beans:18', 'milk:220', 'sugar:10']);
+eq('a swap that can\'t convert (mL -> pcs) moves nothing', lines(`inventoryLinesForSaleLine('latte', 1, [{group_id:'lib_alt', option_id:'m2c'}])`), ['beans:18', 'cara:0.02', 'milk:200', 'sugar:10']);
+eq('...and still counts as the swap of that "from" (a later soy moves nothing, like the server)', lines(`inventoryLinesForSaleLine('latte', 1, [{group_id:'lib_alt', option_id:'m2c'}, {group_id:'lib_alt', option_id:'soy'}])`), ['beans:18', 'cara:0.02', 'milk:200', 'sugar:10']);
+eq('cart snapshot (modifierFromOption) gives the same stock as the bare choice', lines(`inventoryLinesForSaleLine('latte', 1, modifiersFromSelections(LAT, [{group_id:'lib_size', option_id:'16'}, {group_id:'lib_alt', option_id:'soy'}]))`), ['beans:18', 'cara:0.02', 'soy:260', 'sugar:10']);
+eq('refund of a sale item stored with swap_rule (recipe changed since? same rule on the recipe now)', lines(`inventoryLinesForSaleLine('latte', 1, [{group:'Size', label:'16 oz', kind:'EXTRA', extras:[{ingredient_id:'milk', quantity:60}], removes:[]}, {group:'Alt', label:'Soy', kind:'SWAP', extras:[], removes:[], swap_from_ingredient_id:'milk', swap_to_ingredient_id:'soy', swap_rule:'LINE_TOTAL'}])`), ['beans:18', 'cara:0.02', 'soy:260', 'sugar:10']);
+eq('stock check before payment uses the rule (soy short, fresh milk not needed)', r(`cartStockProblems([{recipe_id:'latte', name:'Latte', quantity:1, modifiers:[{group_id:'lib_size', option_id:'16'}, {group_id:'lib_alt', option_id:'soy'}]}], {beans:100, cara:1, sugar:100, soy:250, milk:0}).map(p => p.short_ingredients.map(x => x.ingredient_id + ':' + x.needed))`), [['soy:260']]);
+eq('_unitRound like Postgres round(x, 6): 16.3636365 -> 16.363637, -0.0000005 -> -0.000001, 0.1+0.2 -> 0.3', r(`[_unitRound(32.727273 * 0.5), _unitRound(-0.0000005), _unitRound(0.1 + 0.2)]`), [16.363637, -0.000001, 0.3]);
+r(`state.ingredients.pop(); LAT.modifier_groups.splice(3, 2);`);
 eq('modifierFromOption(old negative): removes sugar 5, 1.3 delta -5 kept', r(`(function(){ const m = modifierFromOption(LAT.modifier_groups[2], LAT.modifier_groups[2].options[1]); return [m.kind, m.ingredient_qty_delta, m.extras, m.removes]; })()`),
   ['EXTRA', -5, [], [{ingredient_id:'sugar', quantity:5}]]);
 eq('modifiersFromSelections + menuUnitPrice (140 + 10 iced + 25 oat)', r(`menuUnitPrice(LAT, modifiersFromSelections(LAT, [{group_id:'lib_g1', option_id:'iced'}, {group_id:'lib_g2', option_id:'oat'}]))`), 175);

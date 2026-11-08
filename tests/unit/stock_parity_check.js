@@ -65,14 +65,14 @@ const id = {
   cat: U(), catExp: U(),
   milk: U(), oat: U(), beans: U(), caramel: U(), cup: U(), lid: U(), sugar: U(), choco: U(), napkin: U(),
   latte: U(), mocha: U(), amer: U(), caraLatte: U(), cookie: U(), sauceRec: U(), tea: U(),
-  gHotIced: U(), gMilk: U(), gShot: U(), gPump: U(), gTake: U(),
+  gHotIced: U(), gMilk: U(), gShot: U(), gPump: U(), gTake: U(), gSize: U(), gAlt: U(), soy: U(),
 };
 const ingRows = [
   [id.milk, 'Fresh milk', 'ml', false, null, id.cat], [id.oat, 'Oat milk', 'L', false, null, id.cat],
   [id.beans, 'Beans', 'kg', false, null, id.cat], [id.caramel, 'Caramel sauce', 'L', true, 1.25, id.cat],
   [id.cup, 'Iced cup', 'pcs', false, null, id.cat], [id.lid, 'Lid', 'pcs', false, null, id.cat],
   [id.sugar, 'Sugar', 'g', false, null, id.cat], [id.choco, 'Chocolate sauce', 'ml', true, 1.1, id.cat],
-  [id.napkin, 'Napkins', 'pcs', false, null, id.catExp],
+  [id.napkin, 'Napkins', 'pcs', false, null, id.catExp], [id.soy, 'Soy milk', 'ml', false, null, id.cat],
 ];
 let setup = 'begin;\n';
 setup += `insert into public.categories(id, business_id, name, kind) values (${L(id.cat)}, ${L(biz)}, 'Parity stock', 'STOCK'), (${L(id.catExp)}, ${L(biz)}, 'Parity supplies', 'EXPENSE');\n`;
@@ -125,6 +125,16 @@ const lib = [
     {id: 'sug', label: 'Sugar packet', price_delta: 0, kind: 'EXTRA', extras: [{ingredient_id: id.sugar, quantity: 5}, {ingredient_id: id.napkin, quantity: 2}]}]],
   [id.gTake, 'Take-away', false, false, 4, {recipe_types: [], subcategories: []}, [
     {id: 'bag', label: 'Paper bag', price_delta: 5, kind: 'EXTRA', extras: [{ingredient_id: id.cup, quantity: 1}]}]],
+  // 010 LINE_TOTAL swap rule: a size's extra milk is swapped too; two swaps of one "from" (first wins);
+  // conversions through "from"'s weighs (caramel L -> sugar g) and "to"'s weighs (beans kg -> choco mL)
+  [id.gSize, 'Size', false, false, 5, {recipe_types: ['DRINKS'], subcategories: []}, [
+    {id: '12', label: '12 oz', price_delta: 0, kind: 'PLAIN'},
+    {id: '16', label: '16 oz', price_delta: 20, kind: 'EXTRA', extras: [{ingredient_id: id.milk, quantity: 60}, {ingredient_id: id.beans, quantity: 0.009}]}]],
+  [id.gAlt, 'Alt milk', false, true, 6, {recipe_types: ['DRINKS'], subcategories: []}, [
+    {id: 'soy', label: 'Soy milk', price_delta: 20, kind: 'SWAP', swap_from_ingredient_id: id.milk, swap_to_ingredient_id: id.soy},
+    {id: 'oat2', label: 'Oat (alt)', price_delta: 25, kind: 'SWAP', swap_from_ingredient_id: id.milk, swap_to_ingredient_id: id.oat},
+    {id: 'c2s', label: 'Sauce to sugar', price_delta: 0, kind: 'SWAP', swap_from_ingredient_id: id.caramel, swap_to_ingredient_id: id.sugar},
+    {id: 'b2c', label: 'Beans to choco', price_delta: 0, kind: 'SWAP', swap_from_ingredient_id: id.beans, swap_to_ingredient_id: id.choco}]],
 ];
 lib.forEach(([gid, n, req, multi, so, applies, options]) => {
   setup += `insert into public.option_groups(id, business_id, name, required, multi_select, sort_order, applies_to, options) values (${L(gid)}, ${L(biz)}, ${L(n)}, ${req}, ${multi}, ${so}, ${J(applies)}, ${J(options)});\n`;
@@ -143,7 +153,7 @@ r(`state.ingredients = __st.ingredients; state.categories = __st.categories; sta
 /* ---------- 3. the built options are what the contract says ---------- */
 const recOf = (rid) => st.recipes.find(x => x.id === rid);
 const gids = (rid) => (recOf(rid).modifier_groups || []).map(g => g.id);
-ok(JSON.stringify(gids(id.latte)) === JSON.stringify(['lib_' + id.gHotIced, 'lib_' + id.gMilk, 'lib_' + id.gShot, 'sweet', 'top']), 'latte: library groups first (library order), then own groups', JSON.stringify(gids(id.latte)));
+ok(JSON.stringify(gids(id.latte)) === JSON.stringify(['lib_' + id.gHotIced, 'lib_' + id.gMilk, 'lib_' + id.gShot, 'lib_' + id.gSize, 'lib_' + id.gAlt, 'sweet', 'top']), 'latte: library groups first (library order), then own groups', JSON.stringify(gids(id.latte)));
 ok(!gids(id.amer).includes('lib_' + id.gShot), 'americano: unticked add-ons left out');
 ok(!gids(id.amer).includes('lib_' + id.gMilk), 'americano: no milk -> the swap group (only swaps) is left out');
 ok(JSON.stringify(gids(id.cookie)) === JSON.stringify(['lib_' + id.gTake]), 'cookie: only the ticked-on take-away group', JSON.stringify(gids(id.cookie)));
@@ -166,9 +176,18 @@ for(let c = 0; c < N; c++){
     chosen.forEach(o => mods.push(rnd() < 0.5 ? {group_id: g.id, option_id: o.id} : {group: g.name, label: o.label}));
   });
   if(rnd() < 0.05) mods.push({group: 'Gone', label: 'Not on the menu'});
+  for(let i = mods.length - 1; i > 0; i--){ const j = Math.floor(rnd() * (i + 1)); const t = mods[i]; mods[i] = mods[j]; mods[j] = t; }   // chosen order matters for swaps
   const qty = pick([1, 1, 1, 2, 3, 0.5, 1.5, 7]);
   cases.push({rid, mods, qty});
 }
+// fixed examples (contract A9 stock rule): 16 oz latte + soy -> no fresh milk, 260 mL soy;
+// soy then oat (same "from") -> only soy moves; oat then soy -> only oat moves
+const g = (gid, oid) => ({group_id: 'lib_' + gid, option_id: oid});
+const FIX = cases.length;
+cases.push({rid: id.latte, qty: 1, mods: [g(id.gHotIced, 'hot'), g(id.gSize, '16'), g(id.gAlt, 'soy')]});
+cases.push({rid: id.latte, qty: 2, mods: [g(id.gHotIced, 'hot'), g(id.gAlt, 'soy'), g(id.gAlt, 'oat2')]});
+cases.push({rid: id.latte, qty: 1, mods: [g(id.gAlt, 'oat2'), g(id.gAlt, 'soy'), g(id.gSize, '16')]});
+cases.push({rid: id.caraLatte, qty: 1, mods: [g(id.gAlt, 'c2s'), g(id.gAlt, 'b2c'), g(id.gShot, 'shot')]});
 let q2 = setup + 'select json_agg(x order by i) from (values ' +
   cases.map((c, i) => `(${i}, public._recipe_stock_lines(${L(biz)}, ${L(c.rid)}, ${c.qty}, ${J(c.mods)}))`).join(',\n') + ') x(i, lines);\nrollback;\n';
 const server = JSON.parse(psql(q2).trim()).map(x => x.lines);
@@ -185,6 +204,14 @@ cases.forEach((c, i) => {
   const jsClean = r(`inventoryLinesForSaleLine(__c.rid, __c.qty, __c.mods)`);
   if(!sameMap(asMap(jsClean), svClean)){ badClean++; if(!firstClean) firstClean = JSON.stringify({c, jsClean, server: server[i]}); }
 });
+{
+  const m = (i) => asMap(server[FIX + i]);
+  const a = m(0), b = m(1), c = m(2), d = m(3);
+  ok(!a[id.milk] && Math.abs(a[id.soy] - 260) < 1e-9 && Math.abs(a[id.beans] - 0.027) < 1e-9, 'server: 16 oz latte + soy = 0 fresh milk, 260 mL soy', JSON.stringify(a));
+  ok(!b[id.milk] && Math.abs(b[id.soy] - 400) < 1e-9 && !b[id.oat], 'server: soy then oat (same from) -> only soy moves', JSON.stringify(b));
+  ok(!c[id.milk] && !c[id.soy] && Math.abs(c[id.oat] - 0.26) < 1e-9, 'server: oat then soy -> only oat moves (incl. the 16 oz extra)', JSON.stringify(c));
+  ok(!d[id.caramel] && !d[id.beans] && d[id.sugar] > 0 && d[id.choco] > 0, 'server: caramel L -> sugar g (from weighs), beans kg -> choco mL (to weighs, incl. extra shot)', JSON.stringify(d));
+}
 ok(bad === 0, `inventoryLinesForSaleLine(raw) = _recipe_stock_lines on ${N} random lines`, first);
 ok(badClean === 0, `inventoryLinesForSaleLine = _recipe_stock_lines + _clean_stock_lines (operating supply dropped) on ${N} lines`, firstClean);
 console.log(`ok   stock lines: ${N} random lines compared, ${bad} raw / ${badClean} cleaned different`);
