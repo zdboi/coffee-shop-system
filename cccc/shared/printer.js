@@ -80,9 +80,6 @@ const Printer = (() => {
     0x0dd4,   // Custom Engineering
   ];
   const USB_FILTERS = [{classCode: USB_PRINTER_CLASS}].concat(USB_VENDORS.map(v => ({vendorId: v})));
-  // Interface classes the browser never lets a page claim (audio, HID, mass storage, smart card,
-  // video, A/V, wireless): never picked.
-  const USB_PROTECTED = [0x01, 0x03, 0x08, 0x0B, 0x0E, 0x10, 0xE0];
   const USB_TIMEOUT_MS = 15000;    // one USB write: a printer out of paper stops taking data
   const USB_PLUG_DELAY_MS = 250;   // after the cable is plugged in, give the Mac a moment
 
@@ -390,13 +387,18 @@ const Printer = (() => {
     b.line(src === 'QR' ? 'QR ORDER' : 'COUNTER ORDER');
     const type = order.order_type === 'TAKEAWAY' ? 'TAKEAWAY' : order.order_type === 'DINE_IN' ? 'DINE-IN' : '';
     const where = [order.table_label, type].filter(Boolean).join(' - ');
-    const nick = order.customer_nickname || order.customer_name || opts.customerName || '';
-    if(where || nick){ b.size(1, 2); if(where) b.line(where); if(nick) b.line(nick); b.size(1, 1); }
+    if(where) b.size(1, 2).line(where).size(1, 1);
     b.bold(false);
-    const when = order.created_at || order.transaction_date || '';
+    // Payment status (security L1): its own fixed line, computed ONLY from paid_at / opts.paid,
+    // between two separators, so customer text (e.g. a nickname "Ana PAID") can never stand there.
     const paid = !!(order.paid_at || opts.paid);
+    const status = paid ? 'PAID' : (src === 'QR' ? 'NOT PAID - PAY AT COUNTER' : '');
+    if(status) b.sep().bold(true).size(1, 2).line(status).size(1, 1).bold(false).sep();
+    const nick = order.customer_nickname || order.customer_name || opts.customerName || '';
+    if(nick) b.line('Name: ' + nick);
+    const when = order.created_at || order.transaction_date || '';
     const whenText = [_dateText(when), _timeText(when)].filter(Boolean).join(' ');
-    if(whenText || paid) b.line(whenText + (paid ? (whenText ? '  ' : '') + 'PAID' : ''));
+    if(whenText) b.line(whenText);
     b.align('left').sep();
     let count = 0;
     (order.items || []).forEach(it => {
@@ -735,7 +737,7 @@ const Printer = (() => {
       return 'Bluetooth printing is switched off in Brave. Type brave://flags/#brave-web-bluetooth-api in the address bar, set "Web Bluetooth API" to Enabled, click Relaunch, then try again. (Or use Google Chrome.)';
     if(where === 'usb'){
       if(code === 'USB_BUSY') return _usbBusyText();
-      if(code === 'NO_USB_OUT') return 'This USB device doesn\'t take print data. Tap Connect USB printer and choose the receipt printer (its name often has "Printer", "POS" or "XP-" in it).';
+      if(code === 'NO_USB_OUT') return 'That device isn\'t a receipt printer, so nothing was sent to it. Tap Connect USB printer and choose the receipt printer (its name often has "Printer", "POS" or "XP-" in it).';
       if(code === 'USB_TIMEOUT') return 'The printer stopped taking data. Check it has paper, the lid is closed and its light isn\'t flashing, then print again.';
       if(code === 'USB_LOST') return 'The USB printer was unplugged or switched off while printing. Plug it back in (it reconnects by itself), then print again.';
       if(code === 'NOT_CONNECTED') return _notConnectedText('usb');
@@ -937,20 +939,26 @@ const Printer = (() => {
   function _hex4(n){ return (Number(n) || 0).toString(16).padStart(4, '0'); }
   function _usbId(d){ return 'usb:' + _hex4(d.vendorId) + ':' + _hex4(d.productId); }
   function _usbName(d){ return String(d.productName || d.manufacturerName || ('USB printer ' + _hex4(d.vendorId) + ':' + _hex4(d.productId))).trim(); }
-  // The interface + bulk OUT endpoint to print to: a printer-class interface first,
-  // then a vendor-specific one; never a protected class. -> {iface, alt, ep, cls} | null
-  function _pickUsbInterface(cfg){
-    let best = null, bestScore = -1;
+  // The interface + bulk OUT endpoint to print to (security L2): ONLY a USB printer-class
+  // (7) interface; a vendor-specific (0xFF) one only when the maker is in USB_VENDORS AND the
+  // device has no printer-class interface at all. Anything else -> null (NO_USB_OUT), also
+  // for devices picked with "Show all USB devices". -> {iface, alt, ep, cls, claimed} | null
+  function _pickUsbInterface(cfg, device){
+    const list = [];
     ((cfg && cfg.interfaces) || []).forEach(itf => {
       const alts = (itf.alternates && itf.alternates.length) ? itf.alternates : (itf.alternate ? [itf.alternate] : []);
-      alts.forEach(alt => {
-        const cls = Number(alt.interfaceClass);
-        if(USB_PROTECTED.includes(cls)) return;
-        const ep = (alt.endpoints || []).find(e => e.direction === 'out' && e.type === 'bulk');
-        if(!ep) return;
-        const score = (cls === USB_PRINTER_CLASS ? 20 : cls === 0xFF ? 10 : 1) + (Number(alt.alternateSetting) === 0 ? 1 : 0);
-        if(score > bestScore){ bestScore = score; best = {iface: itf.interfaceNumber, alt: Number(alt.alternateSetting) || 0, ep: ep.endpointNumber, cls, claimed: !!itf.claimed}; }
-      });
+      alts.forEach(alt => list.push({itf, alt, cls: Number(alt.interfaceClass)}));
+    });
+    const hasPrinterClass = list.some(x => x.cls === USB_PRINTER_CLASS);
+    const knownMaker = !!device && USB_VENDORS.includes(Number(device.vendorId));
+    let best = null, bestScore = -1;
+    list.forEach(({itf, alt, cls}) => {
+      const ok = cls === USB_PRINTER_CLASS || (cls === 0xFF && knownMaker && !hasPrinterClass);
+      if(!ok) return;
+      const ep = (alt.endpoints || []).find(e => e.direction === 'out' && e.type === 'bulk');
+      if(!ep) return;
+      const score = (cls === USB_PRINTER_CLASS ? 20 : 10) + (Number(alt.alternateSetting) === 0 ? 1 : 0);
+      if(score > bestScore){ bestScore = score; best = {iface: itf.interfaceNumber, alt: Number(alt.alternateSetting) || 0, ep: ep.endpointNumber, cls, claimed: !!itf.claimed}; }
     });
     return best;
   }
@@ -962,7 +970,7 @@ const Printer = (() => {
         const cv = (device.configurations && device.configurations[0] && device.configurations[0].configurationValue) || 1;
         await device.selectConfiguration(cv);
       }
-      const pick = _pickUsbInterface(device.configuration);
+      const pick = _pickUsbInterface(device.configuration, device);
       if(!pick){ try{ await device.close(); }catch(e){} throw fail('NO_USB_OUT'); }
       if(!pick.claimed){
         try{ await device.claimInterface(pick.iface); }
