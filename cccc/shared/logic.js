@@ -635,24 +635,33 @@ function findRecipeOption(recipe, m, strictIds){
 }
 // The modifier a cart line / sale item keeps for a chosen option (release 1.4 shape):
 //   {group, label, price_delta, group_id, option_id, kind, ingredient_id, ingredient_qty_delta,
-//    extras: [{ingredient_id, quantity}], removes: [{ingredient_id, quantity}]}
-// extras / removes are a snapshot in stock units, so a refund later puts back exactly what the
-// sale took even if the option changes. group, label and price_delta are what the server's price
-// check (_menu_unit_price) reads.
+//    extras: [{ingredient_id, quantity}], removes: [{ingredient_id, quantity}],
+//    SWAP only: swap_from_ingredient_id, swap_to_ingredient_id, swap_rule: 'LINE_TOTAL'}
+// Non-swap options: extras / removes are a snapshot in stock units, so a refund later puts back
+// exactly what the sale took even if the option changes. A SWAP keeps its extras / removes for
+// display only; its stock is worked out by the swap rule (inventoryLinesForSaleLine, step 2).
+// group, label and price_delta are what the server's price check (_menu_unit_price) reads.
 // (An old option with a negative amount, e.g. "Less sugar" −5 g, is kept as removes [{sugar, 5}].)
 function modifierFromOption(group, option){
+  const kind = optionKind(option);
   const all = optionStockExtras(option), removes = optionStockRemoves(option);
   const extras = all.filter(e => e.quantity > 0);
   all.filter(e => e.quantity < 0).forEach(e => removes.push({ingredient_id: e.ingredient_id, quantity: -e.quantity}));
   // 1.3 fields: as the server set them on the option (a SWAP: none, so an old reader never
   // deducts the "to" ingredient on top of the recipe), else the first extra.
-  const kind = optionKind(option), first = all[0];
+  const first = all[0];
   const legacyId = kind === 'SWAP' ? null : (option.ingredient_id !== undefined ? (option.ingredient_id || null) : (first ? first.ingredient_id : null));
   const legacyQty = legacyId ? (option.ingredient_id !== undefined ? (Number(option.ingredient_qty_delta) || 0) : first.quantity) : 0;
-  return {group: group.name, label: option.label, price_delta: Number(option.price_delta) || 0,
+  const out = {group: group.name, label: option.label, price_delta: Number(option.price_delta) || 0,
     group_id: group.id, option_id: option.id, kind,
     ingredient_id: legacyId, ingredient_qty_delta: legacyQty,
     extras, removes};
+  if(kind === 'SWAP'){
+    out.swap_from_ingredient_id = option.swap_from_ingredient_id || null;
+    out.swap_to_ingredient_id = option.swap_to_ingredient_id || null;
+    out.swap_rule = 'LINE_TOTAL';
+  }
+  return out;
 }
 // selections [{group_id, option_id}] (the counter's picker) -> modifiers, in selection order.
 // Selections that aren't on the recipe are left out (checkOptionSelections reports them).
@@ -687,35 +696,48 @@ function checkOptionSelections(recipe, selections, opts){
 // Just the required groups with nothing chosen: [{group_id, name}] ([] = fine).
 function missingRequiredGroups(recipe, selections){ return checkOptionSelections(recipe, selections).missing; }
 
-// The stock a chosen modifier moves per item: {extras, removes} (stock units).
-//   1.4 snapshot (has extras / removes lists)       -> those (QR orders and 1.4 carts carry them)
-//   1.3 snapshot (has ingredient_id / ingredient_qty_delta) -> that single pair, nothing removed
-//   bare choice ({group_id, option_id} / {group, label})   -> the recipe's option now (server rule;
-//                                                          an option no longer on the menu takes nothing)
+// How a chosen modifier moves stock per item:
+//   {swap: {from, to}}       a swap by the LINE_TOTAL rule (step 2 of inventoryLinesForSaleLine)
+//   {extras, removes}        everything else (step 1), stock units
+// Which one:
+//   snapshot with swap_rule 'LINE_TOTAL' (1.4 carts, QR orders, sale items) -> swap (from / to of the snapshot)
+//   snapshot with extras / removes lists, no swap_rule -> extras − removes as stored (the older rule;
+//                            so refunds of sales made before the LINE_TOTAL rule return what they took)
+//   1.3 snapshot (ingredient_id / ingredient_qty_delta) -> that single pair
+//   bare choice ({group_id, option_id} / {group, label}) -> the recipe's option now, like the server:
+//                            a SWAP on the menu -> swap; else its extras (an option no longer on the menu takes nothing)
 function modifierStock(recipe, m){
-  if(!m || typeof m !== 'object') return {extras: [], removes: []};
+  const none = {extras: [], removes: []};
+  if(!m || typeof m !== 'object') return none;
   const has = (k) => Object.prototype.hasOwnProperty.call(m, k);
+  if(m.swap_rule === 'LINE_TOTAL') return {swap: {from: m.swap_from_ingredient_id || null, to: m.swap_to_ingredient_id || null}};
   if(Array.isArray(m.extras) || Array.isArray(m.removes)){
     return {extras: Array.isArray(m.extras) ? optionStockExtras(m) : optionStockExtras({ingredient_id: m.ingredient_id, ingredient_qty_delta: m.ingredient_qty_delta}),
             removes: optionStockRemoves(m)};
   }
   if(has('ingredient_id') || has('ingredient_qty_delta')) return {extras: optionStockExtras({ingredient_id: m.ingredient_id, ingredient_qty_delta: m.ingredient_qty_delta}), removes: []};
   const f = findRecipeOption(recipe, m);
-  return f ? {extras: optionStockExtras(f.option), removes: optionStockRemoves(f.option)} : {extras: [], removes: []};
+  if(!f) return none;
+  if(String(f.option.kind || '').toUpperCase() === 'SWAP') return {swap: {from: f.option.swap_from_ingredient_id || null, to: f.option.swap_to_ingredient_id || null}};
+  return {extras: optionStockExtras(f.option), removes: []};
 }
 
-// Ingredients used by one cart/sale line (release 1.4: the server's _recipe_stock_lines rule):
-//   recipe lines (stock units, recipeLineQty, amounts > 0) × quantity
-//   + Σ chosen options' extras × quantity − Σ chosen options' removes × quantity (swaps),
-//   added together per ingredient, rounded to 6 decimals, only amounts > 0 kept;
+// Ingredients used by one cart/sale line: the server's _recipe_stock_lines rule (010, lead
+// decision 2026-11-03 "a non-dairy drink is fully non-dairy"):
+//   1. per ONE item, per ingredient: recipe lines (stock units, recipeLineQty, > 0) + every chosen
+//      non-swap option's stock (modifierStock: extras − removes, or the old single pair);
+//   2. then each chosen SWAP (from ≠ to), in the order chosen: the item's WHOLE total of "from"
+//      (recipe + extras, e.g. a 16 oz size's extra milk) moves to "to", converted to its stock unit
+//      (g↔kg, mL↔L, g↔mL through "to"'s weighs, else "from"'s); "from" becomes 0. A later swap of a
+//      "from" already swapped moves nothing (it still adds its price); a "from" total of 0, or an
+//      amount that can't be converted, moves nothing. The swap's own extras / removes are never used;
+//   3. × quantity, rounded to 6 decimals, only amounts > 0 kept;
 //   then cleaned (cleanStockLines): merged ingredients -> their general ingredient,
 //   operating supplies left out.
 // -> [{ingredient_id, quantity (> 0, stock unit), kind: 'recipe'|'modifier', label (modifier only)}]
 //    one line per ingredient. Shared by sales (deduct), refunds/voids (put back), waste,
 //    the stock check before payment and costing.
 // opts.raw: true -> skip the cleaning step (exactly _recipe_stock_lines; parity checks).
-// Before 1.4 each recipe line and option was its own line, and a negative option amount
-// ("less milk") was taken off as a positive one; now it lowers that ingredient's total.
 function inventoryLinesForSaleLine(recipeId, quantity, modifiers, opts){
   const Q = Number(quantity) || 0;
   const recipe = state.recipes.find(r => r.id === recipeId) || null;
@@ -728,14 +750,31 @@ function inventoryLinesForSaleLine(recipeId, quantity, modifiers, opts){
   state.recipeIngredients.forEach(ri => {
     if(ri.recipe_id !== recipeId) return;
     const q = recipeLineQty(ri);
-    if(q > 0) add(ri.ingredient_id, q * Q, 'recipe');
+    if(q > 0) add(ri.ingredient_id, q, 'recipe');
   });
-  (Array.isArray(modifiers) ? modifiers : []).forEach(m => {
-    const st = modifierStock(recipe, m);
-    st.extras.forEach(e => add(e.ingredient_id, e.quantity * Q, 'modifier', m.label));
-    st.removes.forEach(e => add(e.ingredient_id, -e.quantity * Q, 'modifier', m.label));
+  const mods = (Array.isArray(modifiers) ? modifiers : []).map(m => ({m, st: modifierStock(recipe, m)}));
+  mods.forEach(({m, st}) => {
+    if(st.swap) return;
+    st.extras.forEach(e => add(e.ingredient_id, e.quantity, 'modifier', m.label));
+    st.removes.forEach(e => add(e.ingredient_id, -e.quantity, 'modifier', m.label));
   });
-  const out = order.map(id => Object.assign(by[id], {quantity: _unitRound(by[id].quantity)})).filter(l => l.quantity > 0);
+  const done = new Set();
+  mods.forEach(({m, st}) => {
+    if(!st.swap) return;
+    const from = st.swap.from, to = st.swap.to;
+    if(!from || !to || from === to || done.has(from)) return;
+    done.add(from);
+    const amt = by[from] ? by[from].quantity : 0;
+    if(!(amt > 0)) return;
+    const x = ingredientById(from), y = ingredientById(to);
+    if(!x || !y) return;
+    const w = _hasNum(y.weight_g_per_ml) ? y.weight_g_per_ml : x.weight_g_per_ml;
+    const conv = toBaseQty(amt, x.base_unit, y.base_unit, w);
+    if(!(conv > 0)) return;
+    by[from].quantity = 0;
+    add(to, conv, 'modifier', m.label);
+  });
+  const out = order.map(id => Object.assign(by[id], {quantity: _unitRound(by[id].quantity * Q)})).filter(l => l.quantity > 0);
   return (opts && opts.raw) ? out : cleanStockLines(out);
 }
 
