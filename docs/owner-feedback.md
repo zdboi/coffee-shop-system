@@ -81,3 +81,10 @@ Owner: **don't start 1.3 until I say so.**
 - **A9, take-away cups:** **counted as stock.** Cups and lids are stock items, a take-away choice deducts them, and low-stock warnings apply.
 - **A15, waste approval:** **only Complimentary** needs a manager's PIN. Calibration, spillage and expired don't.
 - **A10, "weighs":** **house-made (produced) sauces only.** Bought liquids stay in mL.
+
+## Release 1.4 addition: thermal printing on Mac (owner, 2026-11-08 20:34)
+- Owner: "Before we put 1.4 live, fix the thermal printer logic. MacBooks are having a hard time recognizing the printer; the app must automatically print orders and the shift report on the thermal printer, not prompt to save as PDF."
+- **Mac counter browser:** Brave. Brave blocks some device access by default. Chrome is recommended.
+- **Connection:** Xprinter 58 mm over a **USB cable** (WebUSB, reconnected silently).
+- **Prints automatically:** the receipt after payment, a barista order ticket, QR orders when they arrive (one counter only), and the shift (Z) report when the shift closes. The X report prints on tap.
+- **No print dialog on its own.** "Use print screen" only appears as an explicit button after a failure.
