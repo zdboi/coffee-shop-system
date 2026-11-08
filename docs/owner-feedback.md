@@ -107,3 +107,12 @@ Owner: **don't start 1.3 until I say so.**
     - a surcharge anyway;
     - a cash discount instead;
     - tracking the provider's fee as the shop's cost.
+- **B5 decision (owner, 2026-11-09 02:06):** "go for C and put it in accounting overview."
+  - Build an extra charge per payment method, set by the owner per method (amount or %), shown on the counter screen and on the receipt.
+  - It is calculated in the shared totals (`computeSaleTotals`) and checked by the server like tax and the service charge.
+  - The Accounting overview shows payment-method charges collected as their own line.
+  - The owner was told about DTI DAO 21-03 and takes responsibility for using it.
+- **Planned placement (pending the owner's go):**
+  - Wave 3 (1.5) = QR accounts and security.
+  - Wave 4 (1.6) "Money & owners" = B1 Accounting overview, B2 investor equity, B4 editable payment methods, B5 payment-method charges.
+  - Later, planned together: B3 referrals and RPG loyalty.
