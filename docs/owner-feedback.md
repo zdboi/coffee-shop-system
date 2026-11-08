@@ -88,3 +88,13 @@ Owner: **don't start 1.3 until I say so.**
 - **Connection:** Xprinter 58 mm over a **USB cable** (WebUSB, reconnected silently).
 - **Prints automatically:** the receipt after payment, a barista order ticket, QR orders when they arrive (one counter only), and the shift (Z) report when the shift closes. The X report prints on tap.
 - **No print dialog on its own.** "Use print screen" only appears as an explicit button after a failure.
+
+## New items for after 1.4 (owner, 2026-11-09 02:00), not yet planned
+- **B1. Accounting overview:** one page showing gross sales, net sales, expenses, waste amount, discounts, voids and more.
+  - Overlaps the 1.4 Net income page, the Waste report, and Reports (sales summary, Discounts, Refunds & voids).
+  - Proposal: grow Net income into this page instead of adding a duplicate.
+- **B2. Investor equity:** new; nothing like it exists. Details still to settle: capital contributions, ownership %, profit share and payouts, payback. Capital must never be counted as an expense or as sales.
+- **B3. Referrals and other perks (future):** new.
+  - Can reuse the stamp-card rewards (1.2) for referral rewards.
+  - Can reuse the Wave 3 usernames and registration as referral codes.
+  - Overlaps the planned RPG loyalty perks, so plan the two together.
