@@ -27,7 +27,7 @@ function fakeUsb(o){
   const log = {writes: [], requests: [], opens: 0, claims: [], selects: 0, clearHalts: 0, transfers: 0, forgot: 0, resets: 0};
   const listeners = {};
   const device = {
-    vendorId: 0x0483, productId: 0x5743, serialNumber: o.serial === undefined ? 'XP58-0001' : o.serial,
+    vendorId: o.vendorId || 0x0483, productId: 0x5743, serialNumber: o.serial === undefined ? 'XP58-0001' : o.serial,
     productName: 'Printer POS-58', manufacturerName: 'Xprinter',
     opened: false, configuration: null,
     configurations: [{configurationValue: 1}],
@@ -35,7 +35,7 @@ function fakeUsb(o){
     async close(){ this.opened = false; this.configuration = null; },
     async selectConfiguration(v){
       log.selects++;
-      this.configuration = {configurationValue: v, interfaces: [
+      this.configuration = {configurationValue: v, interfaces: o.ifaces ? JSON.parse(JSON.stringify(o.ifaces)) : [
         {interfaceNumber: 0, claimed: false, alternates: [{alternateSetting: 0, interfaceClass: 3, endpoints: [{endpointNumber: 1, direction: 'out', type: 'interrupt'}]}]},
         {interfaceNumber: 1, claimed: false, alternates: [{alternateSetting: 0, interfaceClass: 7, endpoints: [
           {endpointNumber: 2, direction: 'in', type: 'bulk'}, {endpointNumber: 3, direction: 'out', type: 'bulk'}]}]},
@@ -262,6 +262,39 @@ const Z_OPTS = (w) => `{paper_width: ${w}, now: new Date('2026-11-02T09:31:00Z')
     const ea = makeEnv({nav: {userAgent: MAC_CHROME, usb: fa.usb}});
     await ea.r(`Printer.chooseUsb({showAll: true})`);
     eq('showAll -> filters: [] (every USB device)', fa.log.requests[0].filters, []);
+  }
+
+  /* ---------- security L1: payment status line can't be faked by customer text ---------- */
+  {
+    const e = makeEnv(); e.r(SAMPLE); e.r(DATA);
+    const d = (o, op) => e.r(`Printer.describe(Printer.ticketBytes(${o}, ${op || '{}'}))`);
+    const unpaid = d(`Object.assign({}, ORDER, {paid_at: null, customer_nickname: 'Ana PAID'})`);
+    const statusOf = (t) => { const m = t.match(/-{32}\n\[B\]\[SIZE 1x2\]([^\n]*)\n\[SIZE 1x1\]\[\/B\]-{32}\n/); return m ? m[1] : null; };
+    eq('L1: unpaid QR order, nickname "Ana PAID" -> fixed status line NOT PAID, name labelled', [statusOf(unpaid), /\nName: Ana PAID\n/.test(unpaid), (unpaid.match(/^(\[[^\]]+\])*PAID$/gm) || []).length], ['NOT PAID - PAY AT COUNTER', true, 0]);
+    eq('L1: paid QR order -> PAID status line', statusOf(d(`ORDER`)), 'PAID');
+    eq('L1: counter sale with opts.paid -> PAID; without -> no status line', [statusOf(d(`{transaction_number: 'T1', items: []}`, `{paid: true}`)), statusOf(d(`{transaction_number: 'T1', items: []}`))], ['PAID', null]);
+    eq('L1: status comes only from paid_at / opts.paid (customer fields "paid" ignored)', statusOf(d(`Object.assign({}, ORDER, {paid_at: null, paid: true, status: 'PAID', customer_note: 'PAID'})`)), 'NOT PAID - PAY AT COUNTER');
+  }
+
+  /* ---------- security L2: only receipt printers are printed to ---------- */
+  {
+    const IF = (n, cls, out) => ({interfaceNumber: n, claimed: false, alternates: [{alternateSetting: 0, interfaceClass: cls, endpoints: out ? [{endpointNumber: 3, direction: 'out', type: 'bulk'}] : []}]});
+    const tryDev = async (o, showAll) => {
+      const f = fakeUsb(o);
+      const e = makeEnv({nav: {userAgent: MAC_CHROME, usb: f.usb}}); e.r(SAMPLE); e.r(DATA);
+      let err = null; try{ await e.r(`Printer.chooseUsb(${showAll ? '{showAll: true}' : ''})`); }catch(x){ err = x; }
+      return {err, f, e, conn: e.r(`Printer.status().connected`), setting: e.r(`Printer.settings().connection`)};
+    };
+    const a = await tryDev({ifaces: [IF(0, 0xFF, true)]});
+    eq('L2: vendor-specific (0xFF) interface + known maker (0x0483), no class 7 -> accepted', [a.err, a.conn, a.f.log.claims], [null, true, [0]]);
+    const b = await tryDev({vendorId: 0x1234, ifaces: [IF(0, 0xFF, true)]}, true);
+    eq('L2: 0xFF interface, unknown maker (Show all) -> refused NO_USB_OUT, nothing claimed or saved', [b.err && b.err.code, /^That device isn't a receipt printer/.test(b.err && b.err.friendly), b.f.log.claims, b.conn, b.setting], ['NO_USB_OUT', true, [], false, 'dialog']);
+    const c = await tryDev({ifaces: [IF(0, 7, false), IF(1, 0xFF, true)]});
+    eq('L2: has a class-7 interface (no bulk OUT) -> the 0xFF one is NOT used -> NO_USB_OUT', [c.err && c.err.code, c.f.log.claims], ['NO_USB_OUT', []]);
+    const d = await tryDev({vendorId: 0x046d, ifaces: [IF(0, 3, true), IF(1, 0x08, true), IF(2, 0x02, true), IF(3, 0x0A, true)]}, true);
+    eq('L2: HID / storage / CDC device picked with Show all -> NO_USB_OUT', [d.err && d.err.code, d.f.log.claims], ['NO_USB_OUT', []]);
+    const g = await tryDev({ifaces: [IF(0, 0xFF, true), IF(1, 7, true)]});
+    eq('L2: class 7 preferred over 0xFF', [g.err, g.f.log.claims], [null, [1]]);
   }
 
   /* ---------- browsers: Brave, Safari, Chrome, Firefox ---------- */

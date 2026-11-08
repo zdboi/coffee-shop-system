@@ -146,6 +146,7 @@ function fakeUsb(){
     const r1 = await printed();
     ok(/TOTAL\s+P110\.00/.test(r1) && /COUNTER ORDER/.test(r1) && r1.indexOf('TOTAL') < r1.indexOf('COUNTER ORDER'), 'sale -> receipt, then barista ticket (one queue, in that order)', r1.slice(0, 300));
     ok(!/P110/.test(r1.slice(r1.indexOf('COUNTER ORDER'))), 'barista ticket has no prices');
+    ok(/\]PAID\n/.test(r1.slice(r1.indexOf('COUNTER ORDER'))), 'counter sale ticket shows the PAID status line', r1.slice(r1.indexOf('COUNTER ORDER'), r1.indexOf('COUNTER ORDER') + 200));
     ok(await opens() === op0 && popups === 0, 'sale printing opened no print screen');
 
     /* ---- QR arrival: one ticket, never again ---- */
@@ -157,7 +158,11 @@ function fakeUsb(){
     await page.evaluate(() => { posState.qrSince = null; return pollQrOrders(); }); await page.waitForTimeout(800);
     let t = await printed();
     ok(count(t, /Q-901/g) === 1 && /QR ORDER/.test(t) && /2 x Americano/.test(t) && /Less ice/.test(t) && /no sugar/.test(t) && /Table 5/.test(t), 'QR arrival -> ticket printed once (repeated polls don\'t reprint)', t.slice(0, 300));
-    ok(!/<b>/.test(t) || true, 'nickname printed as text');
+    ok(/NOT PAID - PAY AT COUNTER/.test(t) && /Name: Mara <b>x<\/b>/.test(t) && !/\bPAID\b(?! - )/.test(t.replace('NOT PAID - PAY AT COUNTER', '')), 'QR arrival ticket (unpaid): fixed "NOT PAID - PAY AT COUNTER" line, name labelled "Name:"', t.slice(0, 300));
+    const html = await page.evaluate((id) => { const o = state.qrOrders.find(x => x.id === id); return {u: ticketHtml(Object.assign({}, o, {customer_nickname: 'Ana PAID'}), {source: 'QR'}), p: ticketHtml(Object.assign({}, o, {paid_at: new Date().toISOString()}), {source: 'QR'}), x: ticketHtml(Object.assign({}, o, {customer_nickname: '<img src=x onerror=alert(1)>'}), {source: 'QR'})}; }, qid);
+    ok(/<div class="status">NOT PAID - PAY AT COUNTER<\/div>/.test(html.u) && /Name: Ana PAID/.test(html.u) && !/class="status">PAID/.test(html.u), 'print-screen ticket: "Ana PAID" stays on the Name line, status says NOT PAID');
+    ok(/<div class="status">PAID<\/div>/.test(html.p), 'print-screen ticket: paid order shows the PAID status line');
+    ok(!/<img/.test(html.x) && /&lt;img/.test(html.x), 'print-screen ticket escapes the nickname');
     await reloadSignIn();
     await page.waitForTimeout(1500);
     t = await allPrinted();
