@@ -98,3 +98,12 @@ Owner: **don't start 1.3 until I say so.**
   - Can reuse the stamp-card rewards (1.2) for referral rewards.
   - Can reuse the Wave 3 usernames and registration as referral codes.
   - Overlaps the planned RPG loyalty perks, so plan the two together.
+- **B4. Edit payment methods (owner, 2026-11-09 02:03):** the owner wants Cash, GCash, QR payment, Card and Bank transfer, and to be able to edit the list.
+  - Today the list is fixed in code: Cash, GCash, Maya, Card, Other. The database also accepts BANK.
+  - There is no edit screen. It overlaps nothing.
+- **B5. Extra charge per payment method (owner, 2026-11-09 02:03):** new; only the shop-wide service charge exists today.
+  - PH rules (DTI DAO 21-03, DAO 10 s.2006, Consumer Act) appear to bar charging card/digital buyers more than the displayed price. A cash discount is allowed.
+  - Waiting for the owner to choose among:
+    - a surcharge anyway;
+    - a cash discount instead;
+    - tracking the provider's fee as the shop's cost.
