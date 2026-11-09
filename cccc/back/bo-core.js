@@ -23,6 +23,8 @@ const BO = {
   pinUpdateNeeded: [],       // staff ids whose manager/admin PIN is shorter than 6 digits (server list)
   pinLockouts: [],           // counters locked after wrong PINs in the last 7 days (server list)
   hasPayoutLimit: false,     // the server knows settings.payout_review_limit
+  hasMenuLink: false,        // the server has the 1.4.1 menu link columns (011)
+  menuLink: {},              // their saved values (Settings → Menu link, bo-menulink.js)
   unlockedAt: {},            // device id -> when the owner pressed Unlock here (the lock list doesn't record it)
   lastLoadAt: 0,
   started: false,
@@ -165,6 +167,12 @@ function applyBoBootstrap(d){
   // Pay-outs above this amount are flagged for review by the server (default ₱1,000).
   BO.hasPayoutLimit = !!(d.settings && Object.prototype.hasOwnProperty.call(d.settings, 'payout_review_limit'));
   state.settings.payout_review_limit = BO.hasPayoutLimit && d.settings.payout_review_limit != null ? num(d.settings.payout_review_limit) : 1000;
+  // Release 1.4.1 (011): the menu link fields (Settings → Menu link). Kept here, not in state.settings,
+  // so the other settings saves never send these columns (an older database doesn't have them).
+  BO.hasMenuLink = !!(d.settings && Object.prototype.hasOwnProperty.call(d.settings, 'menu_public'));
+  BO.menuLink = {};
+  if(BO.hasMenuLink) MENU_LINK_KEYS.forEach(k => { BO.menuLink[k] = d.settings[k] == null ? null : d.settings[k]; });
+  BO.menuLink.menu_public = BO.menuLink.menu_public === true;
   state.staff = d.staff || [];
   state.categories = d.categories || [];
   state.suppliers = d.suppliers || [];
