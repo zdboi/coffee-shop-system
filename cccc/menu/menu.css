@@ -26,8 +26,8 @@ a{color:var(--cc-terracotta-deep);}
 .mhead-note{font-size:13px;font-weight:500;color:var(--cc-butter);}
 
 /* ---------- sub-category tabs (stick to the top while scrolling; 1.4.2) ---------- */
-.chips{position:sticky;top:0;z-index:10;background:var(--cc-paper);border-bottom:1px solid var(--cc-line);}
-.chips-in{display:flex;gap:8px;padding-top:12px;padding-bottom:12px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;}
+.chips{position:sticky;top:0;z-index:10;margin:0 -20px -14px;background:var(--cc-paper);border-bottom:1px solid var(--cc-line);}
+.chips-in{display:flex;gap:8px;padding:12px 20px;overflow-x:auto;scroll-padding:0 20px;scrollbar-width:none;-webkit-overflow-scrolling:touch;}
 .chips-in::-webkit-scrollbar{display:none;}
 .chip{flex:none;display:inline-flex;align-items:center;min-height:44px;padding:0 16px;border-radius:999px;background:var(--cc-butter);color:var(--cc-ink);
   border:0;margin:0;font-family:inherit;font-size:14px;font-weight:600;line-height:1.2;cursor:pointer;-webkit-tap-highlight-color:transparent;
@@ -46,8 +46,9 @@ a{color:var(--cc-terracotta-deep);}
   color:var(--cc-ink);text-decoration:none;box-shadow:var(--cc-shadow);}
 a.hl{transition:transform var(--cc-fast) var(--cc-ease),box-shadow var(--cc-fast) var(--cc-ease);}
 a.hl:active{transform:scale(.99);}
-.hl-photo{display:block;aspect-ratio:2/1;background:var(--cc-sand);}
-.hl-photo img{width:100%;height:100%;object-fit:cover;}
+.hl-photo{position:relative;display:block;aspect-ratio:2/1;overflow:hidden;background:var(--cc-sand);}
+.hl-photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+.hl-photo.nophoto{display:flex;}
 .hl-body{display:flex;flex-direction:column;gap:6px;padding:14px 16px 16px;}
 .hl-label{align-self:flex-start;padding:5px 12px;border-radius:999px;background:var(--cc-terracotta);color:var(--cc-paper);font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;}
 .hl-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;}
@@ -160,7 +161,8 @@ a.hl:active{transform:scale(.99);}
 }
 @media (max-width:360px){
   .col{padding-left:16px;padding-right:16px;}
-  .track{margin:0 -16px;}
+  .track,.chips{margin-left:-16px;margin-right:-16px;}
+  .chips-in{padding-left:16px;padding-right:16px;}
   .panel{padding-left:16px;padding-right:16px;}
   .mtitle{font-size:46px;}
   .brand-wordmark{height:52px;}

@@ -229,10 +229,8 @@
     applyTheme(m);
     const items = Array.isArray(m.items) ? m.items : [];
     const main = $('#menu-main');
-    const chips = $('#chips');
     if(!items.length){
       S.cats = [];
-      chips.hidden = true; chips.innerHTML = '';
       main.innerHTML = `${staleHtml()}<div class="empty"><h2 class="disp">Menu coming soon</h2><p>We're updating our menu. Drop by the counter to see what's brewing today.</p></div>${visitHtml(m.visit)}${footHtml(m)}`;
       return;
     }
@@ -243,9 +241,9 @@
     if(active < 0) active = Math.min(Math.max(0, S.active | 0), cats.length - 1);
     S.cats = cats; S.active = active; S.activeName = cats[active]; S.lock = null;
 
-    chips.innerHTML = multi ? `<div class="col chips-in" role="tablist" aria-label="Menu sections">${cats.map((c, i) =>
-      `<button type="button" class="chip" role="tab" id="tab-btn-${i}" aria-controls="sec-${i}" aria-selected="false" tabindex="-1" data-tab="${i}">${esc(c)}</button>`).join('')}</div>` : '';
-    chips.hidden = !multi;
+    // Sub-category tabs (1.4.2): under the highlight card, sticky while scrolling; the panels below swipe.
+    const tabs = multi ? `<div class="chips" id="chips"><div class="chips-in" role="tablist" aria-label="Menu sections">${cats.map((c, i) =>
+      `<button type="button" class="chip" role="tab" id="tab-btn-${i}" aria-controls="sec-${i}" aria-selected="false" tabindex="-1" data-tab="${i}">${esc(c)}</button>`).join('')}</div></div>` : '';
     const panels = cats.map((c, i) => {
       const its = [];
       items.forEach((it, idx) => { if(catOf(it) === c) its.push([it, idx]); });
@@ -260,7 +258,7 @@
         ${nav}
       </section>`;
     }).join('');
-    main.innerHTML = `${staleHtml()}${highlightHtml(m)}<div class="track${multi ? '' : ' single'}" id="track">${panels}</div>${visitHtml(m.visit)}${footHtml(m)}`;
+    main.innerHTML = `${staleHtml()}${highlightHtml(m)}${tabs}<div class="track${multi ? '' : ' single'}" id="track">${panels}</div>${visitHtml(m.visit)}${footHtml(m)}`;
     setupTrack();
   }
   const CHEV_L = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -278,7 +276,6 @@
   function renderNotFound(){
     applyTheme(null);
     S.cats = [];
-    $('#chips').hidden = true; $('#chips').innerHTML = '';
     $('#menu-main').innerHTML = `<div class="empty">
       <h2 class="disp">This menu isn't available right now</h2>
       <p>The link may be old, or the shop has paused it for now. Please ask our staff, or try again later. Salamat!</p>
@@ -286,7 +283,6 @@
   }
   function renderOffline(){
     S.cats = [];
-    $('#chips').hidden = true;
     $('#menu-main').innerHTML = `<div class="empty">
       <h2 class="disp">We couldn't open the menu</h2>
       <p>Check your internet connection, then try again.</p>
@@ -340,7 +336,7 @@
     const t = trackEl();
     if(!t) return;
     const chips = $('#chips');
-    const top = Math.max(0, Math.round(t.getBoundingClientRect().top + window.scrollY - (chips && !chips.hidden ? chips.offsetHeight : 0) - 8));
+    const top = Math.max(0, Math.round(t.getBoundingClientRect().top + window.scrollY - (chips ? chips.offsetHeight : 0) - 8));
     if(force || window.scrollY > top) window.scrollTo(0, top);
   }
   function setHash(i, mode){
@@ -367,7 +363,9 @@
         S.lock = i;
         clearTimeout(unlockTimer);
         unlockTimer = setTimeout(() => { S.lock = null; }, 1200);
-        const how = o.scroll === 'smooth' ? smooth() : 'auto';
+        // Slide only to a near panel; a far one (many tabs) is shown at once instead of racing past the rest.
+        const near = Math.abs(t.scrollLeft - left) <= 2.5 * t.clientWidth;
+        const how = o.scroll === 'smooth' && near ? smooth() : 'auto';
         try{ t.scrollTo({left, behavior: how}); }catch(e){ t.scrollLeft = left; }
       }
     }
@@ -472,7 +470,7 @@
     const i = panelEls().indexOf(p);
     if(i >= 0) setActive(i, {scroll: 'instant', hash: o.hash ? 'replace' : null});
     const chips = $('#chips');
-    const top = Math.max(0, t.getBoundingClientRect().top + window.scrollY - (chips && !chips.hidden ? chips.offsetHeight : 0) - 14);
+    const top = Math.max(0, t.getBoundingClientRect().top + window.scrollY - (chips ? chips.offsetHeight : 0) - 14);
     try{ window.scrollTo({top, behavior: o.instant ? 'auto' : smooth()}); }catch(e){ window.scrollTo(0, top); }
     // Move keyboard focus with the jump (without a second scroll).
     if(!t.hasAttribute('tabindex')) t.setAttribute('tabindex', '-1');
