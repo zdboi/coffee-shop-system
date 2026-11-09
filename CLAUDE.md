@@ -144,10 +144,10 @@ The server answers per op: `ok | duplicate | skipped | error` (+ `message`).
 | `core-sync-engineer` | `cccc/shared/{cloud,local,logic,ui,config,printer}.js`, `cccc/shared/styles.css`, `cccc/sw.js` |
 | `front-office-dev` | `cccc/front/**` |
 | `back-office-dev` | `cccc/back/**` |
-| `customer-qr-dev` | `cccc/order/**` |
+| `customer-qr-dev` | `cccc/order/**`, `cccc/menu/**` (public menu page, 1.4.1) |
 | `qa-test-engineer` | `tests/**` |
 | `security-reviewer` | nothing (read-only) |
-| lead (C) | `CLAUDE.md`, `.claude/**`, `README.md`, `index.html`, `_config.yml`, `docs/**`, `.gitignore`, `cccc/shared/vendor/**`, `cccc/shared/brand/**` (logo images, Brunson webfont, `tokens.css`), `_archive/**` (moves only) |
+| lead (C) | `CLAUDE.md`, `.claude/**`, `README.md`, `index.html`, `_config.yml`, `docs/**`, `.gitignore`, `cccc/shared/vendor/**`, `cccc/shared/brand/**` (logo images, Brunson webfont, `tokens.css`), `menu/**` (short link + social preview tags), `_archive/**` (moves only) |
 
 ## How work flows
 1. Lead writes a brief: goal, acceptance checks, files in scope.
