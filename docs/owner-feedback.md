@@ -139,3 +139,12 @@ Owner: **don't start 1.3 until I say so.**
     - **Extra stock** raises stock to the count and is flagged in "Needs review". It is never negative waste.
     - **Only the owner (ADMIN)** can revise a submitted count, in the Back Office, with an audit entry.
   - **Placement:** Wave 3 (1.5).
+
+## Brand: tagline dropped (owner, 2026-11-09 16:39)
+- Owner: "Drop the Bienvenido na Kapihan. I don't want that to be our catchphrase anymore."
+- **Done:** the HD logos and banners (given as a ZIP) no longer have the tagline. The stacked logo also loses the two rules and stars around it, and the horizontal logo's name is re-centred.
+- **Still in the app:**
+  - the "Bienvenido na Kapihan!" footer on the branded QR table cards (`cccc/back/bo-admin.js`);
+  - the web-size wide/stacked logo images in `cccc/shared/brand/`, which aren't shown on any screen;
+  - the QR stamp card header says "Bienvenido!", a different phrase.
+- Waiting for the owner on whether to change these now or in Wave 3.
