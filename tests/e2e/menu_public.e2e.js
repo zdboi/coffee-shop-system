@@ -142,6 +142,25 @@ const ok = (c, m) => { checks++; console.log((c ? 'ok   ' : 'FAIL ') + m); if(!c
   ok((await page.$$('.card')).length > 0 && log.errors.length === 0, 'reduced motion render');
   await ctx.close();
 
+  // truncated note: absent normally, shown when the database cut the list
+  ({ctx, page, log} = await open(BASE, 390));
+  ok(await page.$('.foot-more') === null, 'no "some items" note when not truncated');
+  await ctx.close();
+  SQL("insert into recipes (business_id,name,recipe_type,category,selling_price,sort_order) select business_id,'Extra '||g,'DRINKS','Hot',100,100+g from settings, generate_series(1,300) g");
+  ({ctx, page, log} = await open(BASE, 390));
+  ok(/Some items aren't shown here/.test(await page.innerText('main')) && (await page.$$('.card, .gcard')).length === 300, 'truncated note shown with 300 items');
+  await page.screenshot({path: OUT + '390-truncated-end.png', fullPage: false, clip: undefined});
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await page.waitForTimeout(200);
+  await page.screenshot({path: OUT + '390-truncated-end.png'});
+  await ctx.close();
+  SQL("delete from recipes where name like 'Extra %'");
+  // CUSTOM theme with null colours -> brand tokens, no errors
+  SQL("update settings set theme='CUSTOM', primary_color=null, secondary_color=null, accent_color=null, background_color=null, card_color=null, text_color=null");
+  ({ctx, page, log} = await open(BASE, 390));
+  const bg = await page.$eval('.mhead', e => getComputedStyle(e).backgroundColor);
+  ok(bg === 'rgb(181, 67, 43)' && log.errors.length === 0 && (await page.$$('.card')).length > 0, 'CUSTOM theme with null colours falls back to brand (' + bg + ')');
+  await page.screenshot({path: OUT + '390-custom-null.png'});
+  await ctx.close();
   await browser.close();
   console.log(`SUMMARY menu_public.e2e: ${checks} checks, ${fails} failed`);
   process.exit(fails ? 1 : 0);
