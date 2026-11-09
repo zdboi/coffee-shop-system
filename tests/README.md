@@ -18,7 +18,7 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 
 | Suite | What | Size |
 |---|---|---|
-| 004..010 install (x2) | the live order `004_cccc_online_qr.sql` → `005_live_fixes.sql` → `006_live_fix_sync_operations.sql` → `007_batch1.sql` → `008_release_1_2.sql` → `009_release_1_3.sql`, then `010_release_1_4.sql` (release 1.4, not yet on live), installs on the live-schema copy (`sql/01`, incl. the live CHECK rules) and again on top of itself | — |
+| 004..011 install (x2) | the live order `004_cccc_online_qr.sql` → `005_live_fixes.sql` → `006_live_fix_sync_operations.sql` → `007_batch1.sql` → `008_release_1_2.sql` → `009_release_1_3.sql`, → `010_release_1_4.sql`, then `011_release_1_4_1.sql` (release 1.4.1, not yet on live), installs on the live-schema copy (`sql/01`, incl. the live CHECK rules) and again on top of itself | — |
 | `sql/36_live_rules_tests.sql` | after the install: every CHECK rule matches the owner's live list (one rule per column; 005 replaced the stand-in device_type rule, 006 the sync_operations rule; `cash_movements.amount > 0` kept) (17) | — |
 | `sql/10_behaviour_tests.sql` | sign-up trigger, menu via `apply_changes`, pairing, PIN logins (no rank from a PIN), lockout, `fo_sync` sale / duplicate / discount refusal / void with approval token | — |
 | `sql/11_qr_tests.sql` | QR menu, register / relink / forget, server-side prices, counter accept → pay → ready → complete, customers, `sales_report`, merge, legacy PIN, device removal | — |
@@ -31,6 +31,7 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 | `sql/37_batch1_tests.sql` | 007 + batch 1 (own fresh database; adopted from the database engineer): pay-in / pay-out of ₱0 or less → `AMOUNT_NOT_POSITIVE`, nothing saved, next ops still run; categories add / rename / move + delete in one call; several recipes deleted in one call, in-use ones refused (all-or-nothing); a big Excel-import call; starting-price purchases add no stock (43) | — |
 | `sql/39_release_1_3_tests.sql` | 009 / release 1.3 wave 1 (fresh database → 10 → 11 → 39, like 38): `settings.subcategory_order` checks; QR menu `is_open` (shop open = any ACTIVE shift; closed → no items, `qr_place_order` → `SHOP_CLOSED`, stamp card still works, `ORDERING_OFF` first), colours / order / `recipe_type`; counter customers sort; `OUT_OF_STOCK` review flag; `start_fresh_preview` / `start_fresh` (85) | — |
 | `sql/40_release_1_4_tests.sql` | 010 / release 1.4 (fresh database → 10 → 11 → 40, like 39; adopted from the database engineer) (123) | — |
+| `sql/41_release_1_4_1_tests.sql` | 011 / release 1.4.1 public menu link (fresh database → 10 → 11 → 41, like 40; adopted from the database engineer): `public_menu(text)`, menu link settings | — |
 | `conc_checks.sh` | two sessions at the same moment (on the data 32 leaves): two owner refunds of one sale, two counters paying one QR order -> only one passes | — |
 | `unit/core_check.js` | `friendlyError` / `ERROR_TEXT`, `parseAuthRedirect`, `sessionFromUrl`, `updatePassword`, `resetPassword` (node, mocked fetch) | — |
 | `unit/error_codes_check.js` | every error code the database can send to an app has a plain-language text in that app (1.4: the Back Office row also covers the new 010 functions, from core's `bo14_error_codes_check`) | — |
