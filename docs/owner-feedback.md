@@ -183,3 +183,4 @@ Owner: **don't start 1.3 until I say so.**
 - **B14. Shorter menu page:** sub-categories become tabs, with one panel each that people can swipe left and right. This replaces the long single scroll.
 - **Open question:** did the owner run `011_release_1_4_1.sql` before merging? Until it is run, the menu link shows "not available".
 - **Owner (2026-11-09 23:55):** B13 and B14 move to **Wave 3 (1.5)**. Building them now is fine, but they are released together with Wave 3, not as a separate 1.4.2.
+- **Owner (2026-11-10 00:00):** ran 011 before merging #6, so 1.4.1 is live. On B13/B14: "then you can proceed if only a pull request is needed". Release them as **1.4.2** (a PR only, no DB) once tested, not with Wave 3.

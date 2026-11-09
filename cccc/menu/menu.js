@@ -1,5 +1,5 @@
 /* =====================================================================
-   PUBLIC MENU LINK (release 1.4.1, B10)
+   PUBLIC MENU LINK (release 1.4.1, B10; tabs + swipe panels 1.4.2)
    Opened from a shared link: .../cccc/menu/?shop=<code>   (default code: cccc)
    - View only: no ordering, no sign-in, no customer data.
    - One call to public_menu(p_shop) with the public anon key and NO login
@@ -19,7 +19,8 @@
   const CACHE_KEY = 'cccc.menu.cache.' + (shopOk ? rawShop : 'x');
   const REFRESH_AFTER_MS = 60 * 1000;   // reopened after a minute away → fetch again
 
-  const S = {menu: null, loadedAt: 0, hiddenAt: 0, loading: false, stale: false};
+  const S = {menu: null, loadedAt: 0, hiddenAt: 0, loading: false, stale: false,
+    cats: [], active: 0, activeName: null, liveTab: 0, lock: null};   // tabs (1.4.2)
   const $ = (sel, root) => (root || document).querySelector(sel);
 
   /* ---------------- helpers ---------------- */
@@ -230,6 +231,7 @@
     const main = $('#menu-main');
     const chips = $('#chips');
     if(!items.length){
+      S.cats = [];
       chips.hidden = true; chips.innerHTML = '';
       main.innerHTML = `${staleHtml()}<div class="empty"><h2 class="disp">Menu coming soon</h2><p>We're updating our menu. Drop by the counter to see what's brewing today.</p></div>${visitHtml(m.visit)}${footHtml(m)}`;
       return;
@@ -275,6 +277,7 @@
   }
   function renderNotFound(){
     applyTheme(null);
+    S.cats = [];
     $('#chips').hidden = true; $('#chips').innerHTML = '';
     $('#menu-main').innerHTML = `<div class="empty">
       <h2 class="disp">This menu isn't available right now</h2>
@@ -282,6 +285,7 @@
     </div>`;
   }
   function renderOffline(){
+    S.cats = [];
     $('#chips').hidden = true;
     $('#menu-main').innerHTML = `<div class="empty">
       <h2 class="disp">We couldn't open the menu</h2>
@@ -290,28 +294,124 @@
     </div>`;
   }
 
-  /* ---------------- chips follow the scroll ---------------- */
-  let observer = null;
-  function setActiveChip(i){
+  /* ---------------- tabs + swipe track (1.4.2) ----------------
+     One panel per sub-category in a horizontal scroll-snap track. The track is
+     exactly as tall as the active panel, so the PAGE does all vertical scrolling
+     (no scroll box inside a scroll box: no iOS scroll traps). Other panels are
+     clipped and `inert` until they become active. */
+  let resizeObs = null, settleTimer = 0, unlockTimer = 0;
+  const HAS_SCROLLEND = 'onscrollend' in window;
+  const trackEl = () => document.getElementById('track');
+  const panelEls = () => Array.from(document.querySelectorAll('#track > .panel'));
+  const isMulti = () => (S.cats || []).length > 1;
+  function smooth(){ return reducedMotion() ? 'auto' : 'smooth'; }
+
+  function markTabs(i){
     const all = document.querySelectorAll('#chips .chip');
-    all.forEach((c, j) => { c.classList.toggle('on', j === i); if(j === i) c.setAttribute('aria-current', 'true'); else c.removeAttribute('aria-current'); });
+    all.forEach((c, j) => {
+      const on = j === i;
+      c.classList.toggle('on', on);
+      c.setAttribute('aria-selected', on ? 'true' : 'false');
+      c.tabIndex = on ? 0 : -1;
+    });
     const on = all[i];
-    if(on && on.parentElement){
+    if(on && on.parentElement){   // bring the active tab into view inside the tab row only
       const row = on.parentElement;
-      const left = on.offsetLeft - (row.clientWidth - on.offsetWidth) / 2;
-      try{ row.scrollTo({left, behavior: reducedMotion() ? 'auto' : 'smooth'}); }catch(e){ row.scrollLeft = left; }
+      const left = Math.max(0, on.offsetLeft - (row.clientWidth - on.offsetWidth) / 2);
+      try{ row.scrollTo({left, behavior: smooth()}); }catch(e){ row.scrollLeft = left; }
     }
   }
-  function watchSections(){
-    if(observer){ observer.disconnect(); observer = null; }
-    if(typeof IntersectionObserver !== 'function') return;
-    const secs = Array.from(document.querySelectorAll('.sec'));
-    const visible = new Set();
-    observer = new IntersectionObserver(entries => {
-      entries.forEach(e => { const i = secs.indexOf(e.target); if(e.isIntersecting) visible.add(i); else visible.delete(i); });
-      if(visible.size) setActiveChip(Math.min.apply(null, Array.from(visible)));
-    }, {rootMargin: '-80px 0px -55% 0px'});
-    secs.forEach(s => observer.observe(s));
+  function sizeTrack(){
+    const t = trackEl();
+    if(!t) return;
+    if(!isMulti()){ t.style.height = ''; return; }
+    const p = panelEls()[S.active];
+    if(p) t.style.height = p.offsetHeight + 'px';
+  }
+  function panelLeft(i){ const t = trackEl(); return t ? i * t.clientWidth : 0; }
+  function indexAtScroll(){
+    const t = trackEl();
+    if(!t || !t.clientWidth) return S.active;
+    return Math.max(0, Math.min(S.cats.length - 1, Math.round(t.scrollLeft / t.clientWidth)));
+  }
+  // Scroll the page up to the panel's top if the person had scrolled past it
+  // (a short panel after a long one would otherwise leave them in the footer).
+  function alignPage(force){
+    const t = trackEl();
+    if(!t) return;
+    const chips = $('#chips');
+    const top = Math.max(0, Math.round(t.getBoundingClientRect().top + window.scrollY - (chips && !chips.hidden ? chips.offsetHeight : 0) - 8));
+    if(force || window.scrollY > top) window.scrollTo(0, top);
+  }
+  function setHash(i, mode){
+    const h = '#tab-' + (i + 1);
+    if(!mode || location.hash === h) return;
+    try{ history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', h); }catch(e){}
+  }
+  // o: {scroll: 'smooth'|'instant', hash: 'push'|'replace', align: bool}
+  function setActive(i, o){
+    o = o || {};
+    const n = (S.cats || []).length;
+    if(!n) return;
+    i = Math.max(0, Math.min(n - 1, i | 0));
+    S.active = i; S.activeName = S.cats[i];
+    if(!isMulti()) return;
+    markTabs(i);
+    panelEls().forEach((p, j) => { if(j === i) p.removeAttribute('inert'); else p.setAttribute('inert', ''); });
+    sizeTrack();
+    const t = trackEl();
+    if(o.scroll && t){
+      const left = panelLeft(i);
+      if(Math.abs(t.scrollLeft - left) > 1){
+        // While we slide, the tabs we pass over must not light up one by one.
+        S.lock = i;
+        clearTimeout(unlockTimer);
+        unlockTimer = setTimeout(() => { S.lock = null; }, 1200);
+        const how = o.scroll === 'smooth' ? smooth() : 'auto';
+        try{ t.scrollTo({left, behavior: how}); }catch(e){ t.scrollLeft = left; }
+      }
+    }
+    setHash(i, o.hash);
+    if(o.align) alignPage(false);
+  }
+  function settle(){
+    clearTimeout(settleTimer);
+    if(!isMulti()) return;
+    const i = indexAtScroll();
+    const locked = S.lock;
+    S.lock = null;
+    if(locked != null && i !== locked) return;   // a slide we started was interrupted mid-way; the next settle decides
+    if(i !== S.active) setActive(i, {hash: 'replace', align: true});
+    else markTabs(i);
+  }
+  function setupTrack(){
+    const t = trackEl();
+    if(resizeObs){ resizeObs.disconnect(); resizeObs = null; }
+    if(!t) return;
+    if(!isMulti()){ sizeTrack(); return; }
+    t.addEventListener('scroll', () => {
+      if(S.lock == null){
+        const i = indexAtScroll();
+        if(i !== S.liveTab){ S.liveTab = i; markTabs(i); }   // the tab follows the finger
+      }
+      if(!HAS_SCROLLEND){ clearTimeout(settleTimer); settleTimer = setTimeout(settle, 160); }
+    }, {passive: true});
+    if(HAS_SCROLLEND) t.addEventListener('scrollend', settle);
+    if(typeof ResizeObserver === 'function'){
+      resizeObs = new ResizeObserver(() => sizeTrack());
+      panelEls().forEach(p => resizeObs.observe(p));
+    }
+    S.liveTab = S.active;
+    setActive(S.active, {scroll: 'instant'});
+  }
+  function hashTarget(){
+    const h = (location.hash || '').slice(1);
+    let m = /^tab-(\d{1,4})$/.exec(h);
+    if(m) return {tab: Number(m[1]) - 1};
+    m = /^sec-(\d{1,4})$/.exec(h);                 // links shared before 1.4.2
+    if(m) return {tab: Number(m[1])};
+    if(/^item-\d{1,5}$/.test(h)) return {item: h};
+    return null;
   }
 
   /* ---------------- data ---------------- */
@@ -351,31 +451,87 @@
     }
   }
 
-  function jumpToHash(){
-    const id = (location.hash || '').slice(1);
-    if(!/^(sec|item)-\d+$/.test(id)) return;
+  // Opened from a shared link (#tab-3) or the back button: show that tab.
+  function jumpToHash(fromHistory){
+    const h = hashTarget();
+    if(!(S.cats || []).length) return;
+    if(!h){   // back to the plain link: first tab
+      if(fromHistory){ setActive(0, {scroll: 'instant'}); alignPage(false); }
+      return;
+    }
+    if(h.item){ jumpToItem(h.item, {instant: true, flash: false, hash: false}); return; }
+    if(h.tab < 0 || h.tab >= S.cats.length) return;
+    setActive(h.tab, {scroll: 'instant'});
+    alignPage(!fromHistory);
+  }
+  // Highlight card → its sub-category tab, then the item itself (with a short glow).
+  function jumpToItem(id, o){
     const t = document.getElementById(id);
-    if(t) t.scrollIntoView({block: 'start'});
+    if(!t) return false;
+    const p = t.closest('.panel');
+    const i = panelEls().indexOf(p);
+    if(i >= 0) setActive(i, {scroll: 'instant', hash: o.hash ? 'replace' : null});
+    const chips = $('#chips');
+    const top = Math.max(0, t.getBoundingClientRect().top + window.scrollY - (chips && !chips.hidden ? chips.offsetHeight : 0) - 14);
+    try{ window.scrollTo({top, behavior: o.instant ? 'auto' : smooth()}); }catch(e){ window.scrollTo(0, top); }
+    // Move keyboard focus with the jump (without a second scroll).
+    if(!t.hasAttribute('tabindex')) t.setAttribute('tabindex', '-1');
+    try{ t.focus({preventScroll: true}); }catch(err){ t.focus(); }
+    if(o.flash){ t.classList.remove('flash'); void t.offsetWidth; t.classList.add('flash'); }
+    return true;
   }
 
   /* ---------------- events ---------------- */
   document.addEventListener('click', (e) => {
     const r = e.target.closest('[data-retry]');
     if(r){ e.preventDefault(); load(); return; }
+    const tab = e.target.closest('#chips [data-tab]');
+    if(tab){
+      const i = Number(tab.getAttribute('data-tab'));
+      setActive(i, {scroll: 'smooth', hash: i === S.active ? null : 'push', align: true});
+      return;
+    }
+    const go = e.target.closest('[data-go]');
+    if(go){
+      const i = Number(go.getAttribute('data-go'));
+      setActive(i, {scroll: 'smooth', hash: 'push', align: true});
+      const p = panelEls()[S.active];   // the button's own panel is now inert: keep focus somewhere useful
+      if(p){ try{ p.focus({preventScroll: true}); }catch(err){} }
+      return;
+    }
     const j = e.target.closest('[data-jump]');
     if(j){
-      const t = document.getElementById(j.getAttribute('data-jump'));
-      if(!t) return;
-      e.preventDefault();
-      t.scrollIntoView({behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start'});
-      try{ history.replaceState(null, '', '#' + t.id); }catch(err){}
-      // Move keyboard focus with the jump (without a second scroll).
-      if(!t.hasAttribute('tabindex')) t.setAttribute('tabindex', '-1');
-      try{ t.focus({preventScroll: true}); }catch(err){ t.focus(); }
-      if(t.classList.contains('card') || t.classList.contains('gcard')){
-        t.classList.remove('flash'); void t.offsetWidth; t.classList.add('flash');
-      }
+      if(jumpToItem(j.getAttribute('data-jump'), {instant: false, flash: true, hash: true})) e.preventDefault();
     }
+  });
+  // Tabs keyboard: ← → move between tabs (and show that panel), Home / End jump to the ends.
+  document.addEventListener('keydown', (e) => {
+    const tab = e.target.closest && e.target.closest('#chips [data-tab]');
+    if(!tab || e.altKey || e.ctrlKey || e.metaKey) return;
+    const n = (S.cats || []).length;
+    const cur = Number(tab.getAttribute('data-tab'));
+    let i = null;
+    if(e.key === 'ArrowRight') i = (cur + 1) % n;
+    else if(e.key === 'ArrowLeft') i = (cur - 1 + n) % n;
+    else if(e.key === 'Home') i = 0;
+    else if(e.key === 'End') i = n - 1;
+    if(i == null) return;
+    e.preventDefault();
+    setActive(i, {scroll: 'smooth', hash: 'replace', align: true});
+    const b = document.getElementById('tab-btn-' + i);
+    if(b) b.focus();
+  });
+  window.addEventListener('popstate', () => jumpToHash(true));
+  window.addEventListener('hashchange', () => jumpToHash(true));
+  window.addEventListener('resize', () => {
+    // Width changed (rotation): put the active panel back in place and re-measure.
+    const t = trackEl();
+    if(!t || !isMulti()) return;
+    S.lock = S.active;
+    t.scrollLeft = panelLeft(S.active);
+    sizeTrack();
+    clearTimeout(unlockTimer);
+    unlockTimer = setTimeout(() => { S.lock = null; }, 200);
   });
   // A photo that fails to load turns into the no-photo tile.
   document.addEventListener('error', (e) => {

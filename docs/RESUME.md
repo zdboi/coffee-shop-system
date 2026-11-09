@@ -1,4 +1,4 @@
-# Resume here (save point: 2026-11-09, checkpoint 16, release 1.4.1 READY; live = 1.4)
+# Resume here (save point: 2026-11-10, checkpoint 17, release 1.4.1 LIVE)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
@@ -20,7 +20,9 @@ Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"
 - **QA:** `tests/run_all.sh --runs 2` passes 69/71 suites (4,295 checks). The 2 failures were one counter defect (D1), since fixed and re-tested. The money, stock, cash and brand-FIFO reconciliation (`tests/e2e/money12.e2e.js`) matches to the centavo. **Final run on the finished code (2026-11-02, `run_all.sh --runs 1`): 47 suites, 3,007 checks, 0 failing.**
 - **Security:** 008 passed two review rounds (all findings fixed). The 1.2 screens review found 4 low items, all fixed.
 
-## Now: release 1.4.1 (public menu link) is READY, waiting for the owner (`docs/RELEASE_1.4.1.md`: backup → run 011 → merge PR → reload → Settings → Menu link)
+## Now: 1.4.1 is LIVE (caecffa = last working version, checkpoint 17; 011 frozen, next script 012). Building 1.4.2 (no DB): menu link QR code (B13) and swipeable sub-category tabs (B14). The owner said on 2026-11-10 00:00 to release it as a PR once done (they first said Wave 3, then changed it). Wave 3 = everything else, not started.
+
+## Earlier: release 1.4.1 (public menu link) was READY, waiting for the owner (`docs/RELEASE_1.4.1.md`: backup → run 011 → merge PR → reload → Settings → Menu link)
 - **Contents:**
   - `public_menu` (anon, display data only, ~130 ms) and the menu link settings (011);
   - `cccc/menu/` (view-only page);
