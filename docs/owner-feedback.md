@@ -176,9 +176,10 @@ Owner: **don't start 1.3 until I say so.**
   - **Non-dairy swap wording on the QR page:** replace "In place of the usual" with a prompt, "Lactose intolerant? Have this instead", followed by the non-dairy swap options that are available right now (in stock, not sold out).
   - Lead note: availability per swap option may need `get_qr_menu` to say whether each swap's milk is in stock (display flag only, no amounts).
 
-## Release 1.4.2 (owner, 2026-11-09 23:53): "add to the build"
+## Menu link QR + swipeable tabs (owner, 2026-11-09 23:53), now part of Wave 3
 - PR #6 (1.4.1) was already merged when this came in, so these go into a small **1.4.2** with no database change.
 - **B13. QR code for the menu link:** Back Office → Settings → Menu link shows the QR, with Download PNG/SVG and Print card. The card is branded, says "Scan for our menu", and has no tagline.
   - **Overlap:** the table QR cards already exist (1.3). They are reused for the look, but they are table-order codes, not the menu link.
 - **B14. Shorter menu page:** sub-categories become tabs, with one panel each that people can swipe left and right. This replaces the long single scroll.
 - **Open question:** did the owner run `011_release_1_4_1.sql` before merging? Until it is run, the menu link shows "not available".
+- **Owner (2026-11-09 23:55):** B13 and B14 move to **Wave 3 (1.5)**. Building them now is fine, but they are released together with Wave 3, not as a separate 1.4.2.
