@@ -70,10 +70,17 @@ function menuTidyUrl(v){
   else if(!/^[a-z][a-z0-9+.-]*:/i.test(v)) v = 'https://' + v.replace(/^\/+/, '');
   return v;
 }
+// A photo link safe to put in <img src> (same rule as the database's _public_image_url):
+// http(s), printable ASCII, at most 1000 characters, no quotes / brackets / backslash / backtick.
+function menuSafeImageUrl(v){
+  v = String(v == null ? '' : v);
+  return v.length <= 1000 && /^https?:\/\/[\x21-\x7E]+$/.test(v) && !/["'<>\\`()]/.test(v) ? v : '';
+}
 // The same check as the database (_valid_public_url): '' = fine, else the error code.
 function menuUrlProblem(v, hosts, code){
   if(!v) return '';
-  if(v.length > 500 || !/^https:\/\/[^\s"'<>\\`]+$/.test(v)) return code;
+  // printable ASCII only (no spaces, accented letters or other scripts), like the database
+  if(v.length > 500 || !/^https:\/\/[\x21-\x7E]+$/.test(v) || /["'<>\\`]/.test(v)) return code;
   const host = (/^https:\/\/([^/?#]+)/.exec(v) || [])[1] || '';
   if(!/^[A-Za-z0-9.-]+$/.test(host)) return code;
   if(hosts && !hosts.includes(host.toLowerCase())) return code;
@@ -194,7 +201,7 @@ function wireMenuLink(root){
     else {
       const ok = menuEligible(r);
       box.innerHTML = `<div class="ml-pick">
-        ${r.image_url ? `<img class="thumb" src="${esc(r.image_url)}" alt="">` : '<span class="thumb ml-nothumb" aria-hidden="true"></span>'}
+        ${menuSafeImageUrl(r.image_url) ? `<img class="thumb" src="${esc(menuSafeImageUrl(r.image_url))}" alt="">` : '<span class="thumb ml-nothumb" aria-hidden="true"></span>'}
         <span class="ml-pick-name"><b>${esc(r.name)}</b><span class="text-light">${esc(fmtMoney(r.selling_price))}${r.sold_out ? ' · sold out today' : ''}</span>
           ${ok ? '' : '<span class="ml-pick-warn">Not on the menu link right now (hidden, inactive or without a price), so no item is highlighted.</span>'}</span>
         <button class="btn btn-ghost btn-sm" type="button" id="ml-clear">Clear</button></div>`;
