@@ -129,3 +129,13 @@ Owner: **don't start 1.3 until I say so.**
   - **Decision: a Back Office R&D log.** Ingredients used are logged with a project name. They count as waste (new reason RND) and show as R&D cost per project in reports.
   - Overlaps the waste log and Waste report (1.4), which it reuses.
 - **Placement:** all three join **Wave 3 (1.5)**, with QR accounts & security.
+- **B9. End-of-shift stock count (owner, 2026-11-09 11:03):** "a checklist on the POS to input the actual count/weight of products before closing shift; missing stock counts as waste; prompt to double check before confirming; only the admin can revise."
+  - **Overlap:** the Back Office already has "Adjust stock" (one item at a time) and "Record waste". There is no counter count and no count list.
+  - **Decisions:**
+    - **Which items:** the owner ticks "Count at closing" per ingredient or item in the Back Office, and only those appear.
+    - **Blind count:** staff don't see expected amounts. The double-check prompt then lists only the items that differ, so staff recount those before confirming.
+    - **Required before Close shift.** It works offline and uploads later.
+    - **Missing amounts** are recorded as waste with a new reason, COUNT_SHORTAGE (shown as "Missing at count").
+    - **Extra stock** raises stock to the count and is flagged in "Needs review". It is never negative waste.
+    - **Only the owner (ADMIN)** can revise a submitted count, in the Back Office, with an audit entry.
+  - **Placement:** Wave 3 (1.5).
