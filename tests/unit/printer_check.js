@@ -238,7 +238,10 @@ function fakeBle(o){
     eq('iPad: plain message', /iPad and iPhone/.test(e.r(`Printer.supportText()`)), true);
     await e.r(`Printer.saveSettings({connection: 'bluetooth'})`);
     const res = await e.r(`Printer.printReceipt(SALE, ITEMS, PAYS, {})`);
-    eq('iPad + bluetooth setting -> print dialog used', [res.method, e.printed.length, /Receipt TXN-0042/.test(e.printed[0] && e.printed[0].html)], ['dialog', 1, true]);
+    // 1.4 (lead-approved 2026-11-09): the print screen never opens by itself; only opts.fallback === true opens it
+    eq('iPad + bluetooth setting -> NOT_CONNECTED, no print screen by itself', [res.ok, res.method, res.code, e.printed.length], [false, 'none', 'NOT_CONNECTED', 0]);
+    const resF = await e.r(`Printer.printReceipt(SALE, ITEMS, PAYS, {fallback: true})`);
+    eq('iPad + "Use print screen" (fallback: true) -> print dialog used', [resF.method, e.printed.length, /Receipt TXN-0042/.test(e.printed[0] && e.printed[0].html)], ['dialog', 1, true]);
     let threw = null; try{ await e.r(`Printer.choose()`); }catch(x){ threw = x.friendly; }
     eq('iPad: choose() refuses in plain words', /iPad and iPhone/.test(threw || ''), true);
     const ff = makeEnv({nav: {userAgent: 'Mozilla/5.0 (Windows NT 10.0) Gecko/20100101 Firefox/131.0'}});
@@ -303,11 +306,12 @@ function fakeBle(o){
       [false, true, 'bluetooth', 0, true, true, false]);
     // printer gone before anything was sent
     const res4b = await e4.r(`Printer.printReceipt(SALE, ITEMS, PAYS, {})`);
-    eq('failed before any byte -> print screen fallback', [res4b.ok, res4b.partial, res4b.method, e4.printed.length, /^Couldn't reach the printer "Printer001"/.test(res4b.error)], [false, false, 'dialog', 1, true]);
+    // 1.4: the result carries code NOT_CONNECTED (error) and the plain words in message
+    eq('failed before any byte -> NOT_CONNECTED + plain words, no print screen by itself (1.4)', [res4b.ok, res4b.partial, res4b.method, e4.printed.length, res4b.code, /^Couldn't reach the printer "Printer001"/.test(res4b.message || '')], [false, false, 'bluetooth', 0, 'NOT_CONNECTED', true]);
     const res4c = await e4.r(`Printer.printReceipt(SALE, ITEMS, PAYS, {fallback: false})`);
-    eq('fallback:false -> no print screen', [res4c.ok, res4c.partial, e4.printed.length], [false, false, 1]);
+    eq('fallback:false -> no print screen', [res4c.ok, res4c.partial, e4.printed.length], [false, false, 0]);
     const res4d = await e4.r(`Printer.printReceipt(SALE, ITEMS, PAYS, {auto: true})`);
-    eq('auto-print after a sale never opens the print screen on failure', [res4d.ok, res4d.method, e4.printed.length, !!res4d.error], [false, 'bluetooth', 1, true]);
+    eq('auto-print after a sale never opens the print screen on failure', [res4d.ok, res4d.method, e4.printed.length, !!res4d.error], [false, 'bluetooth', 0, true]);
     // drawer reached the printer, then it stopped part-way
     const f4e = fakeBle({dropAfter: 1, refuseConnect: true, refuseAfter: 1});
     const e4e = makeEnv({nav: {userAgent: 'Chrome', bluetooth: f4e.bluetooth}}); e4e.r(SAMPLE);

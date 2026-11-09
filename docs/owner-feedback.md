@@ -74,3 +74,45 @@ Owner: **don't start 1.3 until I say so.**
 | A16 | **Arrange the order of sub-categories on the menu**, on the counter AND the customer's QR page. General rule: **drinks always come first, then pastries and food.** | **New** (today the counter sorts sub-categories A–Z; items inside keep their own sort order). 1.3: a drag-to-arrange list in Recipes & menu (next to Sub-category colours), saved once for the shop and used by the counter, the QR page and the Back Office recipes list (A14). Drinks sub-categories are always kept above pastry/food ones: the owner arranges within each block. New sub-categories go to the end of their block until moved. |
 | A17 | **Counter Customers tab: sort by name (A–Z), most recent visitors, or most frequent visitors.** | **New** (today the list comes in one fixed order with a nickname search). 1.3: a sort switch on the Customers tab; the server sorts (so it works with the 50-per-page limit and the search); the choice is remembered on that counter. Same masking/money rules as 1.2. |
 | A18 | **QR code printouts in the café's theme** (logo, Brunson wordmark, brand colours). | Partly exists: Tables & QR codes prints plain QR cards. Wave 1 (1.3). |
+
+## Release 1.4 (Wave 2) decisions (owner, 2026-11-02 23:10)
+- Owner: "009 is live… proceed with the next wave."
+- **A9, non-dairy swap price:** **one extra price for all** (e.g. +₱30), set once in the option library.
+- **A9, take-away cups:** **counted as stock.** Cups and lids are stock items, a take-away choice deducts them, and low-stock warnings apply.
+- **A15, waste approval:** **only Complimentary** needs a manager's PIN. Calibration, spillage and expired don't.
+- **A10, "weighs":** **house-made (produced) sauces only.** Bought liquids stay in mL.
+
+## Release 1.4 addition: thermal printing on Mac (owner, 2026-11-08 20:34)
+- Owner: "Before we put 1.4 live, fix the thermal printer logic. MacBooks are having a hard time recognizing the printer; the app must automatically print orders and the shift report on the thermal printer, not prompt to save as PDF."
+- **Mac counter browser:** Brave. Brave blocks some device access by default. Chrome is recommended.
+- **Connection:** Xprinter 58 mm over a **USB cable** (WebUSB, reconnected silently).
+- **Prints automatically:** the receipt after payment, a barista order ticket, QR orders when they arrive (one counter only), and the shift (Z) report when the shift closes. The X report prints on tap.
+- **No print dialog on its own.** "Use print screen" only appears as an explicit button after a failure.
+
+## New items for after 1.4 (owner, 2026-11-09 02:00), not yet planned
+- **B1. Accounting overview:** one page showing gross sales, net sales, expenses, waste amount, discounts, voids and more.
+  - Overlaps the 1.4 Net income page, the Waste report, and Reports (sales summary, Discounts, Refunds & voids).
+  - Proposal: grow Net income into this page instead of adding a duplicate.
+- **B2. Investor equity:** new; nothing like it exists. Details still to settle: capital contributions, ownership %, profit share and payouts, payback. Capital must never be counted as an expense or as sales.
+- **B3. Referrals and other perks (future):** new.
+  - Can reuse the stamp-card rewards (1.2) for referral rewards.
+  - Can reuse the Wave 3 usernames and registration as referral codes.
+  - Overlaps the planned RPG loyalty perks, so plan the two together.
+- **B4. Edit payment methods (owner, 2026-11-09 02:03):** the owner wants Cash, GCash, QR payment, Card and Bank transfer, and to be able to edit the list.
+  - Today the list is fixed in code: Cash, GCash, Maya, Card, Other. The database also accepts BANK.
+  - There is no edit screen. It overlaps nothing.
+- **B5. Extra charge per payment method (owner, 2026-11-09 02:03):** new; only the shop-wide service charge exists today.
+  - PH rules (DTI DAO 21-03, DAO 10 s.2006, Consumer Act) appear to bar charging card/digital buyers more than the displayed price. A cash discount is allowed.
+  - Waiting for the owner to choose among:
+    - a surcharge anyway;
+    - a cash discount instead;
+    - tracking the provider's fee as the shop's cost.
+- **B5 decision (owner, 2026-11-09 02:06):** "go for C and put it in accounting overview."
+  - Build an extra charge per payment method, set by the owner per method (amount or %), shown on the counter screen and on the receipt.
+  - It is calculated in the shared totals (`computeSaleTotals`) and checked by the server like tax and the service charge.
+  - The Accounting overview shows payment-method charges collected as their own line.
+  - The owner was told about DTI DAO 21-03 and takes responsibility for using it.
+- **Planned placement (pending the owner's go):**
+  - Wave 3 (1.5) = QR accounts and security.
+  - Wave 4 (1.6) "Money & owners" = B1 Accounting overview, B2 investor equity, B4 editable payment methods, B5 payment-method charges.
+  - Later, planned together: B3 referrals and RPG loyalty.

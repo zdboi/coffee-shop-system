@@ -12,8 +12,9 @@ If an update goes wrong, tell C: **"Go back to the last working version."**
 
 | Apps | Live since | Browse | Download |
 |---|---|---|---|
-| Counter, Back Office, QR page (all apps), release 1.2 | 2026-11-02 (pull request #3; database script 008 run) | [a44a123](https://github.com/zdboi/coffee-shop-system/tree/a44a123b513e0c031fbaad9923ecc8cc6a34831b) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/a44a123b513e0c031fbaad9923ecc8cc6a34831b.zip) |
-| *(previous)* release 1.1 | 2026-10-26 (pull request #2; database script 007 run) | [0741e1b](https://github.com/zdboi/coffee-shop-system/tree/0741e1b567a6e662f52d38d1b0d4872720e6777e) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/0741e1b567a6e662f52d38d1b0d4872720e6777e.zip) |
+| Counter, Back Office, QR page (all apps), release 1.3 | 2026-11-02 (pull request #4; database script 009 run) | [abcff5b](https://github.com/zdboi/coffee-shop-system/tree/abcff5bd5dc57e047d9c1bb914ef2e3c8ea4c06d) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/abcff5bd5dc57e047d9c1bb914ef2e3c8ea4c06d.zip) |
+| *(previous)* release 1.2 | 2026-11-02 (pull request #3; database script 008 run) | [a44a123](https://github.com/zdboi/coffee-shop-system/tree/a44a123b513e0c031fbaad9923ecc8cc6a34831b) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/a44a123b513e0c031fbaad9923ecc8cc6a34831b.zip) |
+| *(older)* release 1.1 | 2026-10-26 (pull request #2; database script 007 run) | [0741e1b](https://github.com/zdboi/coffee-shop-system/tree/0741e1b567a6e662f52d38d1b0d4872720e6777e) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/0741e1b567a6e662f52d38d1b0d4872720e6777e.zip) |
 | *(older)* release 1.0 | 2026-10-20 (pull request #1) | [a53238e](https://github.com/zdboi/coffee-shop-system/tree/a53238e77f374c38c4f730101b84f5a5898ee00f) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/a53238e77f374c38c4f730101b84f5a5898ee00f.zip) |
 
 Older working versions stay in the table below, so you can go back further if needed.
@@ -33,6 +34,8 @@ Older working versions stay in the table below, so you can go back further if ne
 | 10 | **Release 1.2 ready** | 2026-11-02 | Full redesign (your logo colours, Brunson, wordmark); counter Orders + Customers + stamp rewards + QR floor plan; Back Office floor plan editor, tile colours, ingredient brands (oldest stock first), loyalty settings; QR stamp card. final test run 47 suites / 3,007 checks, 0 failing; money/stock/cash reconciliation matches; security reviews passed. Waiting for you to publish (`docs/RELEASE_1.2.md`). |
 | 11 | **Release 1.2 live** | 2026-11-02 | You ran `008_release_1_2.sql` and merged pull request #3. This is now the last working version. |
 | 12 | **Release 1.3 ready** | 2026-11-02 | Wave 1 "Opening day": receipt printer (Xprinter 58 mm, Bluetooth), "Sarado pa po kami!", QR ticket colours + pickup banner, sub-category order, out-of-stock check at payment, customers sort, retry without the reward, tick-and-remove ingredients, branded QR cards, Start fresh. Final test run 54 suites / 3,414 checks, 0 failing; security review ready. Waiting for you to publish (`docs/RELEASE_1.3.md`). |
+| 13 | **Release 1.3 live** | 2026-11-02 23:00 | You ran `009_release_1_3.sql` and merged pull request #4. This is now the last working version. |
+| 14 | **Release 1.4 ready** | 2026-11-09 | Wave 2 "Menu & inventory": merge ingredients, option library (Hot/Iced, take-away cup + lid, extra shot, non-dairy swap), supplied items, grams for sauces, counter waste log, expenses + net income + waste report; plus USB thermal printing on Mac (receipt, barista ticket with PAID line, QR tickets, shift report; no PDF prompts). Final test run 65 suites / 4,019 checks, 0 failing; security reviews passed. Waiting for you to publish (`docs/RELEASE_1.4.md`). |
 
 ## Look at or download a checkpoint
 

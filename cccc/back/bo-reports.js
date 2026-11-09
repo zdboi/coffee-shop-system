@@ -39,7 +39,7 @@ function cellNum(c){ return (c && typeof c === 'object' && 'money' in c) || type
 /* ---- the original inventory reports (unchanged formulas) ---- */
 function stockReport(id){
   const warnPct = num(state.settings.food_cost_warning_pct) || 35;
-  const active = state.ingredients.filter(i => i.active !== false);
+  const active = stockIngredientsList();        // 1.4: counted stock only (not merged away, not operating supplies)
   const sellable = state.recipes.filter(r => r.active !== false && num(r.selling_price) > 0);
   switch(id){
     case 'priceChanges': {

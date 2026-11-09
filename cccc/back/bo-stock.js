@@ -21,8 +21,9 @@ function txnTypeBadge(type){
 /* ---- typing a quantity in the unit the owner wants (owner request #3, 2026-10-25) ----
    The number is typed in any unit of the ingredient's family (g/kg, mL/L); what is SAVED is always the
    ingredient's base unit (toBaseUnit). Changing the dropdown converts the number already typed. */
-function unitOptionsHtml(baseUnit, selected){
-  const list = compatibleUnits(baseUnit);
+// w (optional, 1.4) = the item's "weighs" (grams in one mL): a house-made sauce counted in L can also be typed in g / kg.
+function unitOptionsHtml(baseUnit, selected, w){
+  const list = compatibleUnits(baseUnit, w);
   const sel = list.includes(selected) ? selected : baseUnit;
   return list.map(u => `<option value="${esc(u)}" ${u === sel ? 'selected' : ''}>${esc(unitLabel(u))}</option>`).join('');
 }
@@ -45,7 +46,7 @@ function wireUnitConvert(input, select, onChange){
   select.addEventListener('change', () => {
     const from = select.dataset.prev, to = select.value;
     if(input && input.value !== '' && input.dataset.typed !== '1' && from && from !== to){
-      const v = convertQuantity(input.value, from, to);
+      const v = convertQuantity(input.value, from, to, select.dataset.w || null);
       if(v != null) input.value = String(v);
     }
     select.dataset.prev = to;
@@ -53,34 +54,64 @@ function wireUnitConvert(input, select, onChange){
   });
 }
 // Another ingredient chosen: offer its units again (keeps the chosen unit when it still fits)
-function resetUnitSelect(select, baseUnit){
-  const keep = compatibleUnits(baseUnit).includes(select.value) ? select.value : baseUnit;
-  select.innerHTML = unitOptionsHtml(baseUnit, keep);
+function resetUnitSelect(select, baseUnit, w){
+  const keep = compatibleUnits(baseUnit, w).includes(select.value) ? select.value : baseUnit;
+  select.innerHTML = unitOptionsHtml(baseUnit, keep, w);
   select.dataset.prev = select.value;
+  select.dataset.w = Number(w) > 0 ? String(w) : '';
 }
-// typed quantity -> base unit (null when it can't be converted)
-function typedToBase(value, unit, baseUnit){ return toBaseUnit(num(value), unit || baseUnit, baseUnit); }
+// typed quantity -> base unit (null when it can't be converted); w = the item's "weighs" (optional)
+function typedToBase(value, unit, baseUnit, w){ return toBaseUnit(num(value), unit || baseUnit, baseUnit, Number(w) > 0 ? w : undefined); }
 // "1.5 L (1500 mL)" when the typed unit is not the base unit, else "1500 mL"
-function typedQtyText(qtyBase, baseUnit, typedUnit){
+function typedQtyText(qtyBase, baseUnit, typedUnit, w){
   const base = formatQuantity(qtyBase, baseUnit, baseUnit);
-  return typedUnit && typedUnit !== baseUnit ? `${formatQuantity(qtyBase, baseUnit, typedUnit)} (${base})` : base;
+  return typedUnit && typedUnit !== baseUnit ? `${formatQuantity(qtyBase, baseUnit, typedUnit, 2, Number(w) > 0 ? w : undefined)} (${base})` : base;
 }
 
-function activeIngredientsSorted(){ return state.ingredients.filter(i => i.active !== false).sort(byName); }
+// Release 1.4: pickers come from the shared helpers (merged ingredients are never offered; operating
+// supplies only where buying them is recorded as an expense).
+function activeIngredientsSorted(){ return ingredientPickerList().sort(byName); }
 function ingredientOptionsGrouped(selectedId, excludeId){
-  const raw = rawIngredientsList().filter(i => i.id !== excludeId).sort(byName);
-  const produced = producedIngredientsList().filter(i => i.id !== excludeId).sort(byName);
+  const pick = ingredientPickerList().filter(i => i.id !== excludeId);
+  const raw = pick.filter(i => !isProducedItem(i)).sort(byName);
+  const produced = pick.filter(i => isProducedItem(i)).sort(byName);
   let html = '';
   if(raw.length) html += `<optgroup label="Raw ingredients">${raw.map(i => `<option value="${esc(i.id)}" ${selectedId === i.id ? 'selected' : ''}>${esc(i.name)} (${esc(i.base_unit)})</option>`).join('')}</optgroup>`;
   if(produced.length) html += `<optgroup label="Produced items (house-made)">${produced.map(i => `<option value="${esc(i.id)}" ${selectedId === i.id ? 'selected' : ''}>${esc(i.name)} (house-made, ${esc(i.base_unit)})</option>`).join('')}</optgroup>`;
   // an inactive ingredient still used by this line stays selectable
   const cur = selectedId && ingredientById(selectedId);
-  if(cur && cur.active === false) html += `<option value="${esc(cur.id)}" selected>${esc(cur.name)} (inactive)</option>`;
+  if(cur && !pick.some(i => i.id === cur.id) && cur.id !== excludeId) html += `<option value="${esc(cur.id)}" selected>${esc(cur.name)} (${isMergedIngredient(cur) ? 'merged into ' + esc(ingName(cur.merged_into)) : cur.active === false ? 'inactive' : 'operating supply'})</option>`;
   return html;
 }
-// Recipes whose options use this ingredient as an "extra" (e.g. Extra shot -> beans)
+// Does this option use the ingredient (an extra, the old single pair, or either side of a swap)?
+function optionUsesIngredient(o, ingredientId){
+  if(!o) return false;
+  if(o.ingredient_id === ingredientId || o.swap_from_ingredient_id === ingredientId || o.swap_to_ingredient_id === ingredientId) return true;
+  return (Array.isArray(o.extras) ? o.extras : []).some(e => e && e.ingredient_id === ingredientId);
+}
+// Recipes whose options use this ingredient (e.g. Extra shot -> beans; take-away -> cups; a milk swap)
 function recipesUsingAsOption(ingredientId){
-  return state.recipes.filter(r => (r.modifier_groups || []).some(g => (g.options || []).some(o => o.ingredient_id === ingredientId)));
+  return state.recipes.filter(r => recipeOptionGroups(r).some(g => (g.options || []).some(o => optionUsesIngredient(o, ingredientId))));
+}
+// Library groups (Options library) whose options use this ingredient
+function libraryGroupsUsing(ingredientId){
+  return (state.optionGroups || []).filter(g => (Array.isArray(g.options) ? g.options : []).some(o => optionUsesIngredient(o, ingredientId)));
+}
+// Small labels for the kind of item (release 1.4)
+function suppliedRecipeFor(ingredientId){ return state.recipes.find(r => r.supplied_ingredient_id === ingredientId) || null; }
+function ingredientKindBadge(i){
+  if(isMergedIngredient(i)) return '<span class="badge badge-gray">Merged</span>';
+  if(isExpenseIngredient(i)) return '<span class="badge badge-yellow" title="Buying it is an expense; not counted as stock">Operating supply</span>';
+  if(isProducedItem(i)) return '<span class="badge badge-gray">Produced</span>';
+  if(suppliedRecipeFor(i.id)) return '<span class="badge badge-green" title="Bought ready-made and resold per piece">Supplied</span>';
+  return '<span class="badge badge-gray" style="opacity:.6;">Raw</span>';
+}
+// "1 L weighs 1,250 g" (empty when the item has no "weighs")
+function weighsText(i){
+  const w = Number(i && i.weight_g_per_ml);
+  if(!(w > 0)) return '';
+  return unitFamily(i.base_unit) === 'volume' && i.base_unit !== 'ml'
+    ? `1 L weighs ${Number((w * 1000).toFixed(3)).toLocaleString('en-PH')} g` : `1 mL weighs ${Number(w.toFixed(6)).toLocaleString('en-PH')} g`;
 }
 
 /* ================= Ingredients ================= */
@@ -115,6 +146,7 @@ function renderIngredients(){
     </div>
     <div class="rec-pick-bar" id="ing-pick-bar">
       <label class="chk"><input type="checkbox" id="ing-pick-all"> Select all shown</label>
+      <button class="btn btn-sm btn-outline" id="ing-merge-picked" type="button" disabled title="Make the ticked ingredients brands of one general ingredient">Merge into one (0)</button>
       <button class="btn btn-sm btn-danger" id="ing-remove-picked" type="button" disabled>Remove selected (0)</button>
     </div>
     <div id="ing-table-wrap"></div>`;
@@ -130,6 +162,8 @@ function renderIngredients(){
   q('ing-cat-filter').onchange = (e) => { ingFilter.category = e.target.value; renderIngredientsTable(); };
   q('ing-status-filter').onchange = (e) => { ingFilter.status = e.target.value; renderIngredientsTable(); };
   q('ing-inactive').onchange = (e) => { ingFilter.inactive = e.target.checked; renderIngredientsTable(); };
+  const mg = q('ing-merge-picked');
+  if(mg) mg.onclick = () => openMergeTool([...ingPicked]);       // bo-merge.js (1.4, A12)
   renderIngredientsTable();
 }
 function ingShownList(){
@@ -138,7 +172,7 @@ function ingShownList(){
   if(ingFilter.type === 'RAW') list = list.filter(i => !isProducedItem(i));
   if(ingFilter.type === 'PRODUCED') list = list.filter(i => isProducedItem(i));
   if(ingFilter.category) list = list.filter(i => i.category_id === ingFilter.category);
-  if(ingFilter.status) list = list.filter(i => stockStatus(ingredientStock(i.id), i.reorder_level) === ingFilter.status);
+  if(ingFilter.status) list = list.filter(i => isStockIngredient(i) && stockStatus(ingredientStock(i.id), i.reorder_level) === ingFilter.status);
   return list.sort(byName);
 }
 // Ticks only count for ingredients that are shown; the bar shows how many are ticked.
@@ -147,6 +181,8 @@ function refreshIngPickBar(){
   [...ingPicked].forEach(id => { if(!shown.has(id)) ingPicked.delete(id); });
   const rm = document.getElementById('ing-remove-picked'), all = document.getElementById('ing-pick-all');
   if(rm && !rm.dataset.busy){ rm.textContent = `Remove selected (${ingPicked.size})`; rm.disabled = ingPicked.size === 0; }
+  const mg = document.getElementById('ing-merge-picked');
+  if(mg){ mg.textContent = `Merge into one (${ingPicked.size})`; mg.disabled = ingPicked.size === 0; }
   if(all){ all.checked = shown.size > 0 && ingPicked.size === shown.size; all.indeterminate = ingPicked.size > 0 && ingPicked.size < shown.size; all.disabled = shown.size === 0; }
 }
 function renderIngredientsTable(){
@@ -163,15 +199,16 @@ function renderIngredientsTable(){
     <thead><tr><th class="ing-tick-col"><span class="sr-only">Select</span></th><th>Ingredient</th><th>Type</th><th>Category</th><th class="num">Stock</th><th>Unit</th><th class="num">Current cost</th><th class="num">Reorder level</th><th>Status</th><th></th></tr></thead>
     <tbody>${list.map(i => {
       const stock = ingredientStock(i.id), costing = ingredientCosting(i.id);
+      const merged = isMergedIngredient(i), supply = !merged && isExpenseIngredient(i);
       return `<tr class="clickable ${i.active === false ? 'muted-row' : ''} ${ingPicked.has(i.id) ? 'picked-row' : ''}" data-id="${esc(i.id)}">
-        <td class="ing-tick-col"><label class="rec-tick" title="Select for removing"><input type="checkbox" data-ing-pick="${esc(i.id)}" ${ingPicked.has(i.id) ? 'checked' : ''} aria-label="Select ${esc(i.name)}"></label></td>
-        <td><b>${esc(i.name)}</b>${i.active === false ? ' <span class="badge badge-gray">Inactive</span>' : ''}</td>
-        <td>${isProducedItem(i) ? '<span class="badge badge-gray">Produced</span>' : '<span class="badge badge-gray" style="opacity:.6;">Raw</span>'}</td>
+        <td class="ing-tick-col"><label class="rec-tick" title="${merged ? 'Already merged' : 'Select'}"><input type="checkbox" data-ing-pick="${esc(i.id)}" ${ingPicked.has(i.id) ? 'checked' : ''} ${merged ? 'disabled' : ''} aria-label="Select ${esc(i.name)}"></label></td>
+        <td><b>${esc(i.name)}</b>${merged ? ` <span class="badge badge-gray">Merged into ${esc(ingName(i.merged_into))}</span>` : i.active === false ? ' <span class="badge badge-gray">Inactive</span>' : ''}</td>
+        <td>${ingredientKindBadge(i)}</td>
         <td>${esc(catName(i.category_id))}</td>
-        <td class="num">${fmtNum(stock, 2)}${brandInUseLine(i.id)}</td><td>${esc(i.base_unit)}</td>
-        <td class="num">${fmtMoney(costing.current)}/${esc(i.base_unit)}</td>
-        <td class="num">${fmtNum(i.reorder_level, 1)}</td>
-        <td>${statusBadge(stockStatus(stock, i.reorder_level))}</td>
+        <td class="num">${merged || supply ? '<span class="text-light">—</span>' : fmtNum(stock, 2) + brandInUseLine(i.id)}</td><td>${esc(i.base_unit)}</td>
+        <td class="num">${merged ? '<span class="text-light">—</span>' : `${fmtMoney(costing.current)}/${esc(i.base_unit)}`}</td>
+        <td class="num">${merged || supply ? '<span class="text-light">—</span>' : fmtNum(i.reorder_level, 1)}</td>
+        <td>${merged ? '<span class="badge badge-gray">Brand now</span>' : supply ? '<span class="badge badge-gray" title="Operating supplies are recorded as expenses">Not stock</span>' : statusBadge(stockStatus(stock, i.reorder_level))}</td>
         <td><button class="btn btn-sm btn-ghost" data-edit="${esc(i.id)}">Edit</button></td>
       </tr>`;
     }).join('')}</tbody></table></div>`;
@@ -305,7 +342,9 @@ function openIngredientForm(id){
     ${produced ? `<div class="card soft-card" style="margin-bottom:14px;font-size:13px;">
       This is a <b>produced item</b>, linked to the recipe <a class="linklike" id="goto-source-recipe">${esc(sourceRecipe ? sourceRecipe.name : '(recipe deleted)')}</a>.
       Its name, base unit and yield are managed from that recipe. Reorder level, category, supplier and storage details can still be edited here.</div>` : ''}
-    ${editing && editing.active === false ? `<div class="notice warn">This ingredient is inactive: it is hidden from lists and new recipes. Its history is kept.</div>` : ''}
+    ${editing && isMergedIngredient(editing) ? `<div class="notice warn">This ingredient was merged into <b>${esc(ingName(editing.merged_into))}</b> and is a brand of it now. Its purchases and stock moved there. It stays here, switched off, so older counters can still upload.</div>`
+      : editing && editing.active === false ? `<div class="notice warn">This ingredient is inactive: it is hidden from lists and new recipes. Its history is kept.</div>` : ''}
+    ${editing && !isMergedIngredient(editing) && isExpenseIngredient(editing) ? `<div class="notice">This is an <b>operating supply</b> (its category "${esc(catName(editing.category_id))}" counts as an expense). Buying it is recorded as an expense, not stock.</div>` : ''}
     <div class="form-row"><label for="f-name">Ingredient name</label><input id="f-name" maxlength="80" value="${esc(editing ? editing.name : '')}" placeholder="e.g. Milk" ${produced ? 'disabled' : ''}></div>
     <div class="form-grid">
       <div class="form-row"><label for="f-cat">Category</label><select id="f-cat">${selectOptions(state.categories.slice().sort(byName), editing ? editing.category_id : (state.categories.slice().sort(byName)[0] || {}).id)}</select>
@@ -317,6 +356,7 @@ function openIngredientForm(id){
       <div class="form-row"><label for="f-unit">Base unit</label><select id="f-unit" ${produced ? 'disabled' : ''}>${UNITS.map(u => `<option value="${u}" ${editing && editing.base_unit === u ? 'selected' : ''}>${u}</option>`).join('')}</select><div class="hint">The unit costing and recipes use (e.g. g, ml, pcs)</div></div>
       <div class="form-row"><label for="f-reorder">Reorder level</label><input id="f-reorder" type="number" step="any" min="0" value="${esc(editing ? num(editing.reorder_level) : num(s.low_stock_default_threshold))}"></div>
     </div>
+    ${produced && unitFamily(editing.base_unit) !== 'count' ? weighsFieldHtml(editing) : ''}
     ${produced ? `<div class="form-grid">
       <div class="form-row"><label for="f-shelflife">Shelf life (days, optional)</label><input id="f-shelflife" type="number" step="1" min="0" value="${esc(editing.shelf_life_days || '')}"></div>
       <div class="form-row"><label for="f-storage">Storage notes</label><input id="f-storage" maxlength="120" value="${esc(editing.storage_notes || '')}" placeholder="e.g. Refrigerated"></div>
@@ -325,7 +365,7 @@ function openIngredientForm(id){
       <div class="form-row"><label for="f-initial-brand">Brand of this stock (optional)</label><input id="f-initial-brand" maxlength="60" placeholder="e.g. Laciate" autocomplete="off"><div class="hint">Adds the brand to this ingredient. More brands can be added on its page.</div></div></div>` : ''}
     <div class="form-row"><label for="f-notes">Notes</label><textarea id="f-notes" rows="2">${esc(editing ? (editing.notes || '') : '')}</textarea></div>`;
   const foot = `
-    ${editing ? (editing.active === false
+    ${editing ? (isMergedIngredient(editing) ? '<span style="margin-right:auto;"></span>' : editing.active === false
       ? `<button class="btn btn-outline" id="btn-reactivate-ing" style="margin-right:auto;">Make active again</button>`
       : `<button class="btn btn-danger" id="btn-delete-ing" style="margin-right:auto;">Delete</button>`) : ''}
     <button class="btn btn-outline" data-cancel>Cancel</button>
@@ -402,12 +442,17 @@ function openIngredientForm(id){
       if(produced){
         fields.shelf_life_days = Number(root.querySelector('#f-shelflife').value) || null;
         fields.storage_notes = root.querySelector('#f-storage').value;
+        const wf = readWeighsField(root);
+        if(wf === false) return;
+        if(wf !== undefined) fields.weight_g_per_ml = wf;
       }
       const ops = [];
       let newId = null;
       if(editing){
         ops.push(Ops.update('ingredients', Object.assign({id: editing.id}, fields)));
         if(editing.base_unit !== fields.base_unit) ops.push(Ops.audit('Ingredient unit changed', `${name}: ${editing.base_unit} → ${fields.base_unit}`, editing.id));
+        if('weight_g_per_ml' in fields && num(fields.weight_g_per_ml) !== num(editing.weight_g_per_ml))
+          ops.push(Ops.audit('Weighs changed', `${name}: ${weighsText(editing) || 'not set'} → ${weighsText(Object.assign({}, editing, fields)) || 'not set'}`, editing.id));
       } else {
         newId = uid();
         ops.push(Ops.upsert('ingredients', Object.assign({id: newId, is_produced_item: false, active: true, created_at: now}, fields)));
@@ -433,6 +478,31 @@ function openIngredientForm(id){
       }
     });
   }});
+}
+
+/* ---- "Weighs" (release 1.4, A10; owner decision: house-made items only) ----
+   The owner weighs a measured amount once ("1 L of caramel = 1,250 g"). Saved as grams per mL
+   (ingredients.weight_g_per_ml, above 0 and at most 10); recipe lines and option extras for the item
+   can then be typed in g or mL. Stock and cost stay in the item's own unit. */
+function weighsFieldHtml(ing){
+  const w = Number(ing.weight_g_per_ml);
+  const perL = true;      // "1 L weighs 1,250 g" reads best; the owner may switch to "1 mL weighs … g"
+  const shown = w > 0 ? Number((perL ? w * 1000 : w).toFixed(4)) : '';
+  return `<div class="card soft-card weighs-card" style="margin-bottom:12px;">
+    <div class="form-row mb-0"><label for="f-weighs">Weighs (optional)</label>
+      <div class="weighs-line"><span>1</span><select id="f-weighs-per" aria-label="Measured amount"><option value="L" ${perL ? 'selected' : ''}>L</option><option value="ml" ${perL ? '' : 'selected'}>mL</option></select>
+        <span>weighs</span><input id="f-weighs" type="number" step="any" min="0" value="${esc(shown)}" placeholder="e.g. 1250" aria-describedby="f-weighs-hint"><span>g</span></div>
+      <div class="hint" id="f-weighs-hint">Weigh a measured amount once (for example 1 L of caramel on a kitchen scale). Then recipes and option extras can use grams or millilitres for ${esc(ing.name)}; stock and cost stay in ${esc(unitLabel(ing.base_unit))}. Leave empty if you only measure it one way.</div></div></div>`;
+}
+// -> grams per mL, null (cleared), undefined (no field) or false (bad value; a message was shown)
+function readWeighsField(root){
+  const box = root.querySelector('#f-weighs');
+  if(!box) return undefined;
+  if(String(box.value).trim() === '') return null;
+  const g = Number(box.value), per = root.querySelector('#f-weighs-per').value === 'L' ? 1000 : 1;
+  const w = g / per;
+  if(!(g > 0) || !(w > 0) || w > 10){ toast(`"Weighs" must be above 0 and at most ${per === 1000 ? '10,000 g per L' : '10 g per mL'}`, 'error'); box.focus(); return false; }
+  return Math.round(w * 1e6) / 1e6;
 }
 
 /* ================= Categories (owner request #4, 2026-10-25) =================
@@ -473,13 +543,16 @@ function categoryManagerBody(){
     </div>
     ${suggest ? `<div class="notice" id="cat-suggest" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">Suggested: <b>${esc(SUGGESTED_CATEGORY)}</b>
       <button class="btn btn-sm btn-outline" id="cat-suggest-add">Add "${esc(SUGGESTED_CATEGORY)}"</button><a class="linklike" id="cat-suggest-hide" style="font-size:12.5px;">Not needed</a></div>` : ''}
-    ${list.length ? `<div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Category</th><th class="num">Ingredients</th><th></th></tr></thead><tbody>
+    ${list.length ? `<div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Category</th><th>Counts as</th><th class="num">Ingredients</th><th></th></tr></thead><tbody>
       ${list.map(c => {
-        const n = ingredientsInCategory(c.id).length, locked = isLockedCategory(c);
+        const n = ingredientsInCategory(c.id).filter(i => !isMergedIngredient(i)).length, locked = isLockedCategory(c), exp = isExpenseCategory(c);
         return `<tr data-cat-row="${esc(c.id)}"><td><b>${esc(c.name)}</b>${locked ? ' <span class="badge badge-gray" title="Production puts new house-made items here">Used by production</span>' : ''}</td>
+          <td>${exp ? '<span class="badge badge-yellow">Expense (not stock)</span>' : '<span class="badge badge-gray">Stock</span>'}
+            ${locked ? '' : `<button class="btn btn-sm btn-ghost" data-cat-kind="${esc(c.id)}">${exp ? 'Count as stock' : 'Count as expense'}</button>`}</td>
           <td class="num">${n}</td>
-          <td class="row-actions">${locked ? '<span class="hint">Kept for production</span>' : `<button class="btn btn-sm btn-ghost" data-cat-rename="${esc(c.id)}">Rename</button><button class="btn btn-sm btn-ghost" data-cat-remove="${esc(c.id)}">Remove</button>`}</td></tr>`;
+          <td class="row-actions">${n ? `<button class="btn btn-sm btn-ghost" data-cat-move="${esc(c.id)}">Move items</button>` : ''}${locked ? '<span class="hint">Kept for production</span>' : `<button class="btn btn-sm btn-ghost" data-cat-rename="${esc(c.id)}">Rename</button><button class="btn btn-sm btn-ghost" data-cat-remove="${esc(c.id)}">Remove</button>`}</td></tr>`;
       }).join('')}</tbody></table></div>` : emptyBlock('No categories yet.')}
+    <p class="hint">A category that <b>counts as an expense</b> (for example "Operating supplies": foil, dishwashing liquid, sponges) is not stock: buying its items is recorded under Expenses, with no stock counts or low-stock alerts, and they are left out of inventory value and recipe costs. Use "Move items" to move items (for example from "Other") into it.</p>
     <p class="hint" style="margin-bottom:0;">"${esc(PRODUCED_CATEGORY_NAME)}" holds the items you make yourself (production), so it stays as it is. The Raw / Produced type filter on the Ingredients screen is separate and still works.</p>`;
 }
 // Text typed in "New category" survives every redraw of the window (after a save, or coming back
@@ -515,6 +588,67 @@ function openCategoryManager(){
       if(sHide) sHide.onclick = () => { try{ localStorage.setItem('cccc.bo.hideRawMaterialsHint', '1'); }catch(e){} root.querySelector('#cat-suggest').remove(); };
       root.querySelectorAll('[data-cat-rename]').forEach(b => b.onclick = () => openCategoryRename(b.dataset.catRename));
       root.querySelectorAll('[data-cat-remove]').forEach(b => b.onclick = () => lockCategoryWindow(root, b, () => removeCategoryFlow(b.dataset.catRemove), '…'));
+      root.querySelectorAll('[data-cat-kind]').forEach(b => b.onclick = () => lockCategoryWindow(root, b, () => switchCategoryKind(b.dataset.catKind), '…'));
+      root.querySelectorAll('[data-cat-move]').forEach(b => b.onclick = () => openCategoryMoveItems(b.dataset.catMove));
+    }});
+}
+/* ---- categories that count as an expense (release 1.4, A11) ----
+   categories.kind 'EXPENSE' = operating supplies: not stock. Switching asks first (it changes how
+   every item in it is counted). Stock already recorded stays in the history; the database refuses
+   new stock for such items (EXPENSE_ITEM_NOT_STOCK) but allows taking old stock off. */
+async function switchCategoryKind(id){
+  const c = state.categories.find(x => x.id === id);
+  if(!c || isLockedCategory(c)) return;
+  const toExpense = !isExpenseCategory(c);
+  const items = ingredientsInCategory(c.id).filter(i => !isMergedIngredient(i) && i.active !== false);
+  const used = toExpense ? items.filter(i => state.recipeIngredients.some(ri => ri.ingredient_id === i.id) || recipesUsingAsOption(i.id).length) : [];
+  const withStock = toExpense ? items.filter(i => Math.abs(ingredientStock(i.id)) > 1e-9) : [];
+  const msg = toExpense
+    ? `Count <b>${esc(c.name)}</b> as an <b>expense</b>? Its ${plural(items.length, 'item')} will no longer be stock: buying them is recorded under Expenses, with no stock counts or low-stock alerts.`
+      + (used.length ? `<br><br><b>Still used in recipes or options:</b> ${used.map(i => esc(i.name)).join(', ')}. Sales will no longer take them from stock.` : '')
+      + (withStock.length ? `<br><br>${withStock.map(i => esc(i.name)).join(', ')} still ${withStock.length === 1 ? 'has' : 'have'} stock recorded. It stays in the history; set it to 0 with Inventory → Adjust stock if you like.` : '')
+    : `Count <b>${esc(c.name)}</b> as <b>stock</b> again? Its items get stock counts and low-stock alerts again (starting from the stock they had before).`;
+  if(!await confirmDialog(msg, toExpense ? 'Count as expense' : 'Count as stock')){ openCategoryManager(); return; }
+  await boSave([Ops.update('categories', {id: c.id, kind: toExpense ? 'EXPENSE' : 'STOCK'}),
+    Ops.audit(toExpense ? 'Category counted as expense' : 'Category counted as stock', c.name, c.id)], {success: toExpense ? `${c.name} counts as an expense now` : `${c.name} counts as stock now`});
+  openCategoryManager();
+}
+// Move some (or all) items of one category to another, in one save.
+function openCategoryMoveItems(id){
+  const c = state.categories.find(x => x.id === id);
+  if(!c) return;
+  const items = ingredientsInCategory(c.id).filter(i => !isMergedIngredient(i)).sort(byName);
+  const others = state.categories.filter(x => x.id !== c.id).sort((a, b) => (isExpenseCategory(b) - isExpenseCategory(a)) || byName(a, b));
+  if(!others.length){ toast('Add another category first', 'error'); return; }
+  openModal({title: 'Move items from ' + esc(c.name), body: `
+      <div class="form-row"><label for="cm-to">Move to</label><select id="cm-to">${others.map(x => `<option value="${esc(x.id)}">${esc(x.name)}${isExpenseCategory(x) ? ' (expense, not stock)' : ''}</option>`).join('')}</select></div>
+      <label class="chk"><input type="checkbox" id="cm-all"> Select all</label>
+      <ul class="cm-list">${items.map(i => `<li><label class="chk"><input type="checkbox" data-cm="${esc(i.id)}"> ${esc(i.name)} <span class="text-light">(${esc(unitLabel(i.base_unit))}${i.active === false ? ', inactive' : ''})</span></label></li>`).join('')}</ul>
+      <p class="hint" id="cm-note"></p>`,
+    foot: `<button class="btn btn-outline" data-cancel>Back</button><button class="btn btn-primary" id="cm-go" disabled>Move 0 items</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-cancel]').onclick = () => openCategoryManager();
+      const go = root.querySelector('#cm-go'), to = root.querySelector('#cm-to');
+      const picked = () => [...root.querySelectorAll('[data-cm]:checked')].map(b => b.dataset.cm);
+      const refresh = () => {
+        const n = picked().length;
+        go.textContent = `Move ${plural(n, 'item')}`; go.disabled = !n;
+        root.querySelector('#cm-note').textContent = isExpenseCategory(to.value) && !isExpenseCategory(c)
+          ? 'They become operating supplies: buying them is recorded as an expense, not stock.'
+          : (!isExpenseCategory(to.value) && isExpenseCategory(c) ? 'They become stock again.' : '');
+      };
+      root.querySelector('#cm-all').onchange = (e) => { root.querySelectorAll('[data-cm]').forEach(b => { b.checked = e.target.checked; }); refresh(); };
+      root.querySelectorAll('[data-cm]').forEach(b => b.onchange = refresh);
+      to.onchange = refresh;
+      refresh();
+      go.onclick = () => lockCategoryWindow(root, go, async () => {
+        const ids = picked(); if(!ids.length) return;
+        const target = state.categories.find(x => x.id === to.value); if(!target) return;
+        const now = nowISO();
+        const ops = ids.map(iid => Ops.update('ingredients', {id: iid, category_id: target.id, updated_at: now}));
+        ops.push(Ops.audit('Ingredients moved', `${ids.map(ingName).join(', ')}: ${c.name} → ${target.name}`, target.id));
+        if(await boSave(ops, {success: `${plural(ids.length, 'item')} moved to ${target.name}`})) openCategoryManager();
+      }, 'Moving…');
     }});
 }
 function openCategoryRename(id){
@@ -601,7 +735,9 @@ function renderIngredientDetail(id){
       <div>
         <h2 class="display page-title">${esc(ing.name)} ${ing.active === false ? '<span class="badge badge-gray">Inactive</span>' : ''} ${produced ? '<span class="badge badge-gray">Produced</span>' : ''}</h2>
         <div class="pill-stack" style="margin-top:6px;">
-          <span class="tag-pill">${esc(catName(ing.category_id))}</span><span class="tag-pill">${u}</span>${statusBadge(status)}
+          <span class="tag-pill">${esc(catName(ing.category_id))}</span><span class="tag-pill">${u}</span>${isMergedIngredient(ing) || isExpenseIngredient(ing) ? ingredientKindBadge(ing) : statusBadge(status)}
+          ${weighsText(ing) ? `<span class="tag-pill" title="Recipes can use g or mL for this item">${esc(weighsText(ing))}</span>` : ''}
+          ${suppliedRecipeFor(ing.id) ? `<a class="linklike" data-recipe="${esc(suppliedRecipeFor(ing.id).id)}" style="font-size:12.5px;">Sold as: ${esc(suppliedRecipeFor(ing.id).name)} →</a>` : ''}
           ${produced && sourceRecipe ? `<a class="linklike" data-recipe="${esc(sourceRecipe.id)}" style="font-size:12.5px;">Recipe: ${esc(sourceRecipe.name)} →</a>` : ''}
         </div>
       </div>
@@ -610,6 +746,8 @@ function renderIngredientDetail(id){
         <button class="btn btn-outline" id="edit-ing-btn">Edit ingredient</button>
       </div>
     </div>
+    ${isMergedIngredient(ing) ? `<div class="notice warn" style="margin-top:14px;">Merged into <a class="linklike" data-ing="${esc(ing.merged_into)}">${esc(ingName(ing.merged_into))}</a>${ing.merged_at ? ' on ' + esc(fmtShopDate(ing.merged_at)) : ''}. It is a brand of that ingredient now; its purchases, stock and recipe lines moved there.</div>` : ''}
+    ${!isMergedIngredient(ing) && isExpenseIngredient(ing) ? `<div class="notice" style="margin-top:14px;">This is an <b>operating supply</b>: buying it is recorded under <a class="linklike" data-go-exp="1">Expenses</a>, and it is not counted as stock (no low-stock alerts, not in inventory value or recipe costs).</div>` : ''}
     <div class="grid grid-4" style="margin-top:20px;">
       ${statCard('Current stock', fmtNum(stock, 2) + ' ' + u, 'Reorder at ' + fmtNum(ing.reorder_level, 1))}
       ${statCard('Current cost', hasCurrentCost ? fmtMoney(costing.current) + '/' + u : '—', produced ? 'Live cost from recipe' : (costing.method === 'latest' ? 'Latest purchase' : 'Weighted average'))}
@@ -636,7 +774,11 @@ function renderIngredientDetail(id){
     <div class="section-title">${produced ? 'Used by (recipes using this produced item)' : 'Recipes using this ingredient'}</div>
     ${usingRecipes.length ? `<div class="grid grid-3">${usingRecipes.map(r => `<div class="card"><a class="linklike" data-recipe="${esc(r.id)}">${esc(r.name)}</a><div class="text-light" style="font-size:12.5px;margin-top:4px;">${esc(recipeTypeLabel(recipeTypeOf(r)))}${r.active === false ? ' · inactive' : ''}</div></div>`).join('')}</div>`
       : emptyBlock('This ingredient is not used in any recipe.')}
-    ${optionRecipes.length ? `<p class="hint" style="margin-top:10px;">Also used as an extra by options in: ${optionRecipes.map(r => `<a class="linklike" data-recipe="${esc(r.id)}">${esc(r.name)}</a>`).join(', ')}.</p>` : ''}`;
+    ${optionRecipes.length ? `<p class="hint" style="margin-top:10px;">Also used by options in: ${optionRecipes.map(r => `<a class="linklike" data-recipe="${esc(r.id)}">${esc(r.name)}</a>`).join(', ')}.</p>` : ''}
+    ${libraryGroupsUsing(id).length ? `<p class="hint" style="margin-top:6px;">Used by the Options library: ${libraryGroupsUsing(id).map(g => esc(g.name)).join(', ')}. <a class="linklike" data-go-lib="1">Open the Options library</a></p>` : ''}`;
+  content.querySelectorAll('[data-ing]').forEach(a => a.onclick = () => navigate('ingredientDetail', a.dataset.ing));
+  content.querySelectorAll('[data-go-exp]').forEach(a => a.onclick = () => navigate('expenses'));
+  content.querySelectorAll('[data-go-lib]').forEach(a => a.onclick = () => navigate('optionLibrary'));
   content.querySelector('#back-ing').onclick = () => navigate('ingredients');
   content.querySelector('#edit-ing-btn').onclick = () => openIngredientForm(id);
   const pb = content.querySelector('#produce-btn'); if(pb) pb.onclick = () => openProductionForm(sourceRecipe ? sourceRecipe.id : null);
@@ -837,11 +979,14 @@ function renderPurchasesTable(){
 }
 
 function openPurchaseForm(prefillIngredientId){
-  const list = activeIngredientsSorted();
-  if(!list.length){ toast('Add an ingredient first', 'warn'); return; }
+  // stock items, then operating supplies (release 1.4: buying those is recorded as an expense)
+  const list = ingredientPickerList().sort(byName), supplies = expenseIngredientsList().sort(byName);
+  if(!list.length && !supplies.length){ toast('Add an ingredient first', 'warn'); return; }
   const today = shopTodayKey();
+  const opt = (i) => `<option value="${esc(i.id)}" ${prefillIngredientId === i.id ? 'selected' : ''}>${esc(i.name)} (${esc(i.base_unit)})</option>`;
   const body = `
-    <div class="form-row"><label for="p-ing">Ingredient</label><select id="p-ing">${list.map(i => `<option value="${esc(i.id)}" ${prefillIngredientId === i.id ? 'selected' : ''}>${esc(i.name)} (${esc(i.base_unit)})</option>`).join('')}</select></div>
+    <div class="form-row"><label for="p-ing">Ingredient</label><select id="p-ing">${supplies.length ? `<optgroup label="Stock">${list.map(opt).join('')}</optgroup><optgroup label="Operating supplies (recorded as an expense)">${supplies.map(opt).join('')}</optgroup>` : list.map(opt).join('')}</select>
+      <div class="notice" id="p-expense-note" style="display:none;margin-top:8px;">This is an <b>operating supply</b>: it is saved under <b>Expenses</b> (category "Operating supplies"), not as stock.</div></div>
     <div class="form-grid">
       <div class="form-row"><label for="p-sup">Supplier</label><select id="p-sup"><option value="">—</option>${selectOptions(state.suppliers.slice().sort(byName), '')}</select></div>
       <div class="form-row" id="p-brand-row"><label for="p-brand">Brand</label><select id="p-brand"></select><div class="hint" id="p-brand-hint"></div></div>
@@ -900,18 +1045,36 @@ function openPurchaseForm(prefillIngredientId){
     }
     const setDefaultUnit = () => { const ing = currentIngredient(); if(ing){ unitSel.value = ing.base_unit; const s = ing.supplier_id; if(s) root.querySelector('#p-sup').value = s; } };
     const fillBrands = () => fillBrandSelect(root.querySelector('#p-brand'), root.querySelector('#p-brand-hint'), ingSel.value, 'this purchase');
+    const syncExpense = () => {
+      const exp = isExpenseIngredient(currentIngredient());
+      root.querySelector('#p-expense-note').style.display = exp ? 'block' : 'none';
+      root.querySelector('#p-brand-row').style.display = exp ? 'none' : '';
+      root.querySelector('#btn-save-pur').textContent = exp ? 'Save as expense' : 'Save purchase';
+    };
     setDefaultUnit(); fillBrands();
-    ingSel.onchange = () => { setDefaultUnit(); fillBrands(); updateConvVisibility(); };
+    ingSel.onchange = () => { setDefaultUnit(); fillBrands(); updateConvVisibility(); syncExpense(); };
     unitSel.onchange = updateConvVisibility;
     qtyInput.oninput = updatePreview; priceInput.oninput = updatePreview; convInput.oninput = updatePreview;
     updateConvVisibility();
     const save = root.querySelector('#btn-save-pur');
+    syncExpense();
     save.onclick = () => busy(save, async () => {
       const ing = currentIngredient();
       const qty = num(qtyInput.value), price = num(priceInput.value), conv = num(convInput.value);
       if(!ing){ toast('Select an ingredient', 'error'); return; }
       if(qty <= 0){ toast('Enter a valid quantity', 'error'); return; }
       if(price <= 0){ toast('Enter a valid total price', 'error'); return; }
+      if(isExpenseIngredient(ing)){
+        // an operating supply: one expense row (category SUPPLIES), no stock (contract A11)
+        const exp = {id: uid(), expense_date: root.querySelector('#p-date').value || shopTodayKey(), category: 'SUPPLIES', amount: Math.round(price * 100) / 100,
+          note: [ing.name, root.querySelector('#p-invoice').value.trim() ? '#' + root.querySelector('#p-invoice').value.trim() : '', root.querySelector('#p-notes').value.trim()].filter(Boolean).join(' · ').slice(0, 500),
+          ingredient_id: ing.id, supplier_id: root.querySelector('#p-sup').value || null, quantity: qty, unit: unitSel.value,
+          created_by: cloud.userId(), created_at: nowISO(), updated_at: nowISO()};
+        const ok = await boSave([Ops.upsert('expenses', exp), Ops.audit('Expense recorded', `${expenseCategoryLabel('SUPPLIES')}: ${ing.name} — ${fmtNum(qty, 2)} ${unitSel.value} for ${fmtMoney(exp.amount)}`, exp.id)],
+          {success: 'Saved as an expense (operating supplies)'});
+        if(ok){ closeModal(); rerender(); }
+        return;
+      }
       if(needsConversion() && conv <= 0){ toast('Enter the base-unit conversion for this purchase unit', 'error'); return; }
       const baseQty = toBaseQuantity(qty, unitSel.value, ing.base_unit, conv);
       if(baseQty <= 0){ toast('Could not work out the base quantity — check the units', 'error'); return; }
@@ -1132,7 +1295,7 @@ function renderInventory(){
   bar.querySelector('#btn-new-waste').onclick = () => openWasteForm();
   bar.querySelector('#btn-new-adjustment').onclick = () => openAdjustmentForm();
   const content = document.getElementById('content');
-  const allActive = state.ingredients.filter(i => i.active !== false);
+  const allActive = stockIngredientsList();       // 1.4: not merged away, not operating supplies
   const totalValue = allActive.reduce((s, i) => s + ingredientStock(i.id) * (ingredientCosting(i.id).current || 0), 0);
   const recentWaste = state.waste.slice().sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 15);
   content.innerHTML = `
@@ -1157,7 +1320,7 @@ function renderInventory(){
 function renderInventoryTable(){
   const wrap = document.getElementById('inv-table-wrap');
   if(!wrap) return;
-  let list = state.ingredients.filter(i => i.active !== false);
+  let list = stockIngredientsList();
   if(invFilter.type === 'RAW') list = list.filter(i => !isProducedItem(i));
   if(invFilter.type === 'PRODUCED') list = list.filter(i => isProducedItem(i));
   if(invFilter.status) list = list.filter(i => stockStatus(ingredientStock(i.id), i.reorder_level) === invFilter.status);
@@ -1186,7 +1349,7 @@ function wasteQtyText(w){
   return ing && ing.base_unit ? formatQuantity(w.quantity, ing.base_unit, w.unit || ing.base_unit) : `${fmtNum(w.quantity, 2)} ${unitLabel(w.unit || '')}`.trim();
 }
 function openWasteForm(prefillId){
-  const list = activeIngredientsSorted();
+  const list = stockIngredientsList().sort(byName);
   if(!list.length){ toast('Add an ingredient first', 'warn'); return; }
   const body = `
     <div class="form-row"><label for="w-ing">Ingredient</label><select id="w-ing">${list.map(i => `<option value="${esc(i.id)}" ${prefillId === i.id ? 'selected' : ''}>${esc(i.name)} (${esc(i.base_unit)})</option>`).join('')}</select></div>
@@ -1202,19 +1365,19 @@ function openWasteForm(prefillId){
     const showStock = () => {
       const i = ingredientById(root.querySelector('#w-ing').value);
       if(!i){ root.querySelector('#w-stock').textContent = ''; return; }
-      const q = typedToBase(wQty.value, wUnit.value, i.base_unit);
-      root.querySelector('#w-stock').textContent = `In stock now: ${formatQuantity(ingredientStock(i.id), i.base_unit, wUnit.value)}`
+      const q = typedToBase(wQty.value, wUnit.value, i.base_unit, i.weight_g_per_ml);
+      root.querySelector('#w-stock').textContent = `In stock now: ${formatQuantity(ingredientStock(i.id), i.base_unit, wUnit.value, 2, i.weight_g_per_ml)}`
         + (wUnit.value !== i.base_unit && q > 0 ? ` · takes off ${formatQuantity(q, i.base_unit, i.base_unit)}` : '');
     };
-    root.querySelector('#w-ing').onchange = () => { const i = ingredientById(root.querySelector('#w-ing').value); if(i) resetUnitSelect(wUnit, i.base_unit); showStock(); };
+    root.querySelector('#w-ing').onchange = () => { const i = ingredientById(root.querySelector('#w-ing').value); if(i) resetUnitSelect(wUnit, i.base_unit, i.weight_g_per_ml); showStock(); };
     wireUnitConvert(wQty, wUnit, showStock); wQty.addEventListener('input', showStock);
-    resetUnitSelect(wUnit, (ingredientById(root.querySelector('#w-ing').value) || {}).base_unit); showStock();
+    { const i0 = ingredientById(root.querySelector('#w-ing').value) || {}; resetUnitSelect(wUnit, i0.base_unit, i0.weight_g_per_ml); } showStock();
     const save = root.querySelector('#btn-save-waste');
     save.onclick = () => busy(save, async () => {
       const ing = ingredientById(root.querySelector('#w-ing').value);
       if(!ing){ toast('Choose an ingredient', 'error'); return; }
-      const typedUnit = compatibleUnits(ing.base_unit).includes(wUnit.value) ? wUnit.value : ing.base_unit;
-      const qty = typedToBase(wQty.value, typedUnit, ing.base_unit);       // saved in the base unit
+      const typedUnit = unitsForIngredient(ing).includes(wUnit.value) ? wUnit.value : ing.base_unit;
+      const qty = typedToBase(wQty.value, typedUnit, ing.base_unit, ing.weight_g_per_ml);       // saved in the base unit
       if(!(qty > 0)){ toast('Enter a valid quantity', 'error'); return; }
       const date = root.querySelector('#w-date').value || shopTodayKey();
       const reason = root.querySelector('#w-reason').value, notes = root.querySelector('#w-notes').value, now = nowISO();
@@ -1222,13 +1385,13 @@ function openWasteForm(prefillId){
       if(await boSave([
         Ops.upsert('waste', rec),
         Ops.upsert('inventory_transactions', {id: uid(), ingredient_id: ing.id, transaction_type: 'WASTE', quantity: qty, reference_id: rec.id, transaction_date: date, notes: reason + (notes ? ' — ' + notes : ''), created_at: now}),
-        Ops.audit('Waste recorded', `${ing.name} — ${typedQtyText(qty, ing.base_unit, typedUnit)} (${reason})`, rec.id),
+        Ops.audit('Waste recorded', `${ing.name} — ${typedQtyText(qty, ing.base_unit, typedUnit, ing.weight_g_per_ml)} (${reason})`, rec.id),
       ], {success: 'Waste recorded'})){ closeModal(); rerender(); }
     });
   }});
 }
 function openAdjustmentForm(prefillId){
-  const list = activeIngredientsSorted();
+  const list = stockIngredientsList().sort(byName);
   if(!list.length){ toast('Add an ingredient first', 'warn'); return; }
   const body = `
     <div class="form-row"><label for="a-ing">Ingredient</label><select id="a-ing">${list.map(i => `<option value="${esc(i.id)}" ${prefillId === i.id ? 'selected' : ''}>${esc(i.name)} (${esc(i.base_unit)})</option>`).join('')}</select><div class="hint" id="a-stock"></div></div>
@@ -1244,14 +1407,15 @@ function openAdjustmentForm(prefillId){
     const cur = () => ingredientById(root.querySelector('#a-ing').value);
     const qIn = root.querySelector('#a-qty'), qUnit = root.querySelector('#a-qty-unit');
     const cIn = root.querySelector('#a-count'), cUnit = root.querySelector('#a-count-unit');
-    const signed = (q, bu, unit) => (q >= 0 ? '+' : '−') + formatQuantity(Math.abs(q), bu, unit);
-    const countDelta = (i) => { const c = typedToBase(cIn.value, cUnit.value, i.base_unit); return c == null ? null : Math.round((c - ingredientStock(i.id)) * 1e6) / 1e6; };
+    const W = () => (cur() || {}).weight_g_per_ml;
+    const signed = (q, bu, unit) => (q >= 0 ? '+' : '−') + formatQuantity(Math.abs(q), bu, unit, 2, W());
+    const countDelta = (i) => { const c = typedToBase(cIn.value, cUnit.value, i.base_unit, i.weight_g_per_ml); return c == null ? null : Math.round((c - ingredientStock(i.id)) * 1e6) / 1e6; };
     const refresh = () => {
       const i = cur();
-      root.querySelector('#a-stock').textContent = i ? `In stock now: ${formatQuantity(ingredientStock(i.id), i.base_unit, mode === 'count' ? cUnit.value : qUnit.value)}` : '';
+      root.querySelector('#a-stock').textContent = i ? `In stock now: ${formatQuantity(ingredientStock(i.id), i.base_unit, mode === 'count' ? cUnit.value : qUnit.value, 2, i.weight_g_per_ml)}` : '';
       const d = i && cIn.value !== '' ? countDelta(i) : null;
       root.querySelector('#a-count-hint').textContent = d != null ? `Change: ${signed(d, i.base_unit, i.base_unit)}${cUnit.value !== i.base_unit ? ' (' + signed(d, i.base_unit, cUnit.value) + ')' : ''}` : '';
-      const q = i && qIn.value !== '' ? typedToBase(qIn.value, qUnit.value, i.base_unit) : null;
+      const q = i && qIn.value !== '' ? typedToBase(qIn.value, qUnit.value, i.base_unit, i.weight_g_per_ml) : null;
       root.querySelector('#a-qty-hint').textContent = q && qUnit.value !== i.base_unit ? `Change: ${signed(q, i.base_unit, i.base_unit)}` : '';
       // a brand can only be named on stock that is ADDED (the database: BRAND_NOT_ALLOWED otherwise)
       const adds = mode === 'count' ? (d != null && d > 0) : (q != null && q > 0);
@@ -1259,10 +1423,10 @@ function openAdjustmentForm(prefillId){
     };
     const fillAdjBrands = () => fillBrandSelect(root.querySelector('#a-brand'), root.querySelector('#a-brand-hint'), root.querySelector('#a-ing').value, 'the stock added');
     fillAdjBrands();
-    root.querySelector('#a-ing').onchange = () => { const i = cur(); if(i){ resetUnitSelect(qUnit, i.base_unit); resetUnitSelect(cUnit, i.base_unit); } fillAdjBrands(); refresh(); };
+    root.querySelector('#a-ing').onchange = () => { const i = cur(); if(i){ resetUnitSelect(qUnit, i.base_unit, i.weight_g_per_ml); resetUnitSelect(cUnit, i.base_unit, i.weight_g_per_ml); } fillAdjBrands(); refresh(); };
     cIn.oninput = refresh; qIn.oninput = refresh;
     wireUnitConvert(qIn, qUnit, refresh); wireUnitConvert(cIn, cUnit, refresh);
-    { const i = cur(); if(i){ resetUnitSelect(qUnit, i.base_unit); resetUnitSelect(cUnit, i.base_unit); } }
+    { const i = cur(); if(i){ resetUnitSelect(qUnit, i.base_unit, i.weight_g_per_ml); resetUnitSelect(cUnit, i.base_unit, i.weight_g_per_ml); } }
     refresh();
     root.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => {
       mode = b.dataset.mode;
@@ -1280,7 +1444,7 @@ function openAdjustmentForm(prefillId){
       if(mode === 'count'){
         if(cIn.value === ''){ toast('Enter the amount you counted', 'error'); return; }
         qty = countDelta(ing);
-      } else qty = typedToBase(qIn.value, qUnit.value, ing.base_unit);
+      } else qty = typedToBase(qIn.value, qUnit.value, ing.base_unit, ing.weight_g_per_ml);
       if(qty == null){ toast('Choose the unit again — it does not fit this ingredient', 'error'); return; }
       if(!qty){ toast(mode === 'count' ? 'The count matches the stock — nothing to change' : 'Enter an amount that is not zero', mode === 'count' ? 'warn' : 'error'); return; }
       const notes = root.querySelector('#a-notes').value.trim() || (mode === 'count' ? 'Stock count' : '');
@@ -1288,7 +1452,7 @@ function openAdjustmentForm(prefillId){
       const brandId = qty > 0 && root.querySelector('#a-brand-row').style.display !== 'none' ? (root.querySelector('#a-brand').value || null) : null;
       if(await boSave([
         Ops.upsert('inventory_transactions', {id, ingredient_id: ing.id, transaction_type: 'ADJUSTMENT', quantity: qty, reference_id: null, transaction_date: root.querySelector('#a-date').value || shopTodayKey(), brand_id: brandId, notes, created_at: nowISO()}),
-        Ops.audit('Stock adjusted', `${ing.name}${brandId ? ' (' + brandName(brandId) + ')' : ''} ${qty > 0 ? '+' : '-'}${typedQtyText(Math.abs(qty), ing.base_unit, typedUnit)}${mode === 'count' ? ` (counted ${formatQuantity(typedToBase(cIn.value, cUnit.value, ing.base_unit), ing.base_unit, cUnit.value)})` : ''}${notes ? ' — ' + notes : ''}`, id),
+        Ops.audit('Stock adjusted', `${ing.name}${brandId ? ' (' + brandName(brandId) + ')' : ''} ${qty > 0 ? '+' : '-'}${typedQtyText(Math.abs(qty), ing.base_unit, typedUnit, ing.weight_g_per_ml)}${mode === 'count' ? ` (counted ${formatQuantity(typedToBase(cIn.value, cUnit.value, ing.base_unit, ing.weight_g_per_ml), ing.base_unit, cUnit.value, 2, ing.weight_g_per_ml)})` : ''}${notes ? ' — ' + notes : ''}`, id),
       ], {success: 'Stock adjusted'})){ closeModal(); rerender(); }
     });
   }});

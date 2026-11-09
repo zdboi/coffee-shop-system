@@ -64,6 +64,41 @@ set local role ${role};
 select '@@R@@' || coalesce((${inner})::text, 'null');
 commit;`;
 }
+// Like wrap(), for statements that change rows (storage): runs `stmt` as the caller (RLS applies);
+// `stmt` must itself print one '@@R@@...' line.
+function wrapRaw(req, stmt){
+  const c = claimsFrom(req);
+  const claims = c && !c.expired ? JSON.stringify({sub: c.sub, role: 'authenticated', is_anonymous: c.is_anonymous}) : '';
+  const headers = JSON.stringify(Object.fromEntries(Object.entries(req.headers).map(([k,v]) => [k.toLowerCase(), String(v)])));
+  return `begin;
+select set_config('request.jwt.claims', ${lit(claims)}, true);
+select set_config('request.headers', ${lit(headers)}, true);
+set local role ${c && !c.expired ? 'authenticated' : 'anon'};
+${stmt}
+commit;`;
+}
+// RPC parameters of an array type (e.g. uuid[]): PostgREST turns a JSON array into a Postgres array.
+// Read once per function from pg_proc (all overloads); a "{...}" string literal is passed on as it is.
+const arrayArgs = new Map();
+async function arrayArgsOf(fn){
+  if(arrayArgs.has(fn)) return arrayArgs.get(fn);
+  const r = await runSql(`select '@@R@@' || coalesce((select json_agg(distinct a.n)::text from pg_proc p
+      cross join lateral unnest(p.proargnames, p.proargtypes::oid[]) a(n, t) join pg_type ty on ty.oid = a.t
+      where p.pronamespace = 'public'::regnamespace and p.proname = ${lit(fn)} and ty.typcategory = 'A'), '[]');`);
+  const set = new Set(r.error ? [] : JSON.parse(r.data));
+  arrayArgs.set(fn, set);
+  return set;
+}
+function pgArray(a){
+  return '{' + a.map(x => x === null || x === undefined ? 'NULL'
+    : Array.isArray(x) ? pgArray(x)
+    : '"' + (typeof x === 'object' ? JSON.stringify(x) : String(x)).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + '}';
+}
+const SQL_ID = /^[A-Za-z0-9_.\-\/ ]+$/;   // bucket / object names the stand-in accepts
+async function bucketIsPublic(bucket){
+  const r = await runSql(`select '@@R@@' || coalesce((select public::text from storage.buckets where id = ${lit(bucket)}), 'missing');`);
+  return r.data;
+}
 function send(res, status, body, headers){
   res.writeHead(status, Object.assign({'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}, headers || {}));
   res.end(body === undefined ? '' : (typeof body === 'string' ? body : JSON.stringify(body)));
@@ -170,7 +205,8 @@ const server = http.createServer(async (req, res) => {
         const fn = p.slice('/rest/v1/rpc/'.length);
         if(!/^[a-z_][a-z0-9_]*$/.test(fn)) return send(res, 400, {message: 'bad fn'});
         const args = JSON.parse((await readBody(req)).toString() || '{}');
-        const argSql = Object.entries(args).map(([k, v]) => `${k} => ${lit(v)}`).join(', ');
+        const arr = await arrayArgsOf(fn);
+        const argSql = Object.entries(args).map(([k, v]) => `${k} => ${lit(arr.has(k) && Array.isArray(v) ? pgArray(v) : v)}`).join(', ');
         const r = await runSql(wrap(req, `select to_jsonb(public."${fn}"(${argSql}))`));
         if(r.error){ const [st, code] = errStatus(r.error); return send(res, st, {code, message: r.error}); }
         return send(res, 200, r.data);
@@ -182,16 +218,57 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, r.data);
     }
     // ---------- storage ----------
+    // Like Supabase Storage: every object also gets a row in storage.objects, written / read / deleted
+    // AS THE CALLER, so the storage policies of the scripts (RLS on storage.objects) decide.
+    //   POST   /storage/v1/object/<bucket>/<path>                upload (insert policy)
+    //   GET    /storage/v1/object/public/<bucket>/<path>         public buckets only
+    //   GET    /storage/v1/object/authenticated/<bucket>/<path>  (or /object/<bucket>/<path>) select policy
+    //   DELETE /storage/v1/object/<bucket>  {prefixes: [paths]}   delete policy; answers the removed objects
+    //   DELETE /storage/v1/object/<bucket>/<path>                one object
     if(p.startsWith('/storage/v1/object/')){
+      const c = claimsFrom(req);
+      if(c && c.expired) return send(res, 400, {statusCode: '403', error: 'Unauthorized', message: 'jwt expired'});
+      const rest = decodeURIComponent(p.slice('/storage/v1/object/'.length));
+      const notFound = () => send(res, 400, {statusCode: '404', error: 'not_found', message: 'Object not found'});
       if(req.method === 'POST'){
-        const key = p.slice('/storage/v1/object/'.length);
-        storage.set(key, {type: req.headers['content-type'], body: await readBody(req)});
-        return send(res, 200, {Key: key});
+        const slash = rest.indexOf('/'); const bucket = rest.slice(0, slash), name = rest.slice(slash + 1);
+        if(slash < 1 || !SQL_ID.test(rest)) return send(res, 400, {statusCode: '400', error: 'InvalidKey', message: 'Invalid key'});
+        const body = await readBody(req);
+        const r = await runSql(wrapRaw(req, `insert into storage.objects(bucket_id, name, owner)
+          values (${lit(bucket)}, ${lit(name)}, (nullif(current_setting('request.jwt.claims', true), '')::jsonb->>'sub')::uuid);
+          select '@@R@@ok';`));
+        if(r.error) return send(res, 400, {statusCode: '403', error: 'Unauthorized', message: /row-level security/i.test(r.error) ? 'new row violates row-level security policy' : r.error});
+        storage.set(rest, {type: req.headers['content-type'], body});
+        return send(res, 200, {Key: rest});
       }
-      const key = p.slice('/storage/v1/object/public/'.length);
-      const f = storage.get(key);
-      if(!f) return send(res, 404, {message: 'not found'});
-      res.writeHead(200, {'Content-Type': f.type}); return res.end(f.body);
+      if(req.method === 'GET'){
+        let key = rest, mode = 'auth';
+        if(rest.startsWith('public/')){ key = rest.slice(7); mode = 'public'; }
+        else if(rest.startsWith('authenticated/')) key = rest.slice(14);
+        const slash = key.indexOf('/'); const bucket = key.slice(0, slash), name = key.slice(slash + 1);
+        const f = storage.get(key);
+        if(!f || slash < 1) return notFound();
+        if(mode === 'public'){
+          if(await bucketIsPublic(bucket) !== 'true') return send(res, 400, {statusCode: '404', error: 'not_found', message: 'Bucket not found'});
+        } else {
+          const r = await runSql(wrap(req, `select count(*) from storage.objects where bucket_id = ${lit(bucket)} and name = ${lit(name)}`));
+          if(r.error || r.data === '0') return notFound();
+        }
+        res.writeHead(200, {'Content-Type': f.type, 'Access-Control-Allow-Origin': '*'}); return res.end(f.body);
+      }
+      if(req.method === 'DELETE'){
+        let bucket = rest, names;
+        if(rest.includes('/')){ bucket = rest.slice(0, rest.indexOf('/')); names = [rest.slice(rest.indexOf('/') + 1)]; }
+        else { const b = JSON.parse((await readBody(req)).toString() || '{}'); names = Array.isArray(b.prefixes) ? b.prefixes.map(String) : []; }
+        const r = await runSql(wrapRaw(req, `with d as (delete from storage.objects where bucket_id = ${lit(bucket)} and name = any(${lit(pgArray(names))}::text[]) returning bucket_id, name)
+          select '@@R@@' || coalesce((select jsonb_agg(jsonb_build_object('bucket_id', bucket_id, 'name', name)) from d), '[]'::jsonb)::text;`));
+        if(r.error) return send(res, 400, {statusCode: '403', error: 'Unauthorized', message: r.error});
+        const gone = JSON.parse(r.data);
+        gone.forEach(o => storage.delete(o.bucket_id + '/' + o.name));
+        if(rest.includes('/') && !gone.length) return notFound();
+        return send(res, 200, rest.includes('/') ? {message: 'Successfully deleted'} : gone);
+      }
+      return send(res, 405, {message: 'method not supported in the stand-in'});
     }
     // ---------- static app files ----------
     if(p === '/cccc/shared/config.js'){

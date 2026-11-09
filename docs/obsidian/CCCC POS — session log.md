@@ -2,7 +2,7 @@
 tags: [cccc, pos, session-log]
 project: Cavite City Coffee Club POS
 updated: 2026-11-02
-checkpoint: 12
+checkpoint: 14
 repo: zdboi/coffee-shop-system (branch wip/cccc-online-qr)
 ---
 
@@ -14,7 +14,30 @@ It has three apps on one Supabase database:
 - **Back Office:** the owner's email login only.
 - **QR order page:** customers order from their phones and pay at the counter.
 
-## Where things stand (Nov 2): release 1.3 ready for me
+## Where things stand (Nov 9): release 1.4 ready for me
+- **1.3 is live** (Nov 2, 23:00) and is the **last working version** (checkpoint 13).
+- **1.4 is built, tested and security-reviewed** (4,019 checks, 0 failing; checkpoint 14). Pull request #5.
+- **To publish it,** follow `docs/RELEASE_1.4.md`:
+  1. Upload counters → backup.
+  2. Run `010_release_1_4.sql` → merge #5.
+  3. Reload → check the photo limit.
+  4. Connect the USB printer → set up.
+  - Set-up order: operating supplies → merge ingredients → cups and lids → options library → weighs → supplied items.
+- **What's in 1.4:**
+  - merge ingredients;
+  - options library: Hot/Iced, take-away cup + lid, extra shot, non-dairy swap (replaces all the milk, incl. 16 oz);
+  - supplied items; grams for sauces; counter waste log (Complimentary needs a manager);
+  - Expenses, Net income (tax shown separately), Waste report;
+  - **USB thermal printing on my Mac**: receipt, barista ticket with PAID / NOT PAID line, QR tickets (one counter), shift report on close; no PDF prompts.
+- **Mac printer:**
+  - Chrome is best; Brave works for USB.
+  - If the Mac says another program is using the printer, remove it in Printers & Scanners and replug.
+- **Next, when I say so:**
+  - Wave 3 (1.5): QR accounts & security.
+  - Wave 4 (1.6) "Money & owners": Accounting overview, investor equity, editable payment methods (QR payment, Bank transfer), extra charge per payment method (I chose option C, aware of DTI DAO 21-03).
+  - Later: referrals with RPG loyalty.
+
+## Earlier (Nov 2): release 1.3 ready for me
 - **1.2 is live** and saved as the **last working version** (checkpoint 11).
 - 1.3 is built in 3 waves (`docs/PLAN_1.3.md`). **Wave 1 "Opening day" is built, tested (3,414 checks, 0 failing) and security-reviewed** (checkpoint 12).
 - To publish it I follow `docs/RELEASE_1.3.md` (about 25 min): upload counters → backup → run `009_release_1_3.sql` → merge the pull request → reload → set up (sub-category order, QR cards, Xprinter).

@@ -251,7 +251,7 @@ async function confirmOk(page){ await page.waitForSelector('#active-modal-overla
   const backup = await q.evaluate(async () => { const b = await buildCloudBackup(); return {brands: b.data.ingredient_brands.length, shapes: b.data.floor_shapes.length, red: b.data.loyalty_redemptions.length, v: b.version}; });
   const exp = await q.evaluate(async () => { const t0 = Date.now(); const b = await buildCloudBackup(); return {at: b.exported_at, ms: Date.parse(b.exported_at), t0}; });
   ok(typeof exp.at === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(exp.at) && Math.abs(exp.ms - exp.t0) < 120000, 'a new backup has exported_at (ISO time, now)', exp);
-  ok(backup.brands === 3 && backup.shapes === 1 && backup.red === 1 && backup.v === 6, 'backup has brands, floor shapes, rewards used', backup);
+  ok(backup.brands === 3 && backup.shapes === 1 && backup.red === 1 && backup.v === 7, 'backup has brands, floor shapes, rewards used (format 7 since 1.4, lead-approved 2026-11-03)', backup);
   // import the same backup again: nothing new, nothing broken
   const imp = await q.evaluate(async () => { const b = await buildCloudBackup(); const r = await runImport(b, {}); return {imported: r.imported, already: r.already}; });
   ok(imp.imported === 0 && imp.already > 0, 'importing our own backup again: nothing new (safe to run twice)', imp);

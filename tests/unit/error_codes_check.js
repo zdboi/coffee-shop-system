@@ -58,7 +58,8 @@ const qrKeys = new Set([...orderSrc.matchAll(/\b([A-Z][A-Z_]{2,})\s*:/g)].map(x 
 const backDir = fs.readdirSync(path.join(ROOT, 'cccc/back')).filter(f => f.endsWith('.js')).map(f => 'cccc/back/' + f);
 const APPS = [
   {name: 'counter (cccc/front)', rpcs: rpcsOf(['cccc/front/front.js']), has: (c) => !!ERROR_TEXT[c]},
-  {name: 'Back Office (cccc/back)', rpcs: rpcsOf(backDir), has: (c) => !!ERROR_TEXT[c] || boKeys.has(c)},
+  // 1.4 (from core-sync-engineer's bo14_error_codes_check, 2026-11-03): the new Back Office functions count even before a screen calls them
+  {name: 'Back Office (cccc/back) + 1.4 functions', rpcs: rpcsOf(backDir).concat(['merge_ingredients_preview','merge_ingredients','save_supplied_item','waste_report','net_income_report','apply_changes','bo_bootstrap']), has: (c) => !!ERROR_TEXT[c] || boKeys.has(c)},
   {name: 'QR page (cccc/order)', rpcs: rpcsOf(['cccc/order/order.js']), has: (c) => qrKeys.has(c)},
 ];
 let checks = 0, failed = 0;

@@ -11,22 +11,66 @@ const WEIGHT_UNITS = {g:1, kg:1000};
 const VOLUME_UNITS = {ml:1, L:1000};
 const COUNT_UNITS = {pcs:1, box:null, pack:null}; // box/pack conversion is purchase-specific
 
+/* ---- ONE unit converter (release 1.4, A10) ----
+   Same rule as the database's _unit_family / _unit_factor / _to_base_qty (010):
+   - families: g / kg (weight), mL / L (volume); case and spaces ignored ("l" = "L");
+     anything else (pcs, box, pack...) is a count unit that only matches itself;
+   - same unit -> unchanged; same family -> x1000 / ÷1000;
+   - g <-> mL only through the item's "weighs" (gPerMl = grams one mL weighs):
+     mL = g ÷ w, g = mL × w; otherwise impossible (null = the server's BAD_UNIT);
+   - rounded to 6 decimals (_unitRound), except "same unit" which is returned as is.
+   Used by recipe lines, option extras, waste, purchases, stock and costing. */
+function _unitNorm(u){ return String(u == null ? '' : u).trim().toLowerCase(); }
 function unitFamily(unit){
-  if(unit in WEIGHT_UNITS) return 'weight';
-  if(unit in VOLUME_UNITS) return 'volume';
+  const k = _unitNorm(unit);
+  if(k === 'g' || k === 'kg') return 'weight';
+  if(k === 'ml' || k === 'l') return 'volume';
   return 'count';
+}
+// How many of the family's small unit one unit is (kg = 1000 g, L = 1000 mL); counts: 1.
+function unitFactor(unit){ const k = _unitNorm(unit); return (k === 'kg' || k === 'l') ? 1000 : 1; }
+// Rounded to 6 decimals the way the database's round(x, 6) does: binary noise removed first
+// (16.3636365 stored as 16.36363649… gives 16.363637), halves away from zero.
+function _unitRound(n){
+  n = Number(n);
+  if(!isFinite(n) || n === 0) return n === 0 ? 0 : n;
+  const parts = Math.abs(n).toPrecision(15).split('e');
+  const out = Number(Math.round(Number(parts[0] + 'e' + ((Number(parts[1]) || 0) + 6))) + 'e-6');
+  return (n < 0 && out) ? -out : out;
+}
+// toBaseQty(qty, unit, baseUnit, gPerMl?) -> qty in baseUnit, or null when it can't be converted.
+// unit empty / missing = already in baseUnit. qty missing / not a number -> null.
+function toBaseQty(qty, unit, baseUnit, gPerMl){
+  if(qty === null || qty === undefined || qty === '') return null;
+  const q = Number(qty);
+  if(!isFinite(q)) return null;
+  const typed = (unit == null || String(unit).trim() === '') ? baseUnit : unit;
+  const u = _unitNorm(typed), b = _unitNorm(baseUnit);
+  if(u === b) return q;
+  const fu = unitFamily(u), fb = unitFamily(b);
+  if(fu === fb && fu !== 'count') return _unitRound(q * unitFactor(u) / unitFactor(b));
+  const w = Number(gPerMl);
+  if(isFinite(w) && w > 0){
+    if(fu === 'weight' && fb === 'volume') return _unitRound(q * unitFactor(u) / w / unitFactor(b));
+    if(fu === 'volume' && fb === 'weight') return _unitRound(q * unitFactor(u) * w / unitFactor(b));
+  }
+  return null;
+}
+// The same for an ingredient row (its base_unit and weight_g_per_ml).
+function ingredientQtyToBase(ingredient, qty, unit){
+  if(!ingredient) return null;
+  return toBaseQty(qty, unit, ingredient.base_unit, ingredient.weight_g_per_ml);
 }
 
 // Convert a purchase quantity+unit into base-unit quantity for the ingredient's base_unit.
-function toBaseQuantity(quantity, purchaseUnit, baseUnit, unitsPerPurchaseUnit){
+// g/kg and mL/L (and g <-> mL with gPerMl, the item's "weighs") go through toBaseQty;
+// a count unit that isn't the base unit (box, pack) uses unitsPerPurchaseUnit; else 1:1.
+function toBaseQuantity(quantity, purchaseUnit, baseUnit, unitsPerPurchaseUnit, gPerMl){
   quantity = Number(quantity)||0;
   if(purchaseUnit === baseUnit) return quantity;
-  const fam = unitFamily(baseUnit);
-  if(fam === 'weight' && purchaseUnit in WEIGHT_UNITS && baseUnit in WEIGHT_UNITS){
-    return quantity * (WEIGHT_UNITS[purchaseUnit] / WEIGHT_UNITS[baseUnit]);
-  }
-  if(fam === 'volume' && purchaseUnit in VOLUME_UNITS && baseUnit in VOLUME_UNITS){
-    return quantity * (VOLUME_UNITS[purchaseUnit] / VOLUME_UNITS[baseUnit]);
+  if(purchaseUnit){
+    const v = toBaseQty(quantity, purchaseUnit, baseUnit, gPerMl);
+    if(v !== null) return v;
   }
   if(unitsPerPurchaseUnit && Number(unitsPerPurchaseUnit) > 0){
     return quantity * Number(unitsPerPurchaseUnit);
@@ -37,45 +81,44 @@ function toBaseQuantity(quantity, purchaseUnit, baseUnit, unitsPerPurchaseUnit){
 /* ---- Unit conversion for typing/display (owner request #3, 2026-10-25) ----
    Every STORED quantity stays in the ingredient's base unit. These helpers only
    convert what the owner types (e.g. 150 mL for a base unit of L) and how a
-   base quantity is shown. They never touch money or stock formulas. */
-function _unitRound(n){ return Math.round(n * 1e6) / 1e6; }
-function _unitTable(unit){
-  if(unit in WEIGHT_UNITS) return WEIGHT_UNITS;
-  if(unit in VOLUME_UNITS) return VOLUME_UNITS;
-  return null;
-}
-// Units the owner may type for an ingredient with this base unit.
-function compatibleUnits(baseUnit){
-  if(baseUnit in WEIGHT_UNITS) return ['g','kg'];
-  if(baseUnit in VOLUME_UNITS) return ['ml','L'];
+   base quantity is shown. gPerMl (optional, release 1.4) = the item's "weighs":
+   with it, a house-made sauce counted in L can also be typed / shown in g or kg. */
+// Units the owner may type for an ingredient with this base unit (its own family first).
+function compatibleUnits(baseUnit, gPerMl){
+  const fam = unitFamily(baseUnit);
+  const w = Number(gPerMl) > 0;
+  if(fam === 'weight') return w ? ['g','kg','ml','L'] : ['g','kg'];
+  if(fam === 'volume') return w ? ['ml','L','g','kg'] : ['ml','L'];
   return baseUnit ? [baseUnit] : [];
 }
-// qty in fromUnit -> qty in toUnit; null when the units are not the same family.
-function convertQuantity(qty, fromUnit, toUnit){
+function unitsForIngredient(ingredient){
+  return ingredient ? compatibleUnits(ingredient.base_unit, ingredient.weight_g_per_ml) : [];
+}
+// qty in fromUnit -> qty in toUnit; null when the units don't convert (see toBaseQty).
+function convertQuantity(qty, fromUnit, toUnit, gPerMl){
   const q = Number(qty);
   if(!isFinite(q)) return null;
   if(fromUnit === toUnit) return q;
-  const t = _unitTable(fromUnit);
-  if(!t || !(toUnit in t)) return null;   // different family, or count units
-  return _unitRound(q * (t[fromUnit] / t[toUnit]));
+  if(_unitNorm(fromUnit) === '' || _unitNorm(toUnit) === '') return null;
+  return toBaseQty(q, fromUnit, toUnit, gPerMl);
 }
 // Typed qty+unit -> base-unit qty (unit missing = already base). null if incompatible.
-function toBaseUnit(qty, unit, baseUnit){
-  return convertQuantity(qty, unit || baseUnit, baseUnit);
+function toBaseUnit(qty, unit, baseUnit, gPerMl){
+  return convertQuantity(qty, unit || baseUnit, baseUnit, gPerMl);
 }
 // Base-unit qty -> {qty, unit} in displayUnit (falls back to baseUnit when missing/incompatible).
-function fromBaseUnit(qtyBase, baseUnit, displayUnit){
+function fromBaseUnit(qtyBase, baseUnit, displayUnit, gPerMl){
   const q = Number(qtyBase) || 0;
   if(displayUnit && displayUnit !== baseUnit){
-    const v = convertQuantity(q, baseUnit, displayUnit);
+    const v = convertQuantity(q, baseUnit, displayUnit, gPerMl);
     if(v != null) return {qty: v, unit: displayUnit};
   }
   return {qty: _unitRound(q), unit: baseUnit};
 }
 function unitLabel(unit){ return unit === 'ml' ? 'mL' : (unit == null ? '' : String(unit)); }
 // e.g. formatQuantity(0.15, 'L', 'ml') -> "150 mL"; formatQuantity(100, 'g', 'kg') -> "0.1 kg"
-function formatQuantity(qtyBase, baseUnit, displayUnit, dp=2){
-  const r = fromBaseUnit(qtyBase, baseUnit, displayUnit);
+function formatQuantity(qtyBase, baseUnit, displayUnit, dp=2, gPerMl){
+  const r = fromBaseUnit(qtyBase, baseUnit, displayUnit, gPerMl);
   const s = String(Number(Number(r.qty).toFixed(dp)));   // trims trailing zeros
   const lbl = unitLabel(r.unit);
   return lbl ? s + ' ' + lbl : s;
@@ -322,10 +365,13 @@ function ingredientCosting(ingredientId, visiting){
   const stats = computeCostingStats(purchasesFor(ingredientId));
   const method = costingMethod();
   let current = stats.count ? (method==='latest'?stats.latest:stats.weightedAvg) : 0;
+  let costSource = 'purchases', inUse = null;
+  // Release 1.4 (A8): no purchases yet -> the typed "price paid per piece" (standard_cost),
+  // like the server's _ingredient_unit_cost. Items without standard_cost: 0 as before.
+  if(!stats.count && _hasNum(ing.standard_cost)){ current = Number(ing.standard_cost); costSource = 'standard_cost'; }
   // Release 1.2 (owner: "cost follows what we're currently using"): an ingredient with
   // brands costs what the lot in use now cost (its purchase price per base unit).
   // No lot in use, or that lot has no price (e.g. starting stock) -> the method above.
-  let costSource = 'purchases', inUse = null;
   if(ingredientHasBrands(ingredientId)){
     inUse = inUseBrand(ingredientId);
     if(inUse && inUse.price_per_base_unit !== null){ current = inUse.price_per_base_unit; costSource = 'in_use_lot'; }
@@ -346,6 +392,22 @@ function setStockFromServer(rows){
   (rows||[]).forEach(r=>{ state.stock[r.ingredient_id] = Number(r.stock)||0; });
 }
 
+function _hasNum(v){ return v !== null && v !== undefined && v !== '' && isFinite(Number(v)); }
+
+// A recipe line's amount in the ingredient's stock unit (release 1.4, A10):
+// entered_quantity + unit (as typed, e.g. 25 g of a sauce counted in L) converted with
+// the ingredient's "weighs" -- the same number the database stores in quantity -- else
+// quantity as stored (1.3 lines, or a unit that doesn't convert).
+function recipeLineQty(ri){
+  if(!ri) return 0;
+  if(_hasNum(ri.entered_quantity)){
+    const v = ingredientQtyToBase(ingredientById(ri.ingredient_id), ri.entered_quantity, ri.unit);
+    if(v !== null) return v;
+  }
+  return Number(ri.quantity) || 0;
+}
+
+// Each line: {...recipe_ingredients row, quantity: in stock units (recipeLineQty), unitCost, lineCost, isProduced}
 function recipeCost(recipeId, visiting){
   visiting = visiting || new Set();
   if(visiting.has('recipe:'+recipeId)) return {lines:[], total:0, cyclic:true};
@@ -355,20 +417,74 @@ function recipeCost(recipeId, visiting){
   const lines = items.map(ri=>{
     const costing = ingredientCosting(ri.ingredient_id, visiting);
     const cost = costing.current || 0;
-    const lineCost = cost * Number(ri.quantity||0);
+    const qty = recipeLineQty(ri);
+    const lineCost = cost * qty;
     total += lineCost;
-    return {...ri, unitCost:cost, lineCost, isProduced: costing.isProduced};
+    return {...ri, quantity: qty, unitCost:cost, lineCost, isProduced: costing.isProduced};
   });
   return {lines, total};
 }
 
-function recipeMetrics(recipe){
+// recipeMetrics(recipe, modifiers?) -> {cost, lines, profit, foodCostPct, price}
+// Without modifiers: exactly as before (the recipe's own lines at the menu price).
+// With modifiers (release 1.4): cost of what one item with those options takes from stock
+// (recipeCostWithOptions: extras added, swaps taken off/put on) at menu price + the options' prices.
+function recipeMetrics(recipe, modifiers){
+  if(Array.isArray(modifiers) && modifiers.length){
+    const rc = recipeCostWithOptions(recipe.id, modifiers);
+    const price = menuUnitPrice(recipe, modifiers);
+    return {cost: rc.total, lines: rc.lines, profit: price - rc.total, foodCostPct: price>0 ? rc.total/price*100 : 0, price};
+  }
   const {total, lines} = recipeCost(recipe.id);
   const price = Number(recipe.selling_price)||0;
   const profit = price - total;
   const foodCostPct = price>0 ? (total/price*100) : 0;
-  return {cost:total, lines, profit, foodCostPct};
+  return {cost:total, lines, profit, foodCostPct, price};
 }
+
+// Cost of ONE item with these options (release 1.4): the stock lines a sale would take
+// (inventoryLinesForSaleLine, quantity 1) × each ingredient's current cost.
+// -> {lines: [{ingredient_id, quantity, kind, label, unitCost, lineCost}], total}
+function recipeCostWithOptions(recipeId, modifiers){
+  let total = 0;
+  const lines = inventoryLinesForSaleLine(recipeId, 1, modifiers || []).map(l => {
+    const unitCost = ingredientCosting(l.ingredient_id).current || 0;
+    const lineCost = unitCost * l.quantity;
+    total += lineCost;
+    return Object.assign({}, l, {unitCost, lineCost});
+  });
+  return {lines, total};
+}
+// How much choosing one option changes the cost of one item (₱; a swap to a dearer milk > 0).
+function optionCostDelta(recipeId, modifier){
+  return recipeCostWithOptions(recipeId, [modifier]).total - recipeCostWithOptions(recipeId, []).total;
+}
+
+// Menu price of one item with these options: selling_price + Σ price_delta
+// (the server's _menu_unit_price rule; library options and swaps included).
+function menuUnitPrice(recipe, modifiers){
+  return (Number(recipe && recipe.selling_price) || 0) + (modifiers || []).reduce((s, m) => s + (Number(m && m.price_delta) || 0), 0);
+}
+
+/* ---- Supplied items (release 1.4, A8): bought and resold per piece ---- */
+function isSuppliedRecipe(recipe){ return !!(recipe && recipe.supplied_ingredient_id); }
+// Same numbers save_supplied_item returns: cost = the latest purchase's price per piece,
+// else the typed cost (ingredients.standard_cost), else 0;
+// margin = price − cost (centavos), margin_pct = margin ÷ price × 100 (1 decimal; null at price 0).
+// -> {ingredient_id, cost_per_piece, selling_price, margin, margin_pct, cost_source: 'purchase'|'standard_cost'|'none'}
+function suppliedItemCosting(recipe){
+  const iid = recipe && recipe.supplied_ingredient_id;
+  const ing = iid ? ingredientById(iid) : null;
+  const latest = (iid ? purchasesFor(iid) : []).slice().sort((a, b) =>
+    String(b.purchase_date || '').localeCompare(String(a.purchase_date || '')) || String(b.created_at || '').localeCompare(String(a.created_at || '')))[0];
+  let cost = 0, source = 'none';
+  if(latest && _hasNum(latest.price_per_base_unit)){ cost = Number(latest.price_per_base_unit); source = 'purchase'; }
+  else if(ing && _hasNum(ing.standard_cost)){ cost = Number(ing.standard_cost); source = 'standard_cost'; }
+  const price = Number(recipe && recipe.selling_price) || 0;
+  return {ingredient_id: iid || null, cost_per_piece: Math.round(cost * 1e4) / 1e4, selling_price: price,
+    margin: roundMoney(price - cost), margin_pct: price > 0 ? _round1((price - cost) / price * 100) : null, cost_source: source};
+}
+function _round1(n){ const a = Math.round(Math.abs(n) * 10 + 1e-9) / 10; return n < 0 ? -a : a; }
 
 function recipeCostAsOf(recipeId, date, visiting){
   visiting = visiting || new Set();
@@ -390,30 +506,456 @@ function recipeCostAsOf(recipeId, date, visiting){
       }
     } else {
       const stats = computeCostingStats(purchasesFor(ri.ingredient_id), date);
-      cost = stats.count ? (method==='latest'?stats.latest:stats.weightedAvg) : 0;
+      cost = stats.count ? (method==='latest'?stats.latest:stats.weightedAvg) : ((ing && _hasNum(ing.standard_cost)) ? Number(ing.standard_cost) : 0);
     }
-    total += cost * Number(ri.quantity||0);
+    total += cost * recipeLineQty(ri);
   });
   return total;
 }
 
-// Ingredients used by one cart/sale line: the recipe's ingredients x quantity, plus any
-// modifier that uses extra stock (e.g. "Extra shot" = +18 g beans). Same traversal the
-// original POS used, shared by sales (deduct) and refunds/voids (return to stock).
-function inventoryLinesForSaleLine(recipeId, quantity, modifiers){
-  const out = [];
-  const {lines} = recipeCost(recipeId);
-  lines.forEach(l=>{
-    const qty = Number(l.quantity||0) * Number(quantity||0);
-    if(qty > 0) out.push({ingredient_id: l.ingredient_id, quantity: qty, kind:'recipe'});
+/* ================= Merged ingredients and operating supplies (release 1.4, A12 / A11) =================
+   - Merged: an ingredient with merged_into set became a brand of a general ingredient
+     (it stays, switched off, so old offline counters can still upload). Hide it from
+     every list and picker; its amounts go to the general one.
+   - Operating supplies: an ingredient in a category with kind 'EXPENSE' is not stock.
+     Hide it from stock counts, low stock, inventory value and recipe pickers; counter
+     stock lines never include it (the server drops them too: _clean_stock_lines). */
+function isMergedIngredient(ing){ return !!(ing && ing.merged_into); }
+function isExpenseCategory(cat){
+  if(typeof cat === 'string') cat = (state.categories || []).find(c => c.id === cat);
+  return !!cat && String(cat.kind || 'STOCK').toUpperCase() === 'EXPENSE';
+}
+function isExpenseIngredient(ingOrId){
+  const ing = typeof ingOrId === 'string' ? ingredientById(ingOrId) : ingOrId;
+  return !!(ing && ing.category_id && isExpenseCategory(ing.category_id));
+}
+// Counted stock: active, not merged away, not an operating supply.
+function isStockIngredient(ing){ return !!ing && ing.active !== false && !isMergedIngredient(ing) && !isExpenseIngredient(ing); }
+function stockIngredientsList(){ return state.ingredients.filter(isStockIngredient); }
+// Operating supplies that can be picked on an expense (active, not merged).
+function expenseIngredientsList(){ return state.ingredients.filter(i => i.active !== false && !isMergedIngredient(i) && isExpenseIngredient(i)); }
+function expenseCategoriesList(){ return (state.categories || []).filter(c => isExpenseCategory(c)); }
+// Ingredients for a picker (recipe lines, option extras, swaps, waste, counts...).
+// Default: stock ingredients only (active, not merged, not operating supplies), house-made included.
+// opts: {produced: false -> leave house-made out, expense: true -> include operating supplies,
+//        inactive: true -> include switched-off ones (never merged ones), keep: [ids always kept, e.g. the current value]}
+function ingredientPickerList(opts){
+  opts = opts || {};
+  const keep = new Set(opts.keep || []);
+  return state.ingredients.filter(i => {
+    if(keep.has(i.id)) return true;
+    if(isMergedIngredient(i)) return false;
+    if(i.active === false && !opts.inactive) return false;
+    if(opts.produced === false && isProducedItem(i)) return false;
+    if(!opts.expense && isExpenseIngredient(i)) return false;
+    return true;
   });
-  (modifiers||[]).forEach(m=>{
-    if(m.ingredient_id && Number(m.ingredient_qty_delta)){
-      out.push({ingredient_id: m.ingredient_id, quantity: Number(m.ingredient_qty_delta) * Number(quantity||0), kind:'modifier', label: m.label});
-    }
+}
+// Where an ingredient's stock lives now (server _merge_target): itself, or the ingredient it
+// was merged into (followed up to 10 steps), with the factor its amounts are multiplied by
+// (kg merged into g -> 1000). -> {id, factor, ingredient} (unknown id -> itself, factor 1, ingredient null).
+function mergeTarget(ingredientId){
+  let id = ingredientId, f = 1, row = ingredientById(id);
+  for(let i = 0; row && row.merged_into && i < 10; i++){
+    const next = ingredientById(row.merged_into);
+    if(!next) break;
+    f = f * unitFactor(row.base_unit) / unitFactor(next.base_unit);
+    id = next.id; row = next;
+  }
+  return {id, factor: f, ingredient: row || null};
+}
+// Stock lines cleaned like the server's _clean_stock_lines: a merged ingredient's line goes to the
+// general ingredient (amount × factor), operating supplies are left out; lines of one ingredient
+// are added together (first line's kind / label kept), amounts rounded to 6 decimals, only > 0 kept.
+function cleanStockLines(lines){
+  const order = [], by = {};
+  (lines || []).forEach(l => {
+    if(!l || !l.ingredient_id) return;
+    const t = mergeTarget(l.ingredient_id);
+    if(isExpenseIngredient(t.id)) return;
+    const q = (Number(l.quantity) || 0) * t.factor;
+    if(!by[t.id]){ by[t.id] = Object.assign({}, l, {ingredient_id: t.id, quantity: 0}); order.push(t.id); }
+    by[t.id].quantity += q;
   });
+  return order.map(id => Object.assign(by[id], {quantity: _unitRound(by[id].quantity)})).filter(l => l.quantity > 0);
+}
+
+/* ================= Options: library groups, extras, swaps (release 1.4, A9) =================
+   recipes.modifier_groups is built by the DATABASE: library groups that apply (id 'lib_<uuid>',
+   library_group_id set) + the recipe's own groups. Every option looks like
+     {id, label, price_delta, kind: 'PLAIN'|'EXTRA'|'SWAP',
+      ingredient_id, ingredient_qty_delta,        (first extra, for 1.3 counters)
+      extras:  [{ingredient_id, quantity}],       (stock taken per item, stock units)
+      removes: [{ingredient_id, quantity}]}       (SWAP: stock NOT taken per item)
+   Own groups of older recipes may have only ingredient_id + ingredient_qty_delta. */
+function recipeOptionGroups(recipe){
+  const g = recipe && recipe.modifier_groups;
+  return Array.isArray(g) ? g.filter(x => x && typeof x === 'object') : [];
+}
+function isLibraryGroup(group){ return !!group && (String(group.id || '').indexOf('lib_') === 0 || !!group.library_group_id); }
+function optionKind(option){
+  const k = String((option && option.kind) || '').toUpperCase();
+  if(k === 'PLAIN' || k === 'EXTRA' || k === 'SWAP') return k;
+  return optionStockExtras(option).length ? 'EXTRA' : 'PLAIN';
+}
+// Stock one item takes for an option, in stock units (server _option_extras):
+// "extras" when the option has them (an amount typed with a unit is converted with the
+// ingredient's "weighs"), else the old pair ingredient_id × ingredient_qty_delta (may be < 0).
+function optionStockExtras(option){
+  if(!option) return [];
+  if(Array.isArray(option.extras)){
+    const out = [];
+    option.extras.forEach(e => {
+      if(!e || typeof e !== 'object' || !e.ingredient_id) return;
+      let q = null;
+      if(Object.prototype.hasOwnProperty.call(e, 'entered_quantity')){
+        const ing = ingredientById(e.ingredient_id);
+        q = ing ? ingredientQtyToBase(ing, e.entered_quantity, e.unit) : (_hasNum(e.quantity) ? Number(e.quantity) : null);
+      } else q = _hasNum(e.quantity) ? Number(e.quantity) : null;
+      if(q !== null && q > 0) out.push({ingredient_id: e.ingredient_id, quantity: q});
+    });
+    return out;
+  }
+  if(option.ingredient_id && Number(option.ingredient_qty_delta)) return [{ingredient_id: option.ingredient_id, quantity: Number(option.ingredient_qty_delta)}];
+  return [];
+}
+// Stock one item does NOT take for an option (a swap's "from" amount), stock units.
+function optionStockRemoves(option){
+  if(!option || !Array.isArray(option.removes)) return [];
+  return option.removes.filter(e => e && e.ingredient_id && _hasNum(e.quantity)).map(e => ({ingredient_id: e.ingredient_id, quantity: Number(e.quantity)}));
+}
+// The recipe's option a chosen modifier refers to (server rule, _recipe_stock_lines): group id +
+// option id first, else group name + label. -> {group, option} | null
+// strictIds: true -> a modifier that has a group_id is matched by ids only (the waste check,
+// _resolve_options).
+function findRecipeOption(recipe, m, strictIds){
+  if(!m || typeof m !== 'object') return null;
+  const groups = recipeOptionGroups(recipe);
+  const opts = (g) => Array.isArray(g.options) ? g.options : [];
+  if(m.group_id != null && m.option_id != null){
+    for(const g of groups){ if(g.id === m.group_id){ const o = opts(g).find(x => x && x.id === m.option_id); if(o) return {group: g, option: o}; } }
+  }
+  if(strictIds && Object.prototype.hasOwnProperty.call(m, 'group_id')) return null;
+  if(m.group != null && m.label != null){
+    for(const g of groups){ if(g.name === m.group){ const o = opts(g).find(x => x && x.label === m.label); if(o) return {group: g, option: o}; } }
+  }
+  return null;
+}
+// The modifier a cart line / sale item keeps for a chosen option (release 1.4 shape):
+//   {group, label, price_delta, group_id, option_id, kind, ingredient_id, ingredient_qty_delta,
+//    extras: [{ingredient_id, quantity}], removes: [{ingredient_id, quantity}],
+//    SWAP only: swap_from_ingredient_id, swap_to_ingredient_id, swap_rule: 'LINE_TOTAL'}
+// Non-swap options: extras / removes are a snapshot in stock units, so a refund later puts back
+// exactly what the sale took even if the option changes. A SWAP keeps its extras / removes for
+// display only; its stock is worked out by the swap rule (inventoryLinesForSaleLine, step 2).
+// group, label and price_delta are what the server's price check (_menu_unit_price) reads.
+// (An old option with a negative amount, e.g. "Less sugar" −5 g, is kept as removes [{sugar, 5}].)
+function modifierFromOption(group, option){
+  const kind = optionKind(option);
+  const all = optionStockExtras(option), removes = optionStockRemoves(option);
+  const extras = all.filter(e => e.quantity > 0);
+  all.filter(e => e.quantity < 0).forEach(e => removes.push({ingredient_id: e.ingredient_id, quantity: -e.quantity}));
+  // 1.3 fields: as the server set them on the option (a SWAP: none, so an old reader never
+  // deducts the "to" ingredient on top of the recipe), else the first extra.
+  const first = all[0];
+  const legacyId = kind === 'SWAP' ? null : (option.ingredient_id !== undefined ? (option.ingredient_id || null) : (first ? first.ingredient_id : null));
+  const legacyQty = legacyId ? (option.ingredient_id !== undefined ? (Number(option.ingredient_qty_delta) || 0) : first.quantity) : 0;
+  const out = {group: group.name, label: option.label, price_delta: Number(option.price_delta) || 0,
+    group_id: group.id, option_id: option.id, kind,
+    ingredient_id: legacyId, ingredient_qty_delta: legacyQty,
+    extras, removes};
+  if(kind === 'SWAP'){
+    out.swap_from_ingredient_id = option.swap_from_ingredient_id || null;
+    out.swap_to_ingredient_id = option.swap_to_ingredient_id || null;
+    out.swap_rule = 'LINE_TOTAL';
+  }
   return out;
 }
+// selections [{group_id, option_id}] (the counter's picker) -> modifiers, in selection order.
+// Selections that aren't on the recipe are left out (checkOptionSelections reports them).
+function modifiersFromSelections(recipe, selections){
+  const out = [];
+  (selections || []).forEach(s => { const f = findRecipeOption(recipe, s); if(f) out.push(modifierFromOption(f.group, f.option)); });
+  return out;
+}
+// The shared check of a choice of options (the counter must enforce required groups, like
+// qr_place_order does). selections: [{group_id, option_id}] or modifiers [{group, label}].
+// -> {ok, missing: [{group_id, name}]  (required groups with nothing chosen, menu order),
+//     problems: [{group_id, option_id, group, label, reason: 'UNKNOWN'|'DUPLICATE'|'ONE_ONLY'}]}
+// opts.strictIds: match modifiers that carry a group_id by ids only (as the server's waste check).
+// The result also has resolved: [{group, label, group_id, option_id}] for the options found.
+function checkOptionSelections(recipe, selections, opts){
+  const groups = recipeOptionGroups(recipe);
+  const seen = new Set(), chosenGroups = {}, problems = [], resolved = [];
+  (selections || []).forEach(s => {
+    if(!s) return;
+    const f = findRecipeOption(recipe, s, !!(opts && opts.strictIds));
+    if(!f){ problems.push({group_id: s.group_id || null, option_id: s.option_id || null, group: s.group || null, label: s.label || null, reason: 'UNKNOWN'}); return; }
+    const key = f.group.id + ':' + f.option.id;
+    const base = {group_id: f.group.id, option_id: f.option.id, group: f.group.name, label: f.option.label};
+    if(seen.has(key)){ problems.push(Object.assign(base, {reason: 'DUPLICATE'})); return; }
+    if(chosenGroups[f.group.id] && !f.group.multi_select){ problems.push(Object.assign(base, {reason: 'ONE_ONLY'})); return; }
+    seen.add(key); chosenGroups[f.group.id] = true;
+    resolved.push({group: f.group.name, label: f.option.label, group_id: f.group.id, option_id: f.option.id});
+  });
+  const missing = groups.filter(g => g.required && !chosenGroups[g.id]).map(g => ({group_id: g.id, name: g.name}));
+  return {ok: !missing.length && !problems.length, missing, problems, resolved};
+}
+// Just the required groups with nothing chosen: [{group_id, name}] ([] = fine).
+function missingRequiredGroups(recipe, selections){ return checkOptionSelections(recipe, selections).missing; }
+
+// How a chosen modifier moves stock per item:
+//   {swap: {from, to}}       a swap by the LINE_TOTAL rule (step 2 of inventoryLinesForSaleLine)
+//   {extras, removes}        everything else (step 1), stock units
+// Which one:
+//   snapshot with swap_rule 'LINE_TOTAL' (1.4 carts, QR orders, sale items) -> swap (from / to of the snapshot)
+//   snapshot with extras / removes lists, no swap_rule -> extras − removes as stored (the older rule;
+//                            so refunds of sales made before the LINE_TOTAL rule return what they took)
+//   1.3 snapshot (ingredient_id / ingredient_qty_delta) -> that single pair
+//   bare choice ({group_id, option_id} / {group, label}) -> the recipe's option now, like the server:
+//                            a SWAP on the menu -> swap; else its extras (an option no longer on the menu takes nothing)
+function modifierStock(recipe, m){
+  const none = {extras: [], removes: []};
+  if(!m || typeof m !== 'object') return none;
+  const has = (k) => Object.prototype.hasOwnProperty.call(m, k);
+  if(m.swap_rule === 'LINE_TOTAL') return {swap: {from: m.swap_from_ingredient_id || null, to: m.swap_to_ingredient_id || null}};
+  if(Array.isArray(m.extras) || Array.isArray(m.removes)){
+    return {extras: Array.isArray(m.extras) ? optionStockExtras(m) : optionStockExtras({ingredient_id: m.ingredient_id, ingredient_qty_delta: m.ingredient_qty_delta}),
+            removes: optionStockRemoves(m)};
+  }
+  if(has('ingredient_id') || has('ingredient_qty_delta')) return {extras: optionStockExtras({ingredient_id: m.ingredient_id, ingredient_qty_delta: m.ingredient_qty_delta}), removes: []};
+  const f = findRecipeOption(recipe, m);
+  if(!f) return none;
+  if(String(f.option.kind || '').toUpperCase() === 'SWAP') return {swap: {from: f.option.swap_from_ingredient_id || null, to: f.option.swap_to_ingredient_id || null}};
+  return {extras: optionStockExtras(f.option), removes: []};
+}
+
+// Ingredients used by one cart/sale line: the server's _recipe_stock_lines rule (010, lead
+// decision 2026-11-03 "a non-dairy drink is fully non-dairy"):
+//   1. per ONE item, per ingredient: recipe lines (stock units, recipeLineQty, > 0) + every chosen
+//      non-swap option's stock (modifierStock: extras − removes, or the old single pair);
+//   2. then each chosen SWAP (from ≠ to), in the order chosen: the item's WHOLE total of "from"
+//      (recipe + extras, e.g. a 16 oz size's extra milk) moves to "to", converted to its stock unit
+//      (g↔kg, mL↔L, g↔mL through "to"'s weighs, else "from"'s); "from" becomes 0. A later swap of a
+//      "from" already swapped moves nothing (it still adds its price); a "from" total of 0, or an
+//      amount that can't be converted, moves nothing. The swap's own extras / removes are never used;
+//   3. × quantity, rounded to 6 decimals, only amounts > 0 kept;
+//   then cleaned (cleanStockLines): merged ingredients -> their general ingredient,
+//   operating supplies left out.
+// -> [{ingredient_id, quantity (> 0, stock unit), kind: 'recipe'|'modifier', label (modifier only)}]
+//    one line per ingredient. Shared by sales (deduct), refunds/voids (put back), waste,
+//    the stock check before payment and costing.
+// opts.raw: true -> skip the cleaning step (exactly _recipe_stock_lines; parity checks).
+function inventoryLinesForSaleLine(recipeId, quantity, modifiers, opts){
+  const Q = Number(quantity) || 0;
+  const recipe = state.recipes.find(r => r.id === recipeId) || null;
+  const order = [], by = {};
+  const add = (id, q, kind, label) => {
+    if(!id || !isFinite(q)) return;
+    if(!by[id]){ by[id] = {ingredient_id: id, quantity: 0, kind}; if(kind === 'modifier') by[id].label = label; order.push(id); }
+    by[id].quantity += q;
+  };
+  state.recipeIngredients.forEach(ri => {
+    if(ri.recipe_id !== recipeId) return;
+    const q = recipeLineQty(ri);
+    if(q > 0) add(ri.ingredient_id, q, 'recipe');
+  });
+  const mods = (Array.isArray(modifiers) ? modifiers : []).map(m => ({m, st: modifierStock(recipe, m)}));
+  mods.forEach(({m, st}) => {
+    if(st.swap) return;
+    st.extras.forEach(e => add(e.ingredient_id, e.quantity, 'modifier', m.label));
+    st.removes.forEach(e => add(e.ingredient_id, -e.quantity, 'modifier', m.label));
+  });
+  const done = new Set();
+  mods.forEach(({m, st}) => {
+    if(!st.swap) return;
+    const from = st.swap.from, to = st.swap.to;
+    if(!from || !to || from === to || done.has(from)) return;
+    done.add(from);
+    const amt = by[from] ? by[from].quantity : 0;
+    if(!(amt > 0)) return;
+    const x = ingredientById(from), y = ingredientById(to);
+    if(!x || !y) return;
+    const w = _hasNum(y.weight_g_per_ml) ? y.weight_g_per_ml : x.weight_g_per_ml;
+    const conv = toBaseQty(amt, x.base_unit, y.base_unit, w);
+    if(!(conv > 0)) return;
+    by[from].quantity = 0;
+    add(to, conv, 'modifier', m.label);
+  });
+  const out = order.map(id => Object.assign(by[id], {quantity: _unitRound(by[id].quantity * Q)})).filter(l => l.quantity > 0);
+  return (opts && opts.raw) ? out : cleanStockLines(out);
+}
+
+// How many of an item (with these options) the stock on hand can make now: the lowest
+// floor(stock ÷ amount per item) over its stock lines (same lines as a sale; state.stock or
+// the stock map given). No stock lines (nothing tracked) -> 99, like the counter's tile badge.
+function recipeMakeableCount(recipeId, modifiers, stock){
+  stock = stock || state.stock || {};
+  let lowest = Infinity;
+  inventoryLinesForSaleLine(recipeId, 1, modifiers || []).forEach(l => {
+    lowest = Math.min(lowest, Math.floor(((Number(stock[l.ingredient_id]) || 0) + STOCK_EPSILON) / l.quantity));
+  });
+  return lowest === Infinity ? 99 : Math.max(0, lowest);
+}
+
+/* ================= Counter waste log (release 1.4, A15) =================
+   fo_sync op 'waste' (contract A15): the counter sends WHAT was wasted; the server works out
+   the stock and cost itself. Only COMPLIMENTARY needs a manager's approval (like a discount). */
+const WASTE_REASONS = [
+  {id: 'CALIBRATION',   label: 'Calibration / barista drink'},
+  {id: 'SPILLAGE',      label: 'Spillage'},
+  {id: 'COMPLIMENTARY', label: 'Complimentary', needs_approval: true},
+  {id: 'EXPIRED',       label: 'Expired / spoiled'},
+  {id: 'OTHER',         label: 'Other', needs_note: true},
+];
+function wasteReasonLabel(id){ const r = WASTE_REASONS.find(x => x.id === id); return r ? r.label : String(id == null ? '' : id); }
+const WASTE_MAX_ITEMS = 30, WASTE_MAX_RECIPE_QTY = 100, WASTE_MAX_BASE_QTY = 1000000, WASTE_NOTE_MAX = 200, WASTE_MAX_OPTIONS = 20;
+function _codeError(code){ const e = new Error(code); e.code = code; return e; }
+// buildWasteData({reason, note, staff_id, shift_id, items, approved_by, approval_token, id?, logged_at?})
+//   items: [{recipe_id, quantity, modifiers}] (modifiers: cart modifiers, or {group_id, option_id}/{group, label})
+//        | [{ingredient_id, quantity, unit}]  (unit: any unit that converts; empty = stock unit)
+// -> the op's data, ready for Sync.queue('waste', data):
+//   {id, reason, note, staff_id, shift_id, logged_at, items, approved_by, approval_token}
+//   items sent as {recipe_id, quantity, modifiers: [{group, label, group_id, option_id}] (the options
+//   found on the item's current menu, like the server keeps)} or
+//   {ingredient_id, quantity, unit}. id is made ONCE here: keep the same data for retries.
+// Throws an Error whose message/code is the server's code (friendlyError gives the words):
+//   BAD_WASTE_REASON, NOTE_REQUIRED, BAD_WASTE (no items / > 30 / unreadable; an option not on the
+//   item now, chosen twice, two in a pick-one group, > 20 options: e.problems lists them),
+//   OPTION_REQUIRED (a required group not chosen: e.missing = [{group_id, name}]; the server would say
+//   BAD_WASTE), BAD_QUANTITY, BAD_UNIT, UNKNOWN_RECIPE / UNKNOWN_INGREDIENT (not in this counter's menu copy),
+//   APPROVAL_REQUIRED (COMPLIMENTARY without approved_by + approval_token).
+function buildWasteData(input){
+  input = input || {};
+  const reason = String(input.reason || '').trim().toUpperCase();
+  if(!WASTE_REASONS.some(r => r.id === reason)) throw _codeError('BAD_WASTE_REASON');
+  const note = String(input.note == null ? '' : input.note).trim().slice(0, WASTE_NOTE_MAX);
+  if(reason === 'OTHER' && !note) throw _codeError('NOTE_REQUIRED');
+  const list = Array.isArray(input.items) ? input.items : [];
+  if(list.length < 1 || list.length > WASTE_MAX_ITEMS) throw _codeError('BAD_WASTE');
+  const items = list.map(it => {
+    if(!it || typeof it !== 'object') throw _codeError('BAD_WASTE');
+    const q = Number(it.quantity);
+    if(!_hasNum(it.quantity) || q <= 0) throw _codeError('BAD_QUANTITY');
+    if(it.recipe_id){
+      const rec = state.recipes.find(r => r.id === it.recipe_id);
+      if(!rec) throw _codeError('UNKNOWN_RECIPE');
+      if(q > WASTE_MAX_RECIPE_QTY) throw _codeError('BAD_QUANTITY');
+      // options checked against the menu like the server (_resolve_options): at most 20, each on
+      // the item now, none twice, one per pick-one group, every required group chosen.
+      if(it.modifiers != null && !Array.isArray(it.modifiers)) throw _codeError('BAD_WASTE');
+      const mods = it.modifiers || [];
+      if(mods.length > WASTE_MAX_OPTIONS || mods.some(m => !m || typeof m !== 'object' || Array.isArray(m))) throw _codeError('BAD_WASTE');
+      const chk = checkOptionSelections(rec, mods, {strictIds: true});
+      if(chk.problems.length){ const e = _codeError('BAD_WASTE'); e.problems = chk.problems; e.recipe_id = rec.id; throw e; }
+      if(chk.missing.length){ const e = _codeError('OPTION_REQUIRED'); e.missing = chk.missing; e.recipe_id = rec.id; throw e; }
+      return {recipe_id: it.recipe_id, quantity: q, modifiers: chk.resolved};
+    }
+    if(it.ingredient_id){
+      const ing = ingredientById(it.ingredient_id);
+      if(!ing) throw _codeError('UNKNOWN_INGREDIENT');
+      const unit = (it.unit == null || String(it.unit).trim() === '') ? null : String(it.unit).trim();
+      const t = mergeTarget(ing.id), fin = t.ingredient || ing;
+      const base = toBaseQty(q, unit || ing.base_unit, fin.base_unit, fin.weight_g_per_ml);
+      if(base === null) throw _codeError('BAD_UNIT');
+      if(base > WASTE_MAX_BASE_QTY) throw _codeError('BAD_QUANTITY');
+      return {ingredient_id: ing.id, quantity: q, unit};
+    }
+    throw _codeError('BAD_WASTE');
+  });
+  const comp = reason === 'COMPLIMENTARY';
+  if(comp && (!input.approved_by || !input.approval_token)) throw _codeError('APPROVAL_REQUIRED');
+  return {id: input.id || uid(), reason, note: note || null, staff_id: input.staff_id || null, shift_id: input.shift_id || null,
+    logged_at: input.logged_at || new Date().toISOString(), items,
+    approved_by: comp ? input.approved_by : null, approval_token: comp ? input.approval_token : null};
+}
+// The stock a waste entry takes off, as the server will work it out (for the counter's own
+// stock numbers until the next refresh): [{ingredient_id, quantity}] one line per ingredient.
+// Menu items: the recipe's own modifiers on the CURRENT menu (as the server does), so pass the
+// data from buildWasteData (or the items). Ingredients: typed amount converted to the stock unit
+// of the ingredient it now lives in. Operating supplies left out.
+function wasteStockLines(dataOrItems){
+  const items = Array.isArray(dataOrItems) ? dataOrItems : ((dataOrItems && dataOrItems.items) || []);
+  const lines = [];
+  items.forEach(it => {
+    if(!it) return;
+    if(it.recipe_id){ inventoryLinesForSaleLine(it.recipe_id, it.quantity, (it.modifiers || []).map(m => ({group: m.group, label: m.label, group_id: m.group_id, option_id: m.option_id})), {raw: true}).forEach(l => lines.push(l)); return; }
+    const ing = ingredientById(it.ingredient_id);
+    if(!ing) return;
+    const t = mergeTarget(ing.id), fin = t.ingredient || ing;
+    const q = toBaseQty(it.quantity, it.unit || ing.base_unit, fin.base_unit, fin.weight_g_per_ml);
+    if(q !== null && q > 0) lines.push({ingredient_id: t.id, quantity: q, kind: 'ingredient'});
+  });
+  return cleanStockLines(lines).map(l => ({ingredient_id: l.ingredient_id, quantity: l.quantity}));
+}
+// Ready for applyStockDeltas(): [{ingredient_id, transaction_type: 'WASTE', quantity}]
+function wasteStockDeltas(dataOrItems){
+  return wasteStockLines(dataOrItems).map(l => ({ingredient_id: l.ingredient_id, transaction_type: 'WASTE', quantity: l.quantity}));
+}
+// Cost of a waste entry at today's costs (preview only; the server's report uses its own costing).
+function wasteCostPreview(dataOrItems){
+  return wasteStockLines(dataOrItems).reduce((s, l) => s + l.quantity * (ingredientCosting(l.ingredient_id).current || 0), 0);
+}
+
+/* ================= Expenses (release 1.4, A11; Back Office, owner only) ================= */
+const EXPENSE_CATEGORIES = [
+  {id: 'SUPPLIES',  label: 'Operating supplies'},
+  {id: 'RENT',      label: 'Rent'},
+  {id: 'UTILITIES', label: 'Utilities (power, water)'},
+  {id: 'INTERNET',  label: 'Internet'},
+  {id: 'WAGES',     label: 'Wages'},
+  {id: 'REPAIRS',   label: 'Repairs'},
+  {id: 'OTHER',     label: 'Other'},
+];
+function expenseCategoryLabel(id){ const c = EXPENSE_CATEGORIES.find(x => x.id === id); return c ? c.label : String(id == null ? '' : id); }
+
+/* ================= Option library: the database's checks, for the form (release 1.4, A9) =================
+   optionGroupProblem({name, options, applies_to}) -> null when fine, else {field, text}
+   (same rules as _library_group_problem; the server still checks: BAD_OPTION_GROUP: <field>). */
+const OPTION_GROUP_RECIPE_TYPES = ['DRINKS', 'SAUCES_SYRUPS', 'PASTRY', 'FOOD'];
+function optionGroupProblem(group){
+  const P = (field) => ({field, text: optionGroupProblemText(field)});
+  if(!group || typeof group !== 'object') return P('options');
+  const name = String(group.name == null ? '' : group.name).trim();
+  if(name.length < 1 || name.length > 40) return P('name');
+  const a = group.applies_to == null ? {recipe_types: [], subcategories: []} : group.applies_to;
+  if(!a || typeof a !== 'object' || Array.isArray(a)) return P('applies_to');
+  const types = a.recipe_types == null ? [] : a.recipe_types, subs = a.subcategories == null ? [] : a.subcategories;
+  if(!Array.isArray(types) || !Array.isArray(subs)) return P('applies_to');
+  if(types.some(t => typeof t !== 'string' || OPTION_GROUP_RECIPE_TYPES.indexOf(t) < 0)) return P('recipe_types');
+  if(subs.length > 100 || subs.some(t => typeof t !== 'string' || t.trim().length < 1 || t.trim().length > 40)) return P('subcategories');
+  const opts = group.options;
+  if(!Array.isArray(opts) || opts.length < 1 || opts.length > 30) return P('options');
+  const ids = new Set(), labels = new Set();
+  for(const o of opts){
+    if(!o || typeof o !== 'object' || Array.isArray(o)) return P('option');
+    const id = String(o.id == null ? '' : o.id);
+    if(id.length < 1 || id.length > 64 || ids.has(id)) return P('option id');
+    ids.add(id);
+    const lab = String(o.label == null ? '' : o.label).trim();
+    if(lab.length < 1 || lab.length > 40 || labels.has(lab.toLowerCase())) return P('option label');
+    labels.add(lab.toLowerCase());
+    const p = (o.price_delta == null || o.price_delta === '') ? 0 : Number(o.price_delta);
+    if(!isFinite(p) || p < -100000 || p > 100000) return P('price_delta');
+    const kind = String(o.kind == null ? 'PLAIN' : o.kind).toUpperCase();
+    if(['PLAIN', 'EXTRA', 'SWAP'].indexOf(kind) < 0) return P('kind');
+    if(kind === 'SWAP'){
+      if(p < 0) return P('price_delta');
+      if(!o.swap_from_ingredient_id || !o.swap_to_ingredient_id || o.swap_from_ingredient_id === o.swap_to_ingredient_id) return P('swap');
+      if(!ingredientById(o.swap_from_ingredient_id) || !ingredientById(o.swap_to_ingredient_id)) return P('swap');
+    } else if(Object.prototype.hasOwnProperty.call(o, 'extras')){
+      if(!Array.isArray(o.extras) || o.extras.length > 5) return P('extras');
+      for(const e of o.extras){
+        const q = Number(e && (e.entered_quantity != null ? e.entered_quantity : e.quantity));
+        if(!e || typeof e !== 'object' || !ingredientById(e.ingredient_id) || !(q > 0) || q > 1000000) return P('extras');
+        if(e.entered_quantity != null && ingredientQtyToBase(ingredientById(e.ingredient_id), e.entered_quantity, e.unit) === null) return P('extras unit');
+      }
+    }
+  }
+  return null;
+}
+// Plain words for a BAD_OPTION_GROUP reason (also used by friendlyError in ui.js when present there).
+function optionGroupProblemText(field){ return (typeof OPTION_GROUP_PROBLEM_TEXT !== 'undefined' && OPTION_GROUP_PROBLEM_TEXT[field]) || 'Check the option group and try again.'; }
 
 /* ================= Stock check at payment (release 1.3, Q6) =================
    Owner decision 2026-11-02: an item that has run out must be REMOVED before payment
@@ -423,7 +965,9 @@ function inventoryLinesForSaleLine(recipeId, quantity, modifiers){
    - lines: cart lines {recipe_id, name, quantity, modifiers} (the counter's posState.cart,
      or a QR order's items).
    - Every line is turned into stock lines with inventoryLinesForSaleLine (recipe + option
-     extras, exactly what the sale will deduct), SUMMED over the whole cart per ingredient,
+     extras − swap removes, cups and lids included, merged ingredients counted on their
+     general ingredient, operating supplies left out: exactly what the sale will deduct,
+     release 1.4), SUMMED over the whole cart per ingredient,
      so two lattes share the milk. An ingredient is short when the cart needs more than
      the counter's stock number by more than 0.001 of the base unit (state.stock;
      missing = 0, same as the server's _recipe_makeable / 009 OUT_OF_STOCK rule).

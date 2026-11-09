@@ -296,6 +296,40 @@
       return parts.join('&');
     }
 
+    /* ---- Storage helpers (release 1.4) ---- */
+    // bucket: letters, digits, '-', '_', '.' (not '.' / '..'); path: 'folder/file.jpg' style,
+    // no leading '/', no '\\', no empty part, no '.' or '..' part, no control characters, <= 1024.
+    function checkStoragePath(bucket, path){
+      const b = typeof bucket === 'string' ? bucket : '';
+      const p = typeof path === 'string' ? path : '';
+      const badB = !/^[A-Za-z0-9_.-]{1,100}$/.test(b) || b === '.' || b === '..';
+      const badP = !p || p.length > 1024 || p[0] === '/' || p.indexOf('\\') >= 0 || /[\u0000-\u001f\u007f]/.test(p)
+        || p.split('/').some(part => part === '' || part === '.' || part === '..');
+      if(badB || badP) throw new CloudError('That file name is not valid.', {code: 'BAD_STORAGE_PATH'});
+    }
+    function encPath(p){ return p.split('/').map(enc).join('/'); }
+    // A storage request with the login's token (refreshed once when it has run out).
+    async function storageFetch(url, o, timeoutMs, retried){
+      const extra = o.json ? {'Content-Type': 'application/json'} : {};
+      const headers = await apiHeaders(extra);
+      delete headers['x-staff-token'];
+      const res = await rawFetch(url, {method: o.method, headers, body: o.json ? JSON.stringify(o.json) : undefined}, timeoutMs);
+      if(!retried && session && (res.status === 401 || (res.status === 400 && /jwt|token/i.test(await res.clone().text().catch(() => ''))))){
+        await refreshSession();
+        return storageFetch(url, o, timeoutMs, true);
+      }
+      return res;
+    }
+    // Supabase Storage errors -> CloudError with a code friendlyError knows.
+    function storageError(status, data, what){
+      const sc = Number((data && data.statusCode) || status);
+      const raw = (data && (data.message || data.error)) || (what + ' failed (' + status + ')');
+      let code = 'STORAGE_FAILED';
+      if(sc === 404 || /not.?found/i.test(raw)) code = 'FILE_NOT_FOUND';
+      else if(sc === 401 || sc === 403 || /row-level security|unauthori[sz]ed|not allowed/i.test(raw)) code = 'FILE_NOT_ALLOWED';
+      return new CloudError(raw, {status, code});
+    }
+
     const api = {
       CloudError,
       storageKey,
@@ -427,12 +461,36 @@
       },
 
       async upload(bucket, path, blob, contentType){
+        checkStoragePath(bucket, path);   // same name rules as download / remove (BAD_STORAGE_PATH)
         const headers = await apiHeaders({'Content-Type': contentType || blob.type || 'application/octet-stream', 'x-upsert': 'true', 'cache-control': '3600'});
         delete headers['x-staff-token'];
         const res = await rawFetch(CFG.SUPABASE_URL + '/storage/v1/object/' + bucket + '/' + path, {method: 'POST', headers, body: blob}, 60000);
         const data = await parseBody(res);
         if(!res.ok) throw new CloudError((data && (data.message || data.error)) || ('Upload failed (' + res.status + ')'), {status: res.status});
         return api.publicUrl(bucket, path);
+      },
+      // Release 1.4: files in a PRIVATE bucket (e.g. expense receipt photos in 'expense-photos',
+      // path '<business_id>/<file>'). Both use the signed-in login; the bucket's own rules decide.
+      // download(bucket, path) -> Blob (authenticated GET; never a public link).
+      async download(bucket, path, opts){
+        checkStoragePath(bucket, path);
+        const url = CFG.SUPABASE_URL + '/storage/v1/object/authenticated/' + enc(bucket) + '/' + encPath(path);
+        const res = await storageFetch(url, {method: 'GET'}, (opts && opts.timeout) || 60000);
+        if(!res.ok) throw storageError(res.status, await parseBody(res), 'Download');
+        return res.blob();
+      },
+      // remove(bucket, paths) -> the list of removed files the server answers (may be []).
+      // Removing a file that isn't there is not an error (Supabase answers with an empty list).
+      async remove(bucket, paths, opts){
+        const list = Array.isArray(paths) ? paths : [paths];
+        if(!list.length) return [];
+        if(list.length > 1000) throw new CloudError('Too many files at once.', {code: 'BAD_STORAGE_PATH'});
+        list.forEach(p => checkStoragePath(bucket, p));
+        const res = await storageFetch(CFG.SUPABASE_URL + '/storage/v1/object/' + enc(bucket),
+          {method: 'DELETE', json: {prefixes: list}}, (opts && opts.timeout) || 30000);
+        const data = await parseBody(res);
+        if(!res.ok) throw storageError(res.status, data, 'Delete');
+        return Array.isArray(data) ? data : [];
       },
       publicUrl(bucket, path){
         return CFG.SUPABASE_URL + '/storage/v1/object/public/' + bucket + '/' + path;

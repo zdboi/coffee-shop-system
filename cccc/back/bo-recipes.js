@@ -7,7 +7,12 @@
    production recipe, its produced ingredient) are saved in ONE call.
    Option groups are stored as recipes.modifier_groups:
      [{id, name, required, multi_select,
-       options:[{id, label, price_delta, ingredient_id, ingredient_qty_delta}]}]
+       options:[{id, label, price_delta, ingredient_id, ingredient_qty_delta, unit, extras}]}]
+   Release 1.4: the DATABASE puts the Options library's groups (id 'lib_…') in front of the recipe's
+   own groups. This form edits only the recipe's own groups; library groups are shown read-only with
+   a tick per item (option_group_recipes: EXCLUDE / INCLUDE), see bo-library.js.
+   Amounts are sent as typed (entered_quantity + unit); the database works out the stock amount,
+   also through a house-made item's "weighs" (g <-> mL).
    ===================================================================== */
 
 /* ================= Recipes & menu ================= */
@@ -16,8 +21,9 @@ const recPicked = new Set();          // recipes ticked on the list (for "Remove
 function renderRecipes(){
   // Only "+ New recipe" sits in the top bar (so the page title stays visible); the menu tools are
   // in a row at the top of the page (same button ids as before).
-  const bar = setTopbarActions(`<button class="btn btn-primary" id="btn-new-recipe">+ New recipe</button>`);
+  const bar = setTopbarActions(`<button class="btn btn-outline" id="btn-new-supplied" title="Food or pastry bought ready-made and resold per piece">+ Supplied item</button> <button class="btn btn-primary" id="btn-new-recipe">+ New recipe</button>`);
   bar.querySelector('#btn-new-recipe').onclick = () => openRecipeForm();
+  bar.querySelector('#btn-new-supplied').onclick = () => openSuppliedItemForm();         // bo-library.js (1.4, A8)
   const content = document.getElementById('content');
   const cats = sortSubcategories([...new Set(state.recipes.map(r => r.category).filter(Boolean))]);
   const activeRecipes = state.recipes.filter(r => r.active !== false);
@@ -26,6 +32,7 @@ function renderRecipes(){
     <div class="rec-tools" role="group" aria-label="Menu tools">
       <button class="btn btn-sm btn-outline" id="btn-subcat-order" type="button">Arrange sub-categories</button>
       <button class="btn btn-sm btn-outline" id="btn-subcat-colors" type="button">Sub-category colours</button>
+      <button class="btn btn-sm btn-outline" id="btn-option-library" type="button">Options library</button>
       <span class="rec-tools-gap" aria-hidden="true"></span>
       <button class="btn btn-sm btn-ghost" id="btn-excel-import" type="button">${icon('upload', {size: 16})} Import from Excel</button>
       <button class="btn btn-sm btn-ghost" id="btn-excel-export" type="button">${icon('download', {size: 16})} Export to Excel</button>
@@ -51,6 +58,7 @@ function renderRecipes(){
     <div id="rec-grid-wrap"></div>`;
   content.querySelector('#btn-subcat-colors').onclick = () => openSubcategoryColors();
   content.querySelector('#btn-subcat-order').onclick = () => openSubcategoryOrder();
+  content.querySelector('#btn-option-library').onclick = () => navigate('optionLibrary');
   const imp = content.querySelector('#btn-excel-import'), exp = content.querySelector('#btn-excel-export');
   imp.onclick = () => busy(imp, () => startExcelImport(), 'Opening…');
   exp.onclick = () => busy(exp, () => exportRecipesToExcel(), 'Preparing…');
@@ -113,12 +121,16 @@ function renderRecipesGrid(){
     const m = recipeMetrics(r);
     const sellsDirectly = num(r.selling_price) > 0;
     const warn = m.foodCostPct > warnPct;
-    const stats = sellsDirectly
+    const sup = isSuppliedRecipe(r) ? suppliedItemCosting(r) : null;
+    const stats = sup
+      ? mini('Price', fmtMoney(sup.selling_price)) + mini('Paid', fmtMoney(sup.cost_per_piece)) + mini('Margin', fmtMoney(sup.margin), sup.margin >= 0 ? 'text-green' : 'text-red') + mini('Margin %', sup.margin_pct == null ? '—' : fmtNum(sup.margin_pct, 1) + '%')
+      : sellsDirectly
       ? mini('Price', fmtMoney(r.selling_price)) + mini('Cost', fmtMoney(m.cost)) + mini('Profit', fmtMoney(m.profit), m.profit >= 0 ? 'text-green' : 'text-red') + mini('Food cost', fmtNum(m.foodCostPct, 1) + '%')
       : mini('Batch cost', fmtMoney(m.cost)) + mini('Yield', r.expected_yield ? fmtNum(r.expected_yield, 0) + ' ' + esc(r.yield_unit || '') : '—') + mini('Cost / unit', num(r.expected_yield) > 0 ? fmtMoney(m.cost / num(r.expected_yield)) : '—');
     const flags = [
       isProductionRecipe(r) ? '<span class="badge badge-green">Produces stock</span>' : '',
-      sellsDirectly && warn ? '<span class="badge badge-red">High cost %</span>' : '',
+      sup ? `<span class="badge badge-green" title="Bought ready-made and resold per piece">Supplied · ${esc(fmtNum(ingredientStock(r.supplied_ingredient_id), 0))} pcs</span>` : '',
+      sellsDirectly && warn && !sup ? '<span class="badge badge-red">High cost %</span>' : '',
       r.active === false ? '<span class="badge badge-gray">Inactive</span>' : '',
       r.sold_out ? '<span class="badge badge-red">Sold out</span>' : '',
       sellsDirectly && r.pos_visible === false ? '<span class="badge badge-gray">Not at counter</span>' : '',
@@ -412,16 +424,17 @@ async function removePickedRecipes(){
    (quantity / ingredient_qty_delta); the chosen unit is kept only to show it the same way
    again (recipe_ingredients.unit, option.unit). Changing the unit converts the shown number. */
 function qtyInputValue(q){ const n = Number(q); return isFinite(n) ? String(Number(n.toFixed(6))) : ''; }
-function recUnitOptionsHtml(baseUnit, selected){
-  return compatibleUnits(baseUnit).map(u => `<option value="${esc(u)}" ${u === selected ? 'selected' : ''}>${esc(unitLabel(u))}</option>`).join('');
+function recUnitOptionsHtml(baseUnit, selected, w){
+  return compatibleUnits(baseUnit, w).map(u => `<option value="${esc(u)}" ${u === selected ? 'selected' : ''}>${esc(unitLabel(u))}</option>`).join('');
 }
 // Fills a unit dropdown for this ingredient; keeps `preferred` when it fits, else the base unit.
 function fillUnitSelect(sel, ing, preferred){
   if(!ing){ sel.innerHTML = ''; sel.dataset.prev = ''; sel.disabled = true; return; }
-  const units = compatibleUnits(ing.base_unit);
+  const units = unitsForIngredient(ing);          // 1.4: + g / mL through a house-made item's "weighs"
   const u = units.includes(preferred) ? preferred : ing.base_unit;
-  sel.innerHTML = recUnitOptionsHtml(ing.base_unit, u);
+  sel.innerHTML = recUnitOptionsHtml(ing.base_unit, u, ing.weight_g_per_ml);
   sel.value = u; sel.dataset.prev = u; sel.dataset.base = ing.base_unit;
+  sel.dataset.w = Number(ing.weight_g_per_ml) > 0 ? String(ing.weight_g_per_ml) : '';
   sel.disabled = units.length < 2;
 }
 // The unit dropdown changed (owner decision 2026-10-26):
@@ -432,35 +445,35 @@ function markTyped(input){ input.dataset.typed = '1'; }
 function convertShownQty(input, sel){
   const from = sel.dataset.prev, to = sel.value;
   if(input.value !== '' && from && to && from !== to && !input.dataset.typed){
-    const v = convertQuantity(input.value, from, to);
+    const v = convertQuantity(input.value, from, to, sel.dataset.w || null);
     if(v != null) input.value = qtyInputValue(v);
   }
   sel.dataset.prev = to;
 }
 // "saved as 1500 g" under a box typed in another unit than the base unit (empty otherwise)
-function savedAsText(value, unit, baseUnit){
+function savedAsText(value, unit, baseUnit, w){
   if(!baseUnit || !unit || unit === baseUnit || value === '' || value == null) return '';
-  const v = toBaseUnit(num(value), unit, baseUnit);
+  const v = toBaseUnit(num(value), unit, baseUnit, Number(w) > 0 ? w : undefined);
   return v == null ? '' : 'saved as ' + formatQuantity(v, baseUnit, baseUnit, 4);
 }
 // cost of one shown unit (cost per base unit x base units in one shown unit), e.g. ₱0.10/mL -> ₱100.00 / L
-function costPerShownUnit(costPerBase, baseUnit, unit){
-  const f = unit && unit !== baseUnit ? convertQuantity(1, unit, baseUnit) : 1;
+function costPerShownUnit(costPerBase, baseUnit, unit, w){
+  const f = unit && unit !== baseUnit ? convertQuantity(1, unit, baseUnit, Number(w) > 0 ? w : undefined) : 1;
   return num(costPerBase) * (f == null ? 1 : f);
 }
 // Typed amount + chosen unit -> amount in the ingredient's base unit.
-function baseQtyOf(value, unit, baseUnit){
+function baseQtyOf(value, unit, baseUnit, w){
   if(!baseUnit) return num(value);
-  const v = toBaseUnit(num(value), unit || baseUnit, baseUnit);
+  const v = toBaseUnit(num(value), unit || baseUnit, baseUnit, Number(w) > 0 ? w : undefined);
   return v == null ? num(value) : v;
 }
 function rowBaseQty(tr){
   const ing = ingredientById(tr.querySelector('.ri-ing').value);
-  return ing ? baseQtyOf(tr.querySelector('.ri-qty').value, tr.querySelector('.ri-unit').value, ing.base_unit) : 0;
+  return ing ? baseQtyOf(tr.querySelector('.ri-qty').value, tr.querySelector('.ri-unit').value, ing.base_unit, ing.weight_g_per_ml) : 0;
 }
 // Shown amount for a stored base quantity, e.g. "150" + "mL" (4 decimals where tiny amounts matter)
-function shownQty(qtyBase, baseUnit, unit){
-  const r = fromBaseUnit(qtyBase, baseUnit, unit);
+function shownQty(qtyBase, baseUnit, unit, w){
+  const r = fromBaseUnit(qtyBase, baseUnit, unit, Number(w) > 0 ? w : undefined);
   return {num: String(Number(Number(r.qty).toFixed(4))), unit: unitLabel(r.unit)};
 }
 
@@ -494,19 +507,28 @@ function hideRecipeOp(id, now){ return Ops.update('recipes', {id, active: false,
 
 /* ---- the options (modifier groups) editor, used inside the recipe form ---- */
 function optionsEditor(container, groups){
-  const ingOptions = (sel) => `<option value="">— none —</option>` + state.ingredients.filter(i => i.active !== false || i.id === sel).sort(byName)
+  // 1.4: stock items only (no merged ingredients, no operating supplies); the current value always stays
+  const ingOptions = (sel) => `<option value="">— none —</option>` + ingredientPickerList({keep: sel ? [sel] : []}).sort(byName)
     .map(i => `<option value="${esc(i.id)}" ${sel === i.id ? 'selected' : ''}>${esc(i.name)} (${esc(unitLabel(i.base_unit))})</option>`).join('');
+  // The first extra is edited here (amount as typed: extras[0].entered_quantity + unit when saved by 1.4);
+  // further extras an option may carry are kept unchanged (data-more).
   function optionRowHtml(o){
     o = o || {id: uid(), label: '', price_delta: 0, ingredient_id: '', ingredient_qty_delta: 0};
-    const ing = o.ingredient_id ? ingredientById(o.ingredient_id) : null;
-    const shown = ing ? fromBaseUnit(o.ingredient_qty_delta, ing.base_unit, o.unit) : {qty: num(o.ingredient_qty_delta), unit: ''};
-    const units = ing ? compatibleUnits(ing.base_unit) : [];
-    return `<tr data-opt="${esc(o.id)}">
+    const first = Array.isArray(o.extras) && o.extras[0] && o.extras[0].ingredient_id ? o.extras[0] : null;
+    const ingId = o.ingredient_id || (first && first.ingredient_id) || '';
+    const ing = ingId ? ingredientById(ingId) : null;
+    const w = ing ? ing.weight_g_per_ml : null;
+    const typed = first && first.ingredient_id === ingId && _hasNum(first.entered_quantity) && first.unit;
+    const shown = typed ? {qty: num(first.entered_quantity), unit: first.unit}
+      : ing ? fromBaseUnit(o.ingredient_qty_delta, ing.base_unit, o.unit, w) : {qty: num(o.ingredient_qty_delta), unit: ''};
+    const units = ing ? unitsForIngredient(ing) : [];
+    const more = Array.isArray(o.extras) ? o.extras.slice(1).filter(e => e && e.ingredient_id) : [];
+    return `<tr data-opt="${esc(o.id)}" ${more.length ? `data-more="${esc(JSON.stringify(more.map(e => _hasNum(e.entered_quantity) ? {ingredient_id: e.ingredient_id, entered_quantity: e.entered_quantity, unit: e.unit} : {ingredient_id: e.ingredient_id, quantity: e.quantity})))}"` : ''}>
       <td><input class="mo-label" maxlength="40" value="${esc(o.label || '')}" placeholder="e.g. Large" aria-label="Option name"></td>
       <td><input class="mo-price" type="number" step="any" value="${esc(num(o.price_delta))}" style="min-width:76px;" aria-label="Price change in pesos"></td>
-      <td><select class="mo-ing" aria-label="Uses extra ingredient">${ingOptions(o.ingredient_id || '')}</select></td>
-      <td><input class="mo-qty" type="number" step="any" value="${esc(qtyInputValue(shown.qty))}" style="min-width:76px;" aria-label="Extra amount"><div class="hint mo-saved">${esc(ing ? savedAsText(shown.qty, shown.unit, ing.base_unit) : '')}</div></td>
-      <td><select class="mo-unit" aria-label="Unit of the extra amount" data-prev="${esc(shown.unit)}" data-base="${esc(ing ? ing.base_unit : '')}" ${units.length < 2 ? 'disabled' : ''}>${ing ? recUnitOptionsHtml(ing.base_unit, shown.unit) : ''}</select></td>
+      <td><select class="mo-ing" aria-label="Uses extra ingredient">${ingOptions(ingId)}</select>${more.length ? `<div class="hint">+ ${esc(more.map(e => ingName(e.ingredient_id)).join(', '))} (kept)</div>` : ''}</td>
+      <td><input class="mo-qty" type="number" step="any" value="${esc(qtyInputValue(shown.qty))}" style="min-width:76px;" aria-label="Extra amount"><div class="hint mo-saved">${esc(ing ? savedAsText(shown.qty, shown.unit, ing.base_unit, w) : '')}</div></td>
+      <td><select class="mo-unit" aria-label="Unit of the extra amount" data-prev="${esc(shown.unit)}" data-base="${esc(ing ? ing.base_unit : '')}" data-w="${esc(Number(w) > 0 ? w : '')}" ${units.length < 2 ? 'disabled' : ''}>${ing ? recUnitOptionsHtml(ing.base_unit, shown.unit, w) : ''}</select></td>
       <td><button type="button" class="btn btn-sm btn-ghost mo-rm" title="Remove this option" aria-label="Remove this option">${icon('x', {size: 18})}</button></td></tr>`;
   }
   function addGroup(g){
@@ -538,7 +560,7 @@ function optionsEditor(container, groups){
   });
   const savedHint = (tr) => {
     const ing = ingredientById(tr.querySelector('.mo-ing').value);
-    tr.querySelector('.mo-saved').textContent = ing ? savedAsText(tr.querySelector('.mo-qty').value, tr.querySelector('.mo-unit').value, ing.base_unit) : '';
+    tr.querySelector('.mo-saved').textContent = ing ? savedAsText(tr.querySelector('.mo-qty').value, tr.querySelector('.mo-unit').value, ing.base_unit, ing.weight_g_per_ml) : '';
   };
   container.addEventListener('change', (e) => {
     const t = e.target, tr = t.closest('tr');
@@ -552,7 +574,8 @@ function optionsEditor(container, groups){
     if(!tr || !t.classList.contains('mo-qty')) return;
     markTyped(t); savedHint(tr);
   });
-  (groups || []).forEach(addGroup);
+  // never the Options library's groups: they are shown read-only and rebuilt by the database
+  (groups || []).filter(g => !isLibraryGroup(g)).forEach(addGroup);
   return {
     addGroup: () => { addGroup(null); const n = container.querySelector('.mod-ed-group:last-child .mg-name'); if(n) n.focus(); },
     // Returns {groups} or {error}
@@ -564,13 +587,21 @@ function optionsEditor(container, groups){
           const ing = ingredientById(tr.querySelector('.mo-ing').value);
           const unit = ing ? (tr.querySelector('.mo-unit').value || ing.base_unit) : null;
           // stored in the ingredient's BASE unit (what the counter and the server deduct); unit = how it was typed
-          return {
+          const o = {
             id: tr.dataset.opt, label: tr.querySelector('.mo-label').value.trim(),
             price_delta: num(tr.querySelector('.mo-price').value),
             ingredient_id: ing ? ing.id : null,
-            ingredient_qty_delta: ing ? baseQtyOf(tr.querySelector('.mo-qty').value, unit, ing.base_unit) : num(tr.querySelector('.mo-qty').value),
+            ingredient_qty_delta: ing ? baseQtyOf(tr.querySelector('.mo-qty').value, unit, ing.base_unit, ing.weight_g_per_ml) : num(tr.querySelector('.mo-qty').value),
             unit,
           };
+          // 1.4: an amount above 0 is also sent as typed (extras), so the database converts it (and again if
+          // the item's "weighs" changes). A negative amount ("less sugar") keeps the old single pair only.
+          let more = [];
+          try{ more = tr.dataset.more ? JSON.parse(tr.dataset.more) : []; }catch(e){ more = []; }
+          const typedQty = num(tr.querySelector('.mo-qty').value);
+          if(ing && typedQty > 0) o.extras = [{ingredient_id: ing.id, entered_quantity: typedQty, unit}].concat(more);
+          else if(more.length) o.extras = more;
+          return o;
         }).filter(o => o.label);
         if(!name && !options.length) continue;                 // empty group: ignored
         if(!name) return {error: 'Give every option group a name (e.g. Size).'};
@@ -593,6 +624,7 @@ function optionsEditor(container, groups){
 
 function openRecipeForm(id){
   const editing = id ? state.recipes.find(r => r.id === id) : null;
+  if(editing && isSuppliedRecipe(editing)){ openSuppliedItemForm(editing.id); return; }     // 1.4 (A8): its own form
   const existingLines = editing ? state.recipeIngredients.filter(ri => ri.recipe_id === editing.id) : [];
   const alreadyLinked = editing && editing.produced_ingredient_id;   // once linked, can't unlink here (protects its stock history)
   // Expected yield is stored in the produced item's base unit (that's what production adds to stock);
@@ -652,7 +684,9 @@ function openRecipeForm(id){
         </div>
         <div class="hint">Shrunk to about 600 pixels before uploading, so it loads fast on phones.</div>
       </div>
-      <div style="margin-top:6px;"><b style="font-size:14px;">Options</b> <span class="hint">e.g. Size (12oz / 16oz +₱20), Milk (Oat +₱25), Add-ons (Extra shot +₱30). An option can also use more of an ingredient (16oz → +60 ml milk) so stock stays right.</span></div>
+      <div style="margin-top:6px;"><b style="font-size:14px;">Shared options</b> <span class="hint">From the Options library (e.g. Hot / Iced, take-away cup, extra shot, non-dairy milk). Untick one this item doesn't offer, or tick one on.</span></div>
+      <div id="lib-ticks">${libraryTicksHtml(editing)}</div>
+      <div style="margin-top:10px;"><b style="font-size:14px;">This item's own options</b> <span class="hint">e.g. Size (12oz / 16oz +₱20). An option can also use more of an ingredient (16oz → +60 ml milk) so stock stays right.</span></div>
       <div id="mod-editor"></div>
       <button class="btn btn-outline btn-sm" type="button" id="mod-add-group" style="margin-top:8px;">+ Add option group</button>
     </div>
@@ -697,10 +731,14 @@ function openRecipeForm(id){
 
     const optEd = optionsEditor(root.querySelector('#mod-editor'), editing ? editing.modifier_groups : []);
     root.querySelector('#mod-add-group').onclick = () => optEd.addGroup();
+    const libForm = () => ({recipe_type: root.querySelector('#r-type').value, category: root.querySelector('#r-cat').value, is_production_recipe: producesBox.checked});
+    wireLibraryTicks(root, editing, libForm);
 
     function addRow(line){
       const lineIng = line ? ingredientById(line.ingredient_id) : null;
-      const shown = lineIng ? fromBaseUnit(line.quantity, lineIng.base_unit, line.unit) : {qty: line ? num(line.quantity) : '', unit: ''};
+      // 1.4: shown as typed (entered_quantity + unit) when the line was saved that way
+      const shown = lineIng && _hasNum(line.entered_quantity) && line.unit && unitsForIngredient(lineIng).includes(line.unit) ? {qty: num(line.entered_quantity), unit: line.unit}
+        : lineIng ? fromBaseUnit(line.quantity, lineIng.base_unit, line.unit, lineIng.weight_g_per_ml) : {qty: line ? num(line.quantity) : '', unit: ''};
       const tr = el(`<tr>
         <td><select class="ri-ing" aria-label="Ingredient"><option value="">Choose…</option>${ingredientOptionsGrouped(line ? line.ingredient_id : null, excludeId)}</select></td>
         <td><input type="number" step="any" min="0" class="ri-qty" value="${esc(line ? qtyInputValue(shown.qty) : '')}" placeholder="0" aria-label="Quantity"><div class="hint ri-saved"></div></td>
@@ -715,8 +753,8 @@ function openRecipeForm(id){
         const ing = ingredientById(ingSel.value);
         const cost = ing ? (ingredientCosting(ing.id).current || 0) : 0;
         const u = ing ? (unitSel.value || ing.base_unit) : '';
-        tr.querySelector('.ri-unitcost').innerHTML = ing ? fmtMoney(costPerShownUnit(cost, ing.base_unit, u)) + ' / ' + esc(unitLabel(u)) + (isProducedItem(ing) ? ' <span class="badge badge-gray" style="font-size:10px;">produced</span>' : '') : '—';
-        tr.querySelector('.ri-saved').textContent = ing ? savedAsText(qtyInput.value, u, ing.base_unit) : '';
+        tr.querySelector('.ri-unitcost').innerHTML = ing ? fmtMoney(costPerShownUnit(cost, ing.base_unit, u, ing.weight_g_per_ml)) + ' / ' + esc(unitLabel(u)) + (isProducedItem(ing) ? ' <span class="badge badge-gray" style="font-size:10px;">produced</span>' : '') : '—';
+        tr.querySelector('.ri-saved').textContent = ing ? savedAsText(qtyInput.value, u, ing.base_unit, ing.weight_g_per_ml) : '';
         tr.querySelector('.ri-totalcost').innerHTML = `<b>${fmtMoney(cost * rowBaseQty(tr))}</b>`;
         refreshSummary();
       }
@@ -803,7 +841,8 @@ function openRecipeForm(id){
       // quantity in the ingredient's base unit; unit = the unit it was typed in (shown again next time)
       const rows = [...tbody.querySelectorAll('tr')].map(tr => {
         const ing = ingredientById(tr.querySelector('.ri-ing').value);
-        return {ingredient_id: ing ? ing.id : '', quantity: rowBaseQty(tr), unit: ing ? (tr.querySelector('.ri-unit').value || ing.base_unit) : null};
+        return {ingredient_id: ing ? ing.id : '', quantity: rowBaseQty(tr), unit: ing ? (tr.querySelector('.ri-unit').value || ing.base_unit) : null,
+          entered_quantity: num(tr.querySelector('.ri-qty').value)};
       }).filter(r => r.ingredient_id && r.quantity > 0);
       if(!rows.length){ toast('Add at least one ingredient with a quantity', 'error'); return; }
       if(excludeId && rows.some(r => r.ingredient_id === excludeId)){ toast('A recipe cannot use its own produced item as an ingredient', 'error'); return; }
@@ -861,7 +900,10 @@ function openRecipeForm(id){
         }
       }
       ops.push(Ops.delWhere('recipe_ingredients', {recipe_id: recipeId}));
-      rows.forEach(r => ops.push(Ops.upsert('recipe_ingredients', {id: uid(), recipe_id: recipeId, ingredient_id: r.ingredient_id, quantity: r.quantity, unit: r.unit || (ingredientById(r.ingredient_id) || {}).base_unit || null})));
+      // 1.4 (A10): entered_quantity + unit as typed; the database works out quantity (stock unit) itself
+      rows.forEach(r => ops.push(Ops.upsert('recipe_ingredients', {id: uid(), recipe_id: recipeId, ingredient_id: r.ingredient_id, quantity: r.quantity, unit: r.unit || (ingredientById(r.ingredient_id) || {}).base_unit || null,
+        entered_quantity: r.entered_quantity > 0 ? r.entered_quantity : null})));
+      libraryTickOps(root, recipeId, libForm()).forEach(o => ops.push(o));       // shared options ticked / unticked (after the recipe)
       const priceNote = editing && num(editing.selling_price) !== price ? ` · price ${fmtMoney(editing.selling_price)} → ${fmtMoney(price)}` : '';
       ops.push(Ops.audit(editing ? 'Recipe updated' : 'Recipe created', name + priceNote, recipeId));
       if(await boSave(ops, {success: editing ? 'Recipe updated' : 'Recipe created'})){
@@ -870,6 +912,19 @@ function openRecipeForm(id){
       }
     });
   }});
+}
+
+// What an option does to stock, for one item: " +18 g Beans, +1 pcs Cup" or " swaps 150 mL Milk for Oat milk" (escaped HTML)
+function optionStockText(o){
+  const amt = (e, unit) => { const i = ingredientById(e.ingredient_id) || {}; return `${formatQuantity(e.quantity, i.base_unit, unit || i.base_unit, 4, i.weight_g_per_ml)} ${ingName(e.ingredient_id)}`; };
+  if(optionKind(o) === 'SWAP'){
+    const rm = optionStockRemoves(o)[0], ex = optionStockExtras(o)[0];
+    const from = o.swap_from_ingredient_id || (rm && rm.ingredient_id), to = o.swap_to_ingredient_id || (ex && ex.ingredient_id);
+    return ` <span class="text-light">swaps ${rm ? esc(amt(rm)) : esc(ingName(from))} for ${esc(ingName(to))}</span>`;
+  }
+  const ex = optionStockExtras(o);
+  if(!ex.length) return '';
+  return ` <span class="text-light">${ex.map((e, k) => (e.quantity >= 0 ? '+' : '') + esc(amt(e, k === 0 && !Array.isArray(o.extras) ? o.unit : (Array.isArray(o.extras) && o.extras[k] && o.extras[k].unit) || null))).join(', ')}</span>`;
 }
 
 /* ---- recipe detail ---- */
@@ -892,7 +947,8 @@ function renderRecipeDetail(id){
   const costPerUnit = produces && num(recipe.expected_yield) > 0 ? m.cost / num(recipe.expected_yield) : 0;
   const usedByRecipes = producedIng ? state.recipes.filter(r => r.active !== false && state.recipeIngredients.some(ri => ri.recipe_id === r.id && ri.ingredient_id === producedIng.id)) : [];
   const batches = producedIng ? productionBatchesFor(producedIng.id).sort((a, b) => String(b.production_date).localeCompare(String(a.production_date))) : [];
-  const groups = recipe.modifier_groups || [];
+  const groups = recipeOptionGroups(recipe);
+  const sup = isSuppliedRecipe(recipe) ? suppliedItemCosting(recipe) : null;
 
   content.innerHTML = `
     <a class="linklike" id="back-rec" style="font-size:13px;">← Back to recipes</a>
@@ -905,6 +961,7 @@ function renderRecipeDetail(id){
             <span class="tag-pill">${esc(recipeTypeLabel(recipeTypeOf(recipe)))}</span>
             ${recipe.category ? `<span class="tag-pill">${esc(recipe.category)}</span>` : ''}
             ${produces ? '<span class="badge badge-green">Production recipe</span>' : ''}
+            ${sup ? '<span class="badge badge-green">Supplied item</span>' : ''}
             ${recipe.active === false ? '<span class="badge badge-gray">Inactive</span>' : ''}
             ${sellsDirectly ? (warn ? '<span class="badge badge-red">High food cost %</span>' : '<span class="badge badge-green">Healthy margin</span>') : ''}
           </div>
@@ -912,10 +969,17 @@ function renderRecipeDetail(id){
       </div>
       <div class="field-inline">
         ${produces ? '<button class="btn btn-amber" id="produce-this-btn">+ Produce this recipe</button>' : ''}
-        <button class="btn btn-outline" id="edit-rec-btn">Edit recipe</button>
+        ${sup ? '<button class="btn btn-outline" id="restock-sup-btn">+ Restock</button>' : ''}
+        <button class="btn btn-outline" id="edit-rec-btn">${sup ? 'Edit supplied item' : 'Edit recipe'}</button>
       </div>
     </div>
-    ${sellsDirectly ? `<div class="grid grid-4" style="margin-top:20px;">
+    ${sup ? `<div class="grid grid-4" style="margin-top:20px;">
+      ${statCard('Selling price', fmtMoney(sup.selling_price), '')}
+      ${statCard('Price paid per piece', fmtMoney(sup.cost_per_piece), sup.cost_source === 'purchase' ? 'latest purchase' : sup.cost_source === 'standard_cost' ? 'as typed (no purchase yet)' : 'not set')}
+      ${statCard('Margin per piece', fmtMoney(sup.margin), sup.margin_pct == null ? '' : fmtNum(sup.margin_pct, 1) + '% of the price')}
+      ${statCard('In stock', fmtNum(ingredientStock(recipe.supplied_ingredient_id), 0) + ' pcs', `<a class="linklike" data-ing="${esc(recipe.supplied_ingredient_id)}">stock item →</a>`)}
+    </div>` : ''}
+    ${sup ? '' : sellsDirectly ? `<div class="grid grid-4" style="margin-top:20px;">
       ${statCard('Selling price', fmtMoney(recipe.selling_price), '')}
       ${statCard('Recipe cost (today)', fmtMoney(m.cost), '')}
       ${statCard('Gross profit', fmtMoney(m.profit), '')}
@@ -940,8 +1004,8 @@ function renderRecipeDetail(id){
           ${recipe.qr_visible !== false ? '<span class="badge badge-green">On the QR menu</span>' : '<span class="badge badge-gray">Not on the QR menu</span>'}
           ${recipe.sold_out ? '<span class="badge badge-red">Sold out</span>' : ''}<span class="tag-pill">Menu order ${esc(num(recipe.sort_order))}</span></div>
         ${recipe.description ? `<div style="margin-top:6px;">${esc(recipe.description)}</div>` : ''}
-        ${groups.length ? groups.map(g => `<div><b>${esc(g.name)}</b> <span class="text-light">(${g.multi_select ? 'pick any' : 'pick one'}${g.required ? ', required' : ''})</span>: ${(g.options || []).map(o => `${esc(o.label)}${num(o.price_delta) ? ` (${num(o.price_delta) > 0 ? '+' : ''}${fmtMoney(o.price_delta)})` : ''}${o.ingredient_id ? ` <span class="text-light">+${esc(formatQuantity(o.ingredient_qty_delta, (ingredientById(o.ingredient_id) || {}).base_unit, o.unit, 4))} ${esc(ingName(o.ingredient_id))}</span>` : ''}`).join(', ')}</div>`).join('')
-          : '<div class="text-light">No options (size, milk…). Add them with "Edit recipe".</div>'}
+        ${groups.length ? groups.map(g => `<div><b>${esc(g.name)}</b>${isLibraryGroup(g) ? ' <span class="badge badge-gray" title="From the Options library">Shared</span>' : ''} <span class="text-light">(${g.multi_select ? 'pick any' : 'pick one'}${g.required ? ', required' : ''})</span>: ${(g.options || []).map(o => `${esc(o.label)}${num(o.price_delta) ? ` (${num(o.price_delta) > 0 ? '+' : ''}${fmtMoney(o.price_delta)})` : ''}${optionStockText(o)}`).join(', ')}</div>`).join('')
+          : '<div class="text-light">No options (size, milk…). Add them with "Edit recipe" or the Options library.</div>'}
       </div>` : ''}
     <div class="section-title">Ingredient breakdown</div>
     <div class="table-wrap"><table>
@@ -949,9 +1013,9 @@ function renderRecipeDetail(id){
       <tbody>${m.lines.map(l => `<tr>
         <td><a class="linklike" data-ing="${esc(l.ingredient_id)}">${esc(ingName(l.ingredient_id))}</a></td>
         <td>${l.isProduced ? '<span class="badge badge-gray">Produced ingredient</span>' : '<span class="badge badge-gray" style="opacity:.6;">Raw ingredient</span>'}</td>
-        ${(() => { const base = (ingredientById(l.ingredient_id) || {}).base_unit || l.unit;
-          const r = fromBaseUnit(l.quantity, base, l.unit), q = shownQty(l.quantity, base, l.unit);
-          return `<td class="num">${esc(q.num)}</td><td>${esc(q.unit)}</td><td class="num">${fmtMoney(costPerShownUnit(l.unitCost, base, r.unit))} / ${esc(unitLabel(r.unit))}</td>`; })()}<td class="num"><b>${fmtMoney(l.lineCost)}</b></td></tr>`).join('')}
+        ${(() => { const li = ingredientById(l.ingredient_id) || {}, base = li.base_unit || l.unit, w = li.weight_g_per_ml;
+          const r = fromBaseUnit(l.quantity, base, l.unit, Number(w) > 0 ? w : undefined), q = shownQty(l.quantity, base, l.unit, w);
+          return `<td class="num">${esc(q.num)}</td><td>${esc(q.unit)}</td><td class="num">${fmtMoney(costPerShownUnit(l.unitCost, base, r.unit, w))} / ${esc(unitLabel(r.unit))}</td>`; })()}<td class="num"><b>${fmtMoney(l.lineCost)}</b></td></tr>`).join('')}
       <tr style="background:var(--beige);"><td colspan="5" style="text-align:right;"><b>Total ${sellsDirectly ? 'recipe' : 'batch'} cost</b></td><td class="num"><b>${fmtMoney(m.cost)}</b></td></tr>
       </tbody></table></div>
     <div class="section-title">Cost history snapshot</div>
@@ -969,6 +1033,7 @@ function renderRecipeDetail(id){
         : emptyBlock('No batches produced yet.')}` : ''}`;
   content.querySelector('#back-rec').onclick = () => navigate('recipes');
   content.querySelector('#edit-rec-btn').onclick = () => openRecipeForm(id);
+  const rs = content.querySelector('#restock-sup-btn'); if(rs) rs.onclick = () => openSuppliedItemForm(id, {restock: true});
   const pb = content.querySelector('#produce-this-btn'); if(pb) pb.onclick = () => openProductionForm(recipe.id);
   content.querySelectorAll('[data-ing]').forEach(a => a.onclick = () => navigate('ingredientDetail', a.dataset.ing));
   content.querySelectorAll('[data-recipe]').forEach(a => a.onclick = () => navigate('recipeDetail', a.dataset.recipe));

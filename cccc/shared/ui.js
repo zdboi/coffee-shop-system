@@ -168,16 +168,68 @@ const ERROR_TEXT = {
   BAD_SUBCATEGORY_COLORS: 'The tile colours could not be saved. Pick a colour from the list for each sub-category (names up to 40 characters).',
   // Release 1.3 (009): sub-category order + Start fresh (Back Office, owner only)
   BAD_SUBCATEGORY_ORDER: 'The sub-category order could not be saved. Each name can be in the list once, up to 40 characters, at most 100 names.',
-  BAD_DATE: 'Choose a date and time that is not in the future.',
+  BAD_DATE: 'That date is not valid. Choose a date that is not in the future (a report can cover at most 400 days).',
   CONFIRM_REQUIRED: 'Type START FRESH (in capital letters) to confirm.',
   SHIFT_STILL_OPEN: 'A counter still has an open shift. Close every shift first, then try again.',
-  BUSY_TRY_AGAIN: 'A counter was uploading sales just now. Please wait a moment and try again.',
+  BUSY_TRY_AGAIN: 'Something else was being saved just now (for example a counter uploading sales). Please wait a moment and try again.',
+  // Release 1.4 (010): counter waste log (fo_sync 'waste')
+  BAD_WASTE: 'This waste entry is missing information (it needs 1 to 30 items), so it was not saved. Check it and log it again.',
+  BAD_WASTE_REASON: 'Choose a reason for the waste: Calibration, Spillage, Complimentary, Expired or Other.',
+  NOTE_REQUIRED: 'Add a short note saying what happened (needed when the reason is "Other").',
+  BAD_QUANTITY: 'That quantity is not valid. Enter an amount above 0 (at most 100 of a menu item at a time).',
+  BAD_UNIT: 'That unit doesn\'t fit this item (for example grams for an item counted in pieces). Choose one of the item\'s units.',
+  // Release 1.4: units and "weighs" (A10)
+  WEIGHS_PRODUCED_ONLY: '"Weighs" can only be set on a house-made item (for example a sauce you make).',
+  WEIGHS_BAD_UNIT: '"Weighs" needs an item counted in g, kg, mL or L.',
+  // Release 1.4: option library (A9)
+  BAD_OPTION_GROUP: 'The option group could not be saved. Check its name, options and prices.',
+  BAD_OPTION: 'An option on this item is no longer on the menu. Remove the item and add it again.',
+  OPTION_REQUIRED: 'Choose one of the required options for this item first.',
+  // Release 1.4: supplied items (A8)
+  BAD_NAME: 'Enter a name (up to 80 characters).',
+  NAME_TAKEN: 'Another ingredient already has that name. Choose a different name.',
+  BAD_TYPE: 'Choose whether this item is a pastry or food.',
+  BAD_PRICE: 'Enter prices of ₱0 or more (the price paid per piece and the selling price).',
+  NOT_A_SUPPLIED_ITEM: 'This item is not a supplied item, so it can\'t be edited on this form. Edit it under Recipes instead.',
+  SUPPLIED_NEEDS_PCS: 'The stock of a supplied item must stay counted in pieces (pcs).',
+  // Release 1.4: operating supplies (A11)
+  EXPENSE_ITEM_NOT_STOCK: 'This item is an operating supply, so it is not counted as stock. Record buying it as an expense instead.',
+  // Release 1.4: merge ingredients (A12)
+  MERGE_TOO_FEW: 'Pick at least two ingredients to merge (or one, to merge it into an existing ingredient).',
+  MERGE_TOO_MANY: 'You can merge at most 30 ingredients at a time.',
+  MERGE_UNKNOWN_INGREDIENT: 'One of the picked ingredients was not found (it may have been deleted). Refresh and try again.',
+  MERGE_ALREADY_MERGED: 'One of the picked ingredients was already merged into another one. Refresh and pick again.',
+  MERGE_PRODUCED_NOT_ALLOWED: 'House-made items can\'t be merged. Leave them out and try again.',
+  MERGE_SUPPLIED_NOT_ALLOWED: 'The stock item of a supplied menu item can\'t be merged. Leave it out and try again.',
+  MERGE_SWAP_CONFLICT: 'An option-library swap uses two of these ingredients (one taken off, one put on), so after the merge it would swap an ingredient for itself. Change or remove that swap first, then merge.',
+  MERGE_UNIT_MISMATCH: 'These ingredients are counted in units that don\'t convert (for example grams and millilitres, or pieces and boxes). Merge only ingredients counted the same way.',
   // CAPTCHA (Cloudflare Turnstile) before an anonymous sign-in
   CAPTCHA_FAILED: 'We couldn\'t confirm you\'re a person. Check your internet and try again.',
+  // Files in private storage (release 1.4: expense receipt photos)
+  BAD_STORAGE_PATH: 'That file name is not valid. Choose the photo again.',
+  FILE_NOT_FOUND: 'That file is not there any more (it may have been deleted).',
+  FILE_NOT_ALLOWED: 'This login is not allowed to open or change that file. Only the owner\'s email login can.',
+  STORAGE_FAILED: 'The file could not be loaded or changed on the server. Please try again.',
   // Anything unexpected on the server
   SERVER_ERROR: 'Something went wrong on the server, so this wasn\'t saved. Please try again; if it keeps happening, tell the owner.',
 };
 
+// BAD_OPTION_GROUP: <reason> -> what to fix (release 1.4; the reasons of _library_group_problem).
+const OPTION_GROUP_PROBLEM_TEXT = {
+  'name': 'Give the group a name of 1 to 40 characters.',
+  'applies_to': 'Choose which item types or sub-categories the group is for.',
+  'recipe_types': 'Choose item types from the list (Drinks, Sauces / Syrups, Pastry, Food).',
+  'subcategories': 'Sub-category names must be 1 to 40 characters (at most 100 of them).',
+  'options': 'A group needs 1 to 30 options.',
+  'option': 'One of the options is not readable. Remove it and add it again.',
+  'option id': 'Two options have the same id. Remove one and add it again.',
+  'option label': 'Every option needs a name of 1 to 40 characters, and no two options in a group can have the same name.',
+  'price_delta': 'Option prices must be between -₱100,000 and ₱100,000 (a swap: ₱0 or more).',
+  'kind': 'Choose what each option does: price only, extra stock, or swap.',
+  'swap': 'A swap needs two different ingredients of this shop: the one taken off and the one put on.',
+  'extras': 'Each option can use at most 5 stock items, each with an amount above 0.',
+  'extras unit': 'An extra amount is in a unit that doesn\'t fit its stock item. Choose one of the item\'s units.',
+};
 // Why the server flagged a sale "needs review" (sales.review_reason holds codes joined by ", ").
 const REVIEW_REASON_TEXT = {
   PRICE_BELOW_MENU: 'Sold below the menu price',
@@ -187,6 +239,8 @@ const REVIEW_REASON_TEXT = {
   STAFF_MISMATCH: 'Recorded cashier differs from who was signed in',
   OUT_OF_STOCK: 'Sold when an ingredient had run out (stock went below zero)',
   BEFORE_START_FRESH: 'Dated before the shop started fresh (old test data uploaded late)',
+  FUTURE_DATE: 'Dated in the future',
+  OLD_DATE: 'Dated more than 7 days back',
 };
 // "PRICE_BELOW_MENU, TAX_MISMATCH" -> "Sold below the menu price; Tax or service charge doesn't match your settings".
 // Unknown codes become plain lower-case words; an empty reason gives 'Flagged by the server'.
@@ -223,6 +277,10 @@ function friendlyError(e){
   if(code === 'TOO_MANY_ATTEMPTS' && e.locked_until){
     const t = lockedUntilText(e.locked_until);
     if(t) return t;
+  }
+  if(code === 'BAD_OPTION_GROUP'){
+    const why = raw.replace(/^\s*(?:ERROR:\s*)?BAD_OPTION_GROUP:?\s*/, '').trim();
+    if(why && OPTION_GROUP_PROBLEM_TEXT[why]) return 'The option group could not be saved. ' + OPTION_GROUP_PROBLEM_TEXT[why];
   }
   if(code && ERROR_TEXT[code]) return ERROR_TEXT[code];
   if(/row-level security/i.test(raw)) return 'You do not have permission to change this.';

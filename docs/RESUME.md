@@ -1,4 +1,4 @@
-# Resume here (save point: 2026-11-02, checkpoint 12, release 1.3 Wave 1 READY)
+# Resume here (save point: 2026-11-09, checkpoint 14, release 1.4 READY; live = 1.3)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
@@ -20,7 +20,25 @@ Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"
 - **QA:** `tests/run_all.sh --runs 2` passes 69/71 suites (4,295 checks). The 2 failures were one counter defect (D1), since fixed and re-tested. The money, stock, cash and brand-FIFO reconciliation (`tests/e2e/money12.e2e.js`) matches to the centavo. **Final run on the finished code (2026-11-02, `run_all.sh --runs 1`): 47 suites, 3,007 checks, 0 failing.**
 - **Security:** 008 passed two review rounds (all findings fixed). The 1.2 screens review found 4 low items, all fixed.
 
-## Now: release 1.3 (Wave 1 of `docs/PLAN_1.3.md`) is READY, waiting for the owner to publish
+## Now: release 1.4 is READY, waiting for the owner to publish (`docs/RELEASE_1.4.md`: backup → run 010 → merge PR → reload → photo-limit check → connect USB printer → set up)
+- **Contents:**
+  - A12 merge ingredients; A10 weighs; A9 option library + LINE_TOTAL swap + cups/lids; A8 supplied items; A15 counter waste log;
+  - A11 expenses, net income, waste report;
+  - **owner addition:** USB thermal printing on the Mac (receipt, barista ticket with a fixed PAID / NOT PAID line, QR tickets on arrival (off by default, one counter), Z on close, X on tap; no print dialog by itself).
+- **Contract:** `docs/handoff/contract-1.4.md`.
+- **QA gate:** 65/65 suites, 4,019 checks, 0 failing. money14 matches the server to the centavo.
+- **Security:** 010 (2 rounds + 2 deltas) and screens + printing all passed; every finding is fixed.
+- **After the owner runs 010:**
+  - freeze 010 in CLAUDE.md (next script 011);
+  - checkpoint 15 "1.4 live"; changelog.
+- **Next waves (owner decides when):**
+  - Wave 3 = 1.5 QR accounts & security;
+  - Wave 4 = 1.6 "Money & owners": B1 Accounting overview, B2 investor equity, B4 editable payment methods, B5 per-method charge (option C, shown in the Accounting overview);
+  - later: B3 referrals with RPG loyalty. See `docs/owner-feedback.md`.
+
+## Now: release 1.3 is LIVE (owner ran 009 + merged PR #4, 2026-11-02 23:00; commit abcff5b = last working version, checkpoint 13). Next: Wave 2 = release 1.4 (owner said go, 2026-11-02); next DB script 010.
+
+### Release 1.3 (done)
 - **Owner steps:** `docs/RELEASE_1.3.md` (backup → run `009_release_1_3.sql` → merge the PR → reload → set up → Start fresh before Nov 8).
 - **Built:**
   - P1 printing (`cccc/shared/printer.js`, counter printer screen);

@@ -14,19 +14,23 @@
 
 const BACKUP_TABLES = ['categories', 'suppliers', 'ingredients', 'ingredient_brands', 'recipes', 'recipe_ingredients', 'purchases', 'production_batches', 'waste',
   'inventory_transactions', 'staff', 'dining_tables', 'floor_shapes', 'devices', 'stores', 'customers', 'shifts', 'sales', 'sale_items', 'payments',
-  'refunds', 'loyalty_redemptions', 'cash_movements', 'qr_orders', 'audit_log'];
-// Tables added by 008 (release 1.2): a database without them gives an empty list instead of failing the backup.
-const BACKUP_TABLES_1_2 = ['ingredient_brands', 'floor_shapes', 'loyalty_redemptions'];
+  'refunds', 'loyalty_redemptions', 'cash_movements', 'qr_orders', 'audit_log',
+  'option_groups', 'option_group_recipes', 'expenses', 'waste_logs', 'waste_log_items', 'ingredient_costs'];
+// Tables added by 008 (release 1.2) and 010 (release 1.4): a database without them gives an empty list instead of failing the backup.
+const BACKUP_TABLES_1_2 = ['ingredient_brands', 'floor_shapes', 'loyalty_redemptions', 'option_groups', 'option_group_recipes', 'expenses', 'waste_logs', 'waste_log_items', 'ingredient_costs'];
 // insert order (parents first). devices / stores are never imported (they belong to real counters / this shop).
 // Brands come after ingredients and before purchases / stock lines (they point at a brand);
 // rewards used come after customers and sales (they point at both).
-const IMPORT_ORDER = ['categories', 'suppliers', 'ingredients', 'ingredient_brands', 'recipes', 'recipe_ingredients', 'purchases', 'production_batches', 'waste',
-  'staff', 'dining_tables', 'floor_shapes', 'customers', 'shifts', 'sales', 'sale_items', 'payments', 'refunds', 'loyalty_redemptions', 'cash_movements', 'inventory_transactions',
+// 1.4: option groups after recipes, the per-item ticks after both; expenses after ingredients / suppliers;
+// counter waste logs after shifts, their items after the logs (and before the stock lines that name them).
+const IMPORT_ORDER = ['categories', 'suppliers', 'ingredients', 'ingredient_costs', 'ingredient_brands', 'recipes', 'recipe_ingredients', 'option_groups', 'option_group_recipes', 'purchases', 'production_batches', 'waste',
+  'expenses', 'staff', 'dining_tables', 'floor_shapes', 'customers', 'shifts', 'waste_logs', 'waste_log_items', 'sales', 'sale_items', 'payments', 'refunds', 'loyalty_redemptions', 'cash_movements', 'inventory_transactions',
   'qr_orders', 'audit_log'];
 const TABLE_LABEL = {categories: 'categories', suppliers: 'suppliers', ingredients: 'ingredients', recipes: 'recipes', recipe_ingredients: 'recipe ingredient lines',
   purchases: 'purchases', production_batches: 'production batches', waste: 'waste records', inventory_transactions: 'stock movements', staff: 'staff',
   dining_tables: 'tables', floor_shapes: 'floor plan shapes', ingredient_brands: 'ingredient brands', loyalty_redemptions: 'stamp card rewards used', customers: 'customers', shifts: 'shifts', sales: 'sales', sale_items: 'sale lines', payments: 'payments', refunds: 'refunds / voids',
-  cash_movements: 'cash pay-ins / pay-outs', qr_orders: 'QR orders', audit_log: 'audit log entries'};
+  cash_movements: 'cash pay-ins / pay-outs', qr_orders: 'QR orders', audit_log: 'audit log entries',
+  option_groups: 'shared option groups', option_group_recipes: 'shared option ticks', expenses: 'expenses', waste_logs: 'counter waste entries', waste_log_items: 'counter waste lines', ingredient_costs: 'typed costs per piece'};
 // old app store -> new table
 const OLD_STORES = {categories: 'categories', suppliers: 'suppliers', ingredients: 'ingredients', recipes: 'recipes', recipeIngredients: 'recipe_ingredients',
   purchases: 'purchases', productionBatches: 'production_batches', waste: 'waste', inventoryTransactions: 'inventory_transactions', users: 'staff',
@@ -45,7 +49,7 @@ async function buildCloudBackup(onProgress){
   data.devices = (data.devices || []).map(d => { const x = Object.assign({}, d); delete x.device_key; delete x.auth_user_id; return x; });
   const srow = await cloud.select('settings', {limit: 1});
   data.settings = (srow && srow[0]) || null;
-  return {app: 'CCCC Back Office', format: 'cccc-backup', version: 6, exported_at: nowISO(),   // version 6 = release 1.2 (brands, floor plan shapes, rewards used)
+  return {app: 'CCCC Back Office', format: 'cccc-backup', version: 7, exported_at: nowISO(),   // 6 = release 1.2 (brands, floor plan shapes, rewards used); 7 = 1.4 (option library, expenses, counter waste)
     business: state.business ? {id: state.business.id, name: state.business.name} : null, data};
 }
 async function exportBackup(silent, tag){
@@ -410,6 +414,12 @@ const CCCC_LINKS = {
   cash_movements: [['shift_id', 'shifts']],
   qr_orders: [['table_id', 'dining_tables'], ['customer_id', 'customers']],
   customers: [['merged_into', 'customers']],
+  // release 1.4 (010)
+  option_group_recipes: [['group_id', 'option_groups', true], ['recipe_id', 'recipes', true]],
+  expenses: [['ingredient_id', 'ingredients'], ['supplier_id', 'suppliers']],
+  ingredient_costs: [['ingredient_id', 'ingredients', true]],
+  waste_logs: [['shift_id', 'shifts']],
+  waste_log_items: [['waste_log_id', 'waste_logs', true], ['recipe_id', 'recipes'], ['ingredient_id', 'ingredients']],
 };
 function ccccTablesNeeded(payload){
   const need = new Set();
@@ -440,7 +450,13 @@ function convertCcccPayload(payload, existingIds, notes){
       if(t === 'cash_movements' && !(num(r.amount) > 0)){ broken++; return; }     // the database refuses ₱0 or less
       if('device_id' in r && r.device_id && !deviceIds.has(r.device_id)) r.device_id = null;
       if('store_id' in r && r.store_id && !storeIds.has(r.store_id)) r.store_id = null;
-      if(t === 'ingredients'){ r._source_recipe_id = has('recipes', r.source_recipe_id) ? r.source_recipe_id : null; r.source_recipe_id = null; }
+      if(t === 'ingredients'){ r._source_recipe_id = has('recipes', r.source_recipe_id) ? r.source_recipe_id : null; r.source_recipe_id = null;
+        // 1.4: merged_into points at another ingredient: linked after all ingredients are in (like source_recipe_id)
+        r._merged_into = r.merged_into && has('ingredients', r.merged_into) ? r.merged_into : null; r.merged_into = null; }
+      if(t === 'recipes' && r.supplied_ingredient_id && !has('ingredients', r.supplied_ingredient_id)) r.supplied_ingredient_id = null;
+      // a receipt photo of ANOTHER shop's folder can't be read here: keep the expense, drop the link
+      if(t === 'expenses' && r.photo_path && !(sameShop && String(r.photo_path).indexOf(state.business.id + '/') === 0)) r.photo_path = null;
+      if(t === 'expenses' && r.created_by && r.created_by !== cloud.userId()) r.created_by = null;
       if(t === 'staff' && r.profile_id && r.profile_id !== cloud.userId()) r.profile_id = null;
       if(t === 'dining_tables' && !sameShop) r.qr_token = randomToken();
       if(t === 'customers' && r.phone && !r.merged_into){ if(phones.has(r.phone)){ r.phone = null; skippedPhones++; } else phones.add(r.phone); }
@@ -496,7 +512,7 @@ async function runImport(payload, opts){
   const T = conv.tables;
   const toSend = IMPORT_ORDER.reduce((s, t) => s + T[t].length, 0);
   let done = 0;
-  const strip = (r) => { const x = Object.assign({}, r); delete x._source_recipe_id; return x; };
+  const strip = (r) => { const x = Object.assign({}, r); delete x._source_recipe_id; delete x._merged_into; return x; };
   const leftOut = conv.leftOut.slice();     // refunds that were not brought in: [{sale, amount, date, why, lines}]
   const dropped = conv.dropped;              // ids of those refunds (their put-back stock lines are left out too)
   const refusedLines = [];                   // sale numbers of stock lines the database refused one by one
@@ -542,6 +558,9 @@ async function runImport(payload, opts){
       // now that the recipes exist, link produced items back to their recipes
       const links = T.ingredients.filter(r => r._source_recipe_id);
       for(let i = 0; i < links.length; i += 150) await applyChanges(links.slice(i, i + 150).map(r => Ops.update('ingredients', {id: r.id, source_recipe_id: r._source_recipe_id})));
+      // 1.4: merged ingredients point at their general ingredient again
+      const merged = T.ingredients.filter(r => r._merged_into);
+      for(let i = 0; i < merged.length; i += 150) await applyChanges(merged.slice(i, i + 150).map(r => Ops.update('ingredients', {id: r.id, merged_into: r._merged_into})));
     }
   }
   // old staff keep their old PINs (does nothing if the person already has a PIN)

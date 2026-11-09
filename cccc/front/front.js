@@ -60,6 +60,8 @@ cloud.onNetwork((up)=>{
   if(posState.route==='qr') renderQrBoard();
   if(posState.route==='customers' && !!document.querySelector('.offline-panel') === up) renderCustomersScreen();
   if(posState.route==='pos') renderCartPanel();
+  // The open waste log says whether Complimentary can be approved now (needs internet for a PIN).
+  if(document.getElementById('waste-approval-note')) openWasteLog();
 });
 function show(id, on){ const n = document.getElementById(id); if(n) n.style.display = on ? (id==='app'?'flex':'flex') : 'none'; }
 
@@ -147,6 +149,7 @@ async function applyBootstrap(d){
   state.qrOrders.forEach(o => posState.qrSeen.add(o.id));
   posState.qrSince = state.qrOrders.reduce((m,o)=> (!m || o.updated_at > m) ? o.updated_at : m, null) || d.server_time || null;
   if(d.next_numbers) mergeCounters(d.next_numbers);
+  autoPrintQrArrivals(state.qrOrders);                         // orders that arrived while this page was closed
   // Operations still waiting to upload are re-applied so they don't vanish from the screen.
   const pending = await LocalDB.outboxAll();
   pending.forEach(op => applyOpLocally(op, true));
@@ -829,6 +832,10 @@ function applyOpLocally(op, replay){
       if(r) r.sold_out = !!d.sold_out;
       break;
     }
+    case 'waste':
+      // Release 1.4 (A15): the same stock the server will take off (it works it out itself).
+      applyStockDeltas(wasteStockDeltas(d));
+      break;
   }
   if(!replay) saveSnapshotSoon();
 }
@@ -884,7 +891,7 @@ const Sync = {
           if(r.status==='error'){
             await LocalDB.failedAdd(Object.assign({}, o, {error: r.message, failed_at: new Date().toISOString()}));
             if(o.type==='sale' && errorCode(r.message)==='QR_ORDER_ALREADY_PAID') await onQrOrderAlreadyPaid(o);
-            else toast(`Could not upload a ${o.type.replace('_',' ')}: ${friendlyError({message:r.message})}`, 'error');
+            else toast(`Could not upload (${opTypeLabel(o.type)}): ${failedReasonText({type: o.type, data: o.data, error: r.message})}`, 'error');
           }
           done.push(o.seq);
         }
@@ -1011,7 +1018,7 @@ async function renderAlerts(){
 
 // Plain words for the upload types shown to staff (unknown types show as they are).
 const OP_TYPE_LABELS = { shift_open:'Start shift', shift_close:'Close shift', cash_movement:'Pay in / pay out', sale:'Sale',
-  held_delete:'Remove held order', refund:'Refund / void', audit:'Activity note', sold_out:'Sold-out change' };
+  held_delete:'Remove held order', refund:'Refund / void', audit:'Activity note', sold_out:'Sold-out change', waste:'Waste log' };
 function opTypeLabel(type){ return Object.prototype.hasOwnProperty.call(OP_TYPE_LABELS, type) ? OP_TYPE_LABELS[type] : String(type == null ? '' : type); }
 
 async function showFailedOps(){
@@ -1060,6 +1067,13 @@ const REWARD_REFUSAL_CODES = ['REWARD_NOT_AVAILABLE', 'REWARD_AMOUNT_MISMATCH'];
 function failedReasonText(f){
   if(f && f.type === 'sale' && errorCode(f.error) === 'APPROVAL_INVALID' && f.data && f.data.sale && Number(f.data.sale.discount_amount) > 0){
     return 'The manager approval for this discount has expired or was already used. To record it, ring the sale up again and ask a manager to approve the discount.';
+  }
+  if(f && f.type === 'waste'){
+    const c = errorCode(f.error);
+    const what = f.data ? ` (${wasteReasonLabel(f.data.reason)}, ${(f.data.items||[]).length} line${(f.data.items||[]).length===1?'':'s'})` : '';
+    if(/^APPROVAL_|^PIN_UPDATE_NEEDED$/.test(c)) return `The manager approval for this complimentary waste${what} has expired or was already used. Log it again and ask a manager to approve.`;
+    if(c === 'BAD_WASTE' || c === 'UNKNOWN_RECIPE' || c === 'UNKNOWN_INGREDIENT') return `This waste entry${what} names an item or option that is no longer on the menu (the menu changed). Log it again with the current menu, then dismiss this one.`;
+    return friendlyError({message: f.error}) + what;
   }
   return friendlyError({message: f && f.error});
 }
@@ -1139,6 +1153,7 @@ async function pollQrOrders(){
       mergeQrOrder(o);
       if(!posState.qrSince || o.updated_at > posState.qrSince) posState.qrSince = o.updated_at;
     });
+    if(rows && rows.length) autoPrintQrArrivals(rows);      // a new order's ticket prints once (Printer screen switch)
     if(rows && rows.length){
       updateQrBadge();
       if(posState.route==='qr') renderQrBoard();
@@ -1188,6 +1203,7 @@ async function refreshStockQuietly(){
     pending.forEach(op=>{
       if(op.type==='sale' && op.data.sale.status==='COMPLETED') applyStockDeltas(op.data.inventory.map(t=>Object.assign({transaction_type:'SALE_USAGE'}, t)));
       if(op.type==='refund') applyStockDeltas(op.data.inventory.map(t=>Object.assign({transaction_type:'SALE_REVERSAL'}, t)));
+      if(op.type==='waste') applyStockDeltas(wasteStockDeltas(op.data));
     });
     if(posState.route==='pos') renderProductGrid();
     return true;
@@ -1411,16 +1427,16 @@ function navigatePOS(route, param=null){
 function sellableRecipes(){
   return state.recipes.filter(r => r.active!==false && r.pos_visible!==false && Number(r.selling_price) > 0);
 }
-// How many more can be made right now from on-hand stock (99 = not tracked).
-function recipeAvailability(recipe){
-  const {lines} = recipeCost(recipe.id);
-  let lowest = Infinity;
-  for(const l of lines){
-    const qtyNeeded = Number(l.quantity)||0;
-    if(qtyNeeded<=0) continue;
-    lowest = Math.min(lowest, Math.floor(ingredientStock(l.ingredient_id)/qtyNeeded));
-  }
-  return lowest===Infinity ? 99 : lowest;
+// How many more can be made right now from on-hand stock (99 = not tracked). Release 1.4: the
+// shared recipeMakeableCount (same stock lines as a sale; merged ingredients counted on their
+// general ingredient, operating supplies left out). Without options here; the option sheet
+// checks the item again with the options chosen (cups, lids, swaps).
+function recipeAvailability(recipe, modifiers){
+  return recipeMakeableCount(recipe.id, modifiers || []);
+}
+// A swap option could still make an item whose own recipe ran out (e.g. no dairy milk, oat milk in stock).
+function hasSwapOption(recipe){
+  return recipeOptionGroups(recipe).some(g => (g.options||[]).some(o => o && optionKind(o) === 'SWAP'));
 }
 
 function renderPOSScreen(){
@@ -1430,8 +1446,10 @@ function renderPOSScreen(){
   const held = state.sales.filter(s=>s.status==='HELD');
   document.getElementById('topbar-actions').innerHTML = `
     <span class="shift-badge" title="Opened ${fmtDateTime(shift.opened_at)} by ${escapeHtml(shift.cashier_name)}">${escapeHtml(shift.shift_number||'')} · ${shiftDuration(shift)}</span>
-    ${held.length? `<button class="btn btn-outline" id="held-orders-btn">${icon('inbox')} Held (${held.length})</button>` : ''}`;
+    ${held.length? `<button class="btn btn-outline" id="held-orders-btn">${icon('inbox')} Held (${held.length})</button>` : ''}
+    <button class="btn btn-outline" id="waste-btn" title="Log waste: spilled, given free, calibration…">${icon('trash')} Log waste</button>`;
   if(held.length) document.getElementById('held-orders-btn').onclick = showHeldOrders;
+  document.getElementById('waste-btn').onclick = ()=> openWasteLog();
 
   const content = document.getElementById('content');
   const recipes = sellableRecipes();
@@ -1515,55 +1533,91 @@ async function onProductTap(recipeId){
     toast(`${recipe.name} is sold out, so it can't be added. When it's back, turn it on again in QR orders → Sold-out items.`, 'warn');
     return;
   }
-  if(recipeAvailability(recipe) <= 0){
+  const groups = recipeOptionGroups(recipe);
+  if(recipeAvailability(recipe) <= 0 && !(groups.length && hasSwapOption(recipe))){
     const p = cartStockProblems([{recipe_id: recipe.id, name: recipe.name, quantity: 1, modifiers: []}])[0];
     toast(`${recipe.name} is out of stock, so it can't be added${p ? ' (' + stockNeedText(p) + ')' : ''}.${isOnline() ? '' : ' This counter is offline: stock may be out of date.'}`, 'warn');
     return;
   }
-  const groups = recipe.modifier_groups || [];
   if(groups.length===0){ addToCart(recipe, 1, []); return; }
   openModifierPicker(recipe);
 }
 
-/* ================= Modifier picker ================= */
-function openModifierPicker(recipe, existingLine){
-  const groups = recipe.modifier_groups || [];
+// One line on its own, with these options: null when the stock can make it, else the words why not.
+function lineStockProblem(recipe, quantity, modifiers){
+  const p = cartStockProblems([{recipe_id: recipe.id, name: recipe.name, quantity, modifiers}])[0];
+  return p ? stockNeedText(p) : null;
+}
+// An option that can't be made now (its cup, lid or swap milk ran out on this counter): the
+// shared count with only that option chosen. When the item itself can't be made without a
+// swap (baseCount 0), only swap options are marked, so the sheet points at what still works.
+function optionOutOfStock(recipe, group, option, baseCount){
+  if(baseCount <= 0 && optionKind(option) !== 'SWAP') return false;
+  return recipeMakeableCount(recipe.id, [modifierFromOption(group, option)]) <= 0;
+}
+function optionPriceText(o){
+  const p = Number(o.price_delta) || 0;
+  return p ? ` (${p > 0 ? '+' : ''}${fmtMoney(p)})` : '';
+}
+
+/* ================= Modifier picker (the option sheet) =================
+   Release 1.4: library groups (lib_…) show like the item's own groups. Required groups (e.g.
+   Hot / Iced) must be chosen first (missingRequiredGroups). The cart keeps modifierFromOption's
+   snapshot (extras / removes), so cups, lids and swaps deduct the right stock, also offline.
+   opts (the waste log uses the same sheet):
+     {onDone({quantity, selections, modifiers, notes}), onCancel(), title, addLabel, maxQty, noNotes, noStockCheck} */
+function openModifierPicker(recipe, existingLine, opts){
+  opts = opts || {};
+  const groups = recipeOptionGroups(recipe);
   let selections = existingLine ? (existingLine.selections ? JSON.parse(JSON.stringify(existingLine.selections)) : []) : []; // [{group_id, option_id}]
   let qty = existingLine ? existingLine.quantity : 1;
-  function currentPrice(){
-    let p = Number(recipe.selling_price)||0;
-    selections.forEach(sel=>{
-      const g = groups.find(x=>x.id===sel.group_id); const o = g && (g.options||[]).find(x=>x.id===sel.option_id);
-      if(o) p += Number(o.price_delta)||0;
-    });
-    return p;
-  }
+  const maxQty = opts.maxQty || Infinity;
+  const baseCount = opts.noStockCheck ? 99 : recipeAvailability(recipe);
+  let finished = false;
+  function chosenModifiers(){ return modifiersFromSelections(recipe, selections); }
+  function currentPrice(){ return menuUnitPrice(recipe, chosenModifiers()); }
   const body = `
-    <div style="text-align:center;margin-bottom:10px;"><b style="font-size:17px;">${escapeHtml(recipe.name)}</b></div>
+    <div class="mod-head"><b>${escapeHtml(recipe.name)}</b>${!opts.noStockCheck && baseCount <= 0 ? `<div class="hint">Out of stock as it is. A swap below may still work.</div>` : ''}</div>
     ${groups.map(g=>`
-      <div class="mod-group" data-group="${g.id}">
+      <div class="mod-group" data-group="${escapeHtml(g.id)}">
         <div class="mod-group-title"><span>${escapeHtml(g.name)}${g.multi_select?' <span class="text-light" style="font-weight:500;">(pick any)</span>':''}</span>${g.required?'<span class="req">Required</span>':''}</div>
-        <div class="mod-options">${(g.options||[]).map(o=>`<button class="mod-opt" data-group="${g.id}" data-opt="${o.id}">${escapeHtml(o.label)}${Number(o.price_delta)?` (${o.price_delta>0?'+':''}${fmtMoney(o.price_delta)})`:''}</button>`).join('')}</div>
+        <div class="mod-options">${(g.options||[]).map(o=>{
+          const swap = optionKind(o) === 'SWAP';
+          const out = !opts.noStockCheck && optionOutOfStock(recipe, g, o, baseCount);
+          return `<button class="mod-opt${out?' mod-opt-out':''}" data-group="${escapeHtml(g.id)}" data-opt="${escapeHtml(o.id)}">${swap?`<span class="mod-swap">Swap</span> `:''}${escapeHtml(o.label)}${optionPriceText(o)}${out?' <small class="mod-out">Out of stock</small>':''}</button>`;
+        }).join('')}</div>
       </div>`).join('')}
-    <div class="form-row" style="margin-top:6px;"><label>Note (optional)</label><input id="mod-notes" maxlength="140" value="${escapeHtml(existingLine?existingLine.notes||'':'')}" placeholder="e.g. less ice"></div>
+    ${opts.noNotes ? '' : `<div class="form-row" style="margin-top:6px;"><label>Note (optional)</label><input id="mod-notes" maxlength="140" value="${escapeHtml(existingLine?existingLine.notes||'':'')}" placeholder="e.g. less ice"></div>`}
+    <div class="mod-missing" id="mod-missing" role="alert" hidden></div>
     <div class="qty-stepper">
-      <button class="qbig" id="mod-qty-minus">−</button><span class="qval" id="mod-qty-val">${qty}</span><button class="qbig" id="mod-qty-plus">+</button>
+      <button class="qbig" id="mod-qty-minus" aria-label="One less">−</button><span class="qval" id="mod-qty-val">${qty}</span><button class="qbig" id="mod-qty-plus" aria-label="One more">+</button>
     </div>
-    <div style="text-align:center;font-family:var(--font-display);font-size:22px;font-weight:700;color:var(--espresso);" id="mod-total-price">${fmtMoney(currentPrice()*qty)}</div>`;
-  const foot = `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="mod-add">${existingLine?'Update Item':'Add to Order'}</button>`;
-  openModal({title:'Customize', body, foot, onMount:(root)=>{
+    <div class="mod-total" id="mod-total-price">${fmtMoney(currentPrice()*qty)}</div>`;
+  const foot = `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="mod-add">${escapeHtml(opts.addLabel || (existingLine?'Update item':'Add to order'))}</button>`;
+  openModal({title: escapeHtml(opts.title || 'Customize'), body, foot,
+    onClose: ()=>{ if(!finished && opts.onCancel) opts.onCancel(); },
+    onMount:(root)=>{
     root.querySelector('[data-cancel]').onclick = closeModal;
+    const missingBox = root.querySelector('#mod-missing');
+    function showMissing(list){
+      root.querySelectorAll('.mod-group').forEach(n=> n.classList.toggle('mod-group-missing', list.some(m=>m.group_id===n.dataset.group)));
+      missingBox.hidden = !list.length;
+      missingBox.textContent = list.length ? `Choose ${list.map(m=>m.name).join(' and ')} first.` : '';
+    }
     function refreshUI(){
       root.querySelectorAll('.mod-opt').forEach(btn=>{
-        btn.classList.toggle('selected', selections.some(s=>s.group_id===btn.dataset.group && s.option_id===btn.dataset.opt));
+        const on = selections.some(s=>s.group_id===btn.dataset.group && s.option_id===btn.dataset.opt);
+        btn.classList.toggle('selected', on); btn.setAttribute('aria-pressed', String(on));
       });
       root.querySelector('#mod-qty-val').textContent = qty;
       root.querySelector('#mod-total-price').textContent = fmtMoney(currentPrice()*qty);
+      if(!missingBox.hidden) showMissing(missingRequiredGroups(recipe, selections));
     }
     root.querySelectorAll('.mod-opt').forEach(btn=>{
       btn.onclick = ()=>{
         const gid = btn.dataset.group, oid = btn.dataset.opt;
         const group = groups.find(g=>g.id===gid);
+        if(!group) return;
         const already = selections.some(s=>s.group_id===gid && s.option_id===oid);
         if(group.multi_select){
           if(already) selections = selections.filter(s=>!(s.group_id===gid && s.option_id===oid));
@@ -1576,18 +1630,23 @@ function openModifierPicker(recipe, existingLine){
       };
     });
     root.querySelector('#mod-qty-minus').onclick = ()=>{ qty = Math.max(1, qty-1); refreshUI(); };
-    root.querySelector('#mod-qty-plus').onclick = ()=>{ qty = qty+1; refreshUI(); };
+    root.querySelector('#mod-qty-plus').onclick = ()=>{ qty = Math.min(maxQty, qty+1); refreshUI(); };
     refreshUI();
     root.querySelector('#mod-add').onclick = ()=>{
-      const missing = groups.filter(g=>g.required && !selections.some(s=>s.group_id===g.id));
-      if(missing.length){ toast(`Please choose: ${missing.map(g=>g.name).join(', ')}`, 'error'); return; }
-      const modifiers = selections.map(s=>{
-        const g = groups.find(x=>x.id===s.group_id); const o = g.options.find(x=>x.id===s.option_id);
-        return {group:g.name, label:o.label, price_delta:Number(o.price_delta)||0, ingredient_id:o.ingredient_id||null, ingredient_qty_delta:Number(o.ingredient_qty_delta)||0};
-      });
-      const notes = root.querySelector('#mod-notes').value.trim();
+      const missing = missingRequiredGroups(recipe, selections);
+      if(missing.length){ showMissing(missing); toast(`Choose ${missing.map(m=>m.name).join(' and ')} first.`, 'error'); return; }
+      const modifiers = chosenModifiers();
+      if(!opts.noStockCheck){
+        // Out of stock with these options (e.g. no iced cups left): can't be added (Q6).
+        const why = lineStockProblem(recipe, qty, modifiers);
+        if(why){ toast(`${recipe.name}${modifiers.length ? ' (' + modifiers.map(m=>m.label).join(', ') + ')' : ''} can't be added: ${why}.${isOnline() ? '' : ' This counter is offline: stock may be out of date.'}`, 'warn'); return; }
+      }
+      const notesEl = root.querySelector('#mod-notes');
+      const notes = notesEl ? notesEl.value.trim() : '';
+      finished = true;
+      if(opts.onDone){ closeModal(); opts.onDone({quantity: qty, selections, modifiers, notes}); return; }
       if(existingLine){
-        Object.assign(existingLine, {quantity: qty, modifiers, selections, notes, unit_price: currentPrice()});
+        Object.assign(existingLine, {quantity: qty, modifiers, selections, notes, unit_price: menuUnitPrice(recipe, modifiers)});
       } else {
         addToCart(recipe, qty, modifiers, selections, notes);
       }
@@ -1599,7 +1658,7 @@ function openModifierPicker(recipe, existingLine){
 
 /* ================= Cart ================= */
 function addToCart(recipe, qty, modifiers, selections, notes){
-  const unit_price = Number(recipe.selling_price||0) + modifiers.reduce((s,m)=>s+(Number(m.price_delta)||0),0);
+  const unit_price = menuUnitPrice(recipe, modifiers);
   posState.cart.push({lineId: uid(), recipe_id: recipe.id, name: recipe.name, unit_price, quantity: qty, modifiers, selections: selections||[], notes: notes||''});
   renderCartPanel();
   toast(`Added ${recipe.name}`, 'success');
@@ -1890,7 +1949,7 @@ function renderCartPanel(){
   panel.querySelectorAll('[data-edit-line]').forEach(b=> b.onclick = ()=>{
     const line = posState.cart.find(x=>x.lineId===b.dataset.editLine);
     const recipe = state.recipes.find(r=>r.id===line.recipe_id);
-    if(recipe && (recipe.modifier_groups||[]).length && line.selections) openModifierPicker(recipe, line);
+    if(recipe && recipeOptionGroups(recipe).length && line.selections) openModifierPicker(recipe, line);
     else editLineNote(line);
   });
   panel.querySelectorAll('[data-reward]').forEach(b=> b.onclick = ()=>{
@@ -2055,6 +2114,13 @@ async function holdCurrentOrder(){
   clearCart();
   navigatePOS('pos');
 }
+// A held line's options as picker choices (1.4 modifiers keep group_id + option_id), so "Edit"
+// can open the option sheet again. Older lines without ids: none (Edit changes the note only).
+function heldSelections(mods){
+  const list = Array.isArray(mods) ? mods : [];
+  if(!list.length || !list.every(m => m && m.group_id && m.option_id)) return undefined;
+  return list.map(m => ({group_id: m.group_id, option_id: m.option_id}));
+}
 function showHeldOrders(){
   const held = state.sales.filter(s=>s.status==='HELD').sort((a,b)=> new Date(b.transaction_date)-new Date(a.transaction_date));
   openModal({title:'Held orders', body: held.length? `<div class="grid grid-2">${held.map(s=>{
@@ -2070,7 +2136,8 @@ function showHeldOrders(){
         const saleId = b.dataset.resume;
         const s = state.sales.find(x=>x.id===saleId);
         posState.cart = state.saleItems.filter(i=>i.sale_id===saleId).map(it=>({lineId: uid(), recipe_id: it.recipe_id, name: it.name,
-          unit_price: Number(it.unit_price), quantity: Number(it.quantity), modifiers: it.modifiers||[], notes: it.notes||''}));
+          unit_price: Number(it.unit_price), quantity: Number(it.quantity), modifiers: it.modifiers||[], notes: it.notes||'',
+          selections: heldSelections(it.modifiers)}));
         posState.resumingHeldSaleId = saleId;
         posState.customer = null; posState.reward = null;
         closeModal(); navigatePOS('pos');
@@ -2359,12 +2426,22 @@ async function completeSale(paymentInfo){
   return {sale, customerName, qrOrder: q, rewardLabel: applied ? rewardLabel(applied.reward) : ''};
 }
 
-/* ================= Receipts + receipt printer (release 1.3, P1) =================
-   Printing goes through the shared Printer (shared/printer.js): a Bluetooth / port
-   receipt printer chosen on this counter, or the browser's print screen. Printer settings
-   are kept on this counter only. Printing never blocks or undoes a sale: a sale is saved
-   first, then the receipt prints; if the printer fails the cashier sees why and can use the
-   print screen instead. */
+/* ================= Printing: receipts, barista tickets, shift reports (1.3 P1, 1.4) =================
+   Everything prints through the shared Printer (shared/printer.js) to the receipt printer
+   chosen on this counter (USB cable, Bluetooth or a printer port), one job at a time.
+   Release 1.4 (owner: "print automatically, don't prompt me to save it as PDF"):
+   - NOTHING opens the browser's print screen by itself. When a print fails or no printer is
+     connected, the cashier sees a plain message with "Reconnect", "Printer screen" and
+     "Use print screen"; only that last tap opens the print screen.
+   - Printing never blocks or undoes anything: the sale / shift close is saved first.
+   Automatic prints (switches on the Printer screen, saved on this counter only):
+     auto_print         receipt after each sale (off unless turned on)
+     auto_print_ticket  barista ticket after each sale (not again for a QR order whose
+                        ticket already printed when it arrived)
+     auto_print_qr      ticket when a QR order arrives (each order once: see qrTicketLog)
+     auto_print_shift   Z report right after the shift is closed
+   Tickets / QR / Z only print by themselves once a printer has been chosen on this counter;
+   the receipt switch (turned on on purpose) says so when there is no printer. */
 function receiptParts(saleId, dataset, opts){
   dataset = dataset || state;
   const sale = dataset.sales.find(s=>s.id===saleId);
@@ -2375,87 +2452,287 @@ function receiptParts(saleId, dataset, opts){
   const customerName = (opts && opts.customerName) || (qr ? qr.customer_nickname : null);
   return {sale, items, payments, ropts: {qrOrder: qr, customerName, rewardLabel: saleRewardLabel(sale)}};
 }
-// The browser's print screen with this receipt (the fallback; works on every device).
+// The browser's print screen with this receipt (only from a "Use print screen" tap).
 function openReceiptScreen(parts, autoPrint){
   return openPrintWindow(receiptHtml(parts.sale, parts.items, parts.payments, parts.ropts), autoPrint);
 }
-// Reprint (Sales list, transaction screen): print it now, marked "(Reprint)" on paper.
+// Is a USB / Bluetooth / port printer set up that this browser can use?
+function printerDirect(){
+  if(typeof Printer === 'undefined') return false;
+  if(typeof Printer.isDirect === 'function') return !!Printer.isDirect();
+  const s = Printer.status();
+  return (s.connection === 'usb' && s.support.usb) || (s.connection === 'bluetooth' && s.support.bluetooth) || (s.connection === 'serial' && s.support.serial);
+}
+// Has a printer been chosen on this counter (even if it isn't reachable right now)?
+function printerChosen(){ return typeof Printer !== 'undefined' && Printer.settings().connection !== 'dialog'; }
+// Can this browser print straight to a receipt printer at all (USB, Bluetooth or a port)?
+// No on iPad / iPhone and Safari: there, automatic prints skip quietly (one gentle note per session).
+function canPrintDirectHere(){
+  if(typeof Printer === 'undefined') return false;
+  const s = Printer.support();
+  return !s.apple_mobile && !!(s.usb || s.bluetooth || s.serial);
+}
+const AUTO_PRINT_NOTE_KEY = 'cccc.print.autoNote';
+function autoPrintNoteOnce(){
+  try{ if(sessionStorage.getItem(AUTO_PRINT_NOTE_KEY)) return; sessionStorage.setItem(AUTO_PRINT_NOTE_KEY, '1'); }catch(e){}
+  toast('Automatic printing needs a computer with Google Chrome and a USB receipt printer. Here, tap Print receipt (or Print ticket) to use the print screen.', 'warn');
+}
+
+/* ---- print jobs ----
+   job: {label: 'The receipt', title: 'The receipt did not print', name: 'Receipt T-0001',
+         run(again) -> Printer answer {ok, partial, error, message, ...},
+         screen() -> opens the print screen (runs straight from the "Use print screen" tap)} */
+function receiptJob(parts, extra){
+  let drawerDone = !!(extra && extra.openDrawer === false);
+  return {label: 'The receipt', title: 'The receipt did not print', name: 'Receipt ' + (parts.sale.transaction_number || ''),
+    run: async ()=>{
+      // The drawer opens at most once per sale, however often the receipt is retried.
+      const o = Object.assign({}, parts.ropts, extra || {});
+      if(drawerDone) o.openDrawer = false;
+      const r = await Printer.printReceipt(parts.sale, parts.items, parts.payments, o);
+      if(r && r.drawer_kick_sent) drawerDone = true;
+      return r;
+    },
+    screen: ()=> openReceiptScreen(parts, true)};
+}
+// The barista ticket of a counter sale (no prices).
+function saleTicketOrder(parts){
+  const s = parts.sale;
+  return {transaction_number: s.transaction_number, transaction_date: s.transaction_date, created_at: s.transaction_date, source: 'COUNTER',
+    customer_nickname: parts.ropts.customerName || '', paid_at: s.transaction_date,
+    items: parts.items.map(i=>({name: i.name, quantity: i.quantity, modifiers: i.modifiers || [], notes: i.notes || ''}))};
+}
+function ticketJob(order, topts, onPrinted){
+  const no = order.order_number || order.transaction_number || '';
+  return {label: 'The order ticket', title: 'The order ticket did not print', name: 'Order ticket ' + no,
+    run: async ()=>{
+      const r = await Printer.printTicket(order, topts);
+      if(r && r.ok && onPrinted) onPrinted(r);
+      return r;
+    },
+    screen: ()=> openPrintWindow(ticketHtml(order, topts), true)};
+}
+function shiftReportJob(shiftId, isX){
+  const get = ()=> state.shifts.find(s=>s.id===shiftId);
+  const report = ()=>{ const sh = get(); return {shift: sh, metrics: shiftMetrics(sh), isX: !!isX, device_name: state.device ? state.device.device_name : ''}; };
+  return {label: isX ? 'The X-report' : 'The shift report', title: isX ? 'The X-report did not print' : 'The shift report did not print',
+    name: (isX ? 'X-report ' : 'Shift report ') + ((get() || {}).shift_number || ''),
+    run: async ()=>{ if(!get()) return {ok: false, error: 'Shift not found on this counter.'}; return Printer.printShiftReport(report(), {isX: !!isX}); },
+    screen: ()=>{ const sh = get(); if(sh) openPrintWindow(shiftReportHtml(sh, shiftMetrics(sh), !!isX), true); }};
+}
+// Plain words for a failed print.
+function printProblemText(res){
+  if(!res) return 'Printing failed.';
+  if(res.message) return String(res.message);
+  if(res.error && res.error !== 'NOT_CONNECTED') return String(res.error);
+  return 'No receipt printer is connected. Open the Printer screen and tap Connect USB printer.';
+}
+// Runs jobs in order. The first one that fails stops the rest (the printer is probably down)
+// and the cashier gets ONE message for all of them. ctx: {okToast, saved, onProblem(problem)}.
+async function runPrintJobs(jobs, ctx){
+  ctx = ctx || {};
+  if(typeof Printer === 'undefined' || !jobs.length) return true;
+  // A print the cashier TAPPED, on a counter without a usable receipt printer (iPad, Safari, or
+  // none chosen): that is the person asking, so the print screen opens straight away (still
+  // inside the tap, before anything is awaited, so the browser allows the window).
+  if(ctx.manual && !printerDirect()){ jobs[0].screen(); return true; }
+  for(let i = 0; i < jobs.length; i++){
+    let res;
+    try{ res = await jobs[i].run(); }
+    catch(e){ res = {ok: false, partial: false, error: friendlyError(e), message: friendlyError(e)}; }
+    if(res && res.ok) continue;
+    const problem = {jobs: jobs.slice(i), res: res || {ok: false}, saved: ctx.saved || ''};
+    if(ctx.onProblem) ctx.onProblem(problem); else showPrintProblem(problem);
+    return false;
+  }
+  if(ctx.okToast) toast(ctx.okToast);
+  return true;
+}
+// Try the printer again from a tap: a USB printer the browser forgot (or none chosen yet, on a
+// browser with USB) opens the USB chooser; otherwise a quiet reconnect. -> true when connected.
+async function reconnectPrinterFromTap(){
+  const s = Printer.status();
+  try{
+    if(s.support && s.support.usb && (s.usb_needs_tap || s.connection === 'dialog')){
+      const st = await Printer.chooseUsb();
+      queueAudit('Receipt printer connected', (st && st.name) || '');
+      return true;
+    }
+    if(s.connection === 'dialog') return false;
+    return !!(await Printer.reconnect());
+  }catch(e){ return false; }
+}
+// The message box for a failed print. Only one at a time: problems that come in while it (or
+// another box) is open wait, so a print problem never closes what the cashier is doing.
+let printProblems = [], printProblemTimer = null;
+function modalOpenNow(){
+  return !!document.getElementById('active-modal-overlay') || document.getElementById('pin-gate').style.display !== 'none';
+}
+function showPrintProblem(problem){
+  if(problem) printProblems.push(problem);
+  if(!printProblems.length) return;
+  const own = document.getElementById('print-problem');
+  if(modalOpenNow() && !own){
+    if(problem) toast(problem.jobs[0].label + ' did not print. ' + printProblemText(problem.res), 'warn');
+    if(!printProblemTimer) printProblemTimer = setInterval(()=>{
+      if(!printProblems.length){ clearInterval(printProblemTimer); printProblemTimer = null; return; }
+      if(!modalOpenNow()){ clearInterval(printProblemTimer); printProblemTimer = null; showPrintProblem(null); }
+    }, 1500);
+    return;
+  }
+  const first = printProblems[0];
+  const jobs = [].concat(...printProblems.map(p=>p.jobs));
+  const res = first.res;
+  const partial = !!res.partial;
+  const msg = printProblemText(res).replace(/^Printing stopped part-way\.\s*/, '');
+  const title = partial ? 'Printing stopped part-way' : first.jobs[0].title;
+  const saved = [...new Set(printProblems.map(p=>p.saved).filter(Boolean))].join(' ');
+  const what = first.jobs[0].label.replace(/^The /, 'the ');
+  openModal({title: escapeHtml(title), body: `<div id="print-problem">
+      <div class="notice warn">${escapeHtml(msg)}</div>
+      <p>${partial ? `Part of ${escapeHtml(what)} came out. Check the printer has paper and is switched on, then print again, or use the print screen.` : 'Fix the printer and tap Reconnect, or use the print screen.'}${saved ? ' ' + escapeHtml(saved) : ''}</p>
+      ${jobs.length > 1 ? `<p class="hint">Not printed:</p><ul class="pr-todo">${jobs.map(j=>`<li>${escapeHtml(j.name)}</li>`).join('')}</ul><p class="hint">Use print screen opens the first one (${escapeHtml(jobs[0].name)}).</p>` : ''}</div>`,
+    foot: `<button class="btn btn-outline" data-cancel>Close</button><button class="btn btn-outline" id="pr-setup">${icon('settings')} Printer screen</button><button class="btn btn-outline" id="pr-dialog">${icon('receipt')} Use print screen</button>${partial ? `<button class="btn btn-primary" id="pr-again">${icon('printer')} Print again</button>` : `<button class="btn btn-primary" id="pr-reconnect">${icon('refresh')} Reconnect</button>`}`,
+    onClose: ()=>{ printProblems = []; },
+    onMount: (root)=>{
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      root.querySelector('#pr-setup').onclick = ()=>{ closeModal(); navigatePOS('printer'); };
+      // The print screen for the first one only (one window per tap; the others are not asked
+      // about again: they can be printed later, e.g. "Reprint ticket" on a QR order).
+      root.querySelector('#pr-dialog').onclick = ()=>{ closeModal(); jobs[0].screen(); };
+      const retry = async (btn, reconnect)=>{
+        btn.disabled = true;
+        if(reconnect){
+          btn.textContent = 'Connecting…';
+          const ok = await reconnectPrinterFromTap();
+          if(!ok){
+            btn.disabled = false; btn.innerHTML = `${icon('refresh')} Reconnect`;
+            toast(Printer.status().last_error || 'Couldn\'t reach the printer. Check it is switched on (and plugged in, or close by), then try again.', 'warn');
+            return;
+          }
+        }
+        closeModal();
+        await runPrintJobs(jobs, {saved, okToast: jobs.length > 1 ? 'Printed' : first.jobs[0].label.replace(/^The /, '').replace(/^./, c=>c.toUpperCase()) + ' printed'});
+      };
+      const again = root.querySelector('#pr-again'); if(again) again.onclick = (ev)=> retry(ev.currentTarget, false);
+      const rc = root.querySelector('#pr-reconnect'); if(rc) rc.onclick = (ev)=> retry(ev.currentTarget, true);
+    }});
+}
+// The same choices inside another box (the shift report): never replaces that box.
+function inlinePrintProblem(box, problem, retryLabel){
+  if(!box || !document.body.contains(box)){ showPrintProblem(problem); return; }
+  const res = problem.res;
+  box.innerHTML = `<div class="notice warn pr-inline"><span>${icon('alert', {size: 18})} ${escapeHtml(problem.jobs[0].label)} did not print. ${escapeHtml(printProblemText(res))}</span>
+    <span class="pr-inline-btns"><button class="btn btn-sm btn-primary" data-pi="again">${icon('refresh', {size: 18})} ${escapeHtml(retryLabel || 'Reconnect')}</button>
+    <button class="btn btn-sm btn-outline" data-pi="setup">${icon('settings', {size: 18})} Printer screen</button>
+    <button class="btn btn-sm btn-outline" data-pi="screen">${icon('receipt', {size: 18})} Use print screen</button></span></div>`;
+  box.querySelector('[data-pi="setup"]').onclick = ()=>{ closeModal(); navigatePOS('printer'); };
+  box.querySelector('[data-pi="screen"]').onclick = ()=> problem.jobs[0].screen();
+  box.querySelector('[data-pi="again"]').onclick = async (ev)=>{
+    ev.currentTarget.disabled = true;
+    if(!Printer.status().connected) await reconnectPrinterFromTap();
+    printInto(box, problem.jobs);
+  };
+}
+async function printInto(box, jobs, manual){
+  if(manual && !printerDirect()){ jobs[0].screen(); return true; }      // a tap with no usable printer: the print screen
+  if(box) box.innerHTML = `<div class="hint pr-inline-ok">${icon('printer', {size: 18})} Printing…</div>`;
+  const ok = await runPrintJobs(jobs, {onProblem: (p)=> inlinePrintProblem(box, p)});
+  if(ok && box && document.body.contains(box)) box.innerHTML = `<div class="hint pr-inline-ok">${icon('check', {size: 18})} Printed on the receipt printer.</div>`;
+  return ok;
+}
+
+// Reprint (Sales list, transaction screen, "Print receipt" on the empty order).
 async function showReceipt(saleId, opts, dataset){
   const parts = receiptParts(saleId, dataset, opts);
   if(!parts){ toast('Sale not found on this counter', 'error'); return; }
-  parts.ropts.reprint = !(opts && opts.first);
-  if(opts && opts.first) parts.ropts.openDrawer = false;     // the drawer already opened when the sale was made
-  let res;
-  try{ res = await Printer.printReceipt(parts.sale, parts.items, parts.payments, parts.ropts); }
-  catch(e){ res = {ok: false, partial: false, method: 'dialog', error: friendlyError(e)}; }
-  handlePrintResult(res, parts, {manual: true});
+  const first = !!(opts && opts.first);
+  // "Print receipt" right after the sale: not marked (Reprint); the drawer already opened.
+  await runPrintJobs([receiptJob(parts, first ? {openDrawer: false} : {reprint: true})], {okToast: 'Receipt printed', manual: true});
 }
-// Right after a sale. Auto-print on: print by itself (printer, or the print screen when no
-// printer is set up). Off: nothing prints; the empty order's "Print receipt" button does it.
-// The cash drawer opens on a cash sale when that setting is on (with a printer).
+// Right after a sale: the receipt (if on), then the barista ticket (if on). A cash sale with the
+// receipt switched off still opens the drawer (when that setting is on).
 async function printAfterSale(saleId, opts){
+  if(typeof Printer === 'undefined') return;
   const parts = receiptParts(saleId, state, opts);
   if(!parts) return;
   const st = Printer.settings();
   const cash = parts.payments.some(p => p && p.method === 'CASH');
+  const q = parts.ropts.qrOrder;
+  if(!canPrintDirectHere()){ if(st.auto_print || (st.auto_print_ticket && printerChosen())) autoPrintNoteOnce(); return; }
+  const jobs = [];
+  if(st.auto_print) jobs.push(receiptJob(parts));
+  // QR order: its ticket printed when it arrived -> receipt only (no second ticket).
+  if(st.auto_print_ticket && printerChosen() && !(q && qrTicketPrinted(q.id))){
+    jobs.push(q ? ticketJob(Object.assign({}, q, {paid_at: q.paid_at || parts.sale.transaction_date}), {source: 'QR', paid: true}, ()=> markQrTicketPrinted(q.id))
+                : ticketJob(saleTicketOrder(parts), {source: 'COUNTER', paid: true, customerName: parts.ropts.customerName || ''}));
+  }
   try{
-    if(st.auto_print){
-      const res = await Printer.printReceipt(parts.sale, parts.items, parts.payments, Object.assign({auto: true}, parts.ropts));
-      handlePrintResult(res, parts, {auto: true});
-      return;
-    }
-    if(printerDirect() && st.open_drawer_on_cash && cash) await openDrawerOnly();
+    if(!st.auto_print && printerDirect() && st.open_drawer_on_cash && cash) await openDrawerOnly();
+    if(jobs.length) await runPrintJobs(jobs, {saved: 'The sale is saved.'});
   }catch(e){ console.warn('printing after the sale', e); }
-}
-// Is a Bluetooth / port printer set up that this browser can use?
-function printerDirect(){
-  const s = Printer.status();
-  return (s.connection === 'bluetooth' && s.support.bluetooth) || (s.connection === 'serial' && s.support.serial);
 }
 // Drawer kick only (ESC @ + ESC p), for a cash sale when the receipt isn't printed by itself.
 async function openDrawerOnly(){
   try{ await Printer.sendBytes(Printer.EscPos({}).init().drawer().toUint8()); return true; }
   catch(e){ toast('The cash drawer did not open: the printer isn\'t connected. Open it by hand, and check the printer screen.', 'warn'); return false; }
 }
-// What the cashier sees when printing didn't work. ctx.auto: the print after a sale; ctx.manual: a reprint.
-function handlePrintResult(res, parts, ctx){
-  ctx = ctx || {};
-  if(!res || res.ok){
-    if(res && ctx.manual && res.method !== 'dialog') toast('Receipt printed');
-    return;
+
+/* ---- QR order tickets: each order prints by itself ONCE on this counter ----
+   The ids are kept in this browser (localStorage), so polling, a reload or a restart never
+   prints an order again. `since`: only orders that arrived after automatic printing was
+   switched on (or first used) print by themselves; older ones have the reprint button. */
+const QR_TICKETS_KEY = 'cccc.qr.ticketsPrinted';
+const QR_TICKET_KEEP_MS = 3*24*3600*1000;
+const QR_TICKET_MAX_AGE_MS = 3*3600*1000;       // never auto-print an order older than this
+function qrTicketLog(){
+  let v = null;
+  try{ v = JSON.parse(localStorage.getItem(QR_TICKETS_KEY) || 'null'); }catch(e){ v = null; }
+  if(!v || typeof v !== 'object' || !v.ids || typeof v.ids !== 'object'){
+    v = {since: new Date(Date.now() - 5*60*1000).toISOString(), ids: {}};
+    saveQrTicketLog(v);
   }
-  if(res.partial){
-    openModal({title: 'Printing stopped part-way', body: `
-      <div class="notice warn">${escapeHtml(String(res.error || 'The printer stopped before the end of the receipt.').replace(/^Printing stopped part-way\.\s*/, ''))}</div>
-      <p>Part of the receipt came out. The sale is saved. Check the printer has paper and is switched on, then print the receipt again, or use the print screen.</p>`,
-      foot: `<button class="btn btn-outline" data-cancel>Close</button><button class="btn btn-outline" id="pr-dialog">${icon('receipt')} Use print screen</button><button class="btn btn-primary" id="pr-again">${icon('printer')} Print again</button>`,
-      onMount: (root)=>{
-        root.querySelector('[data-cancel]').onclick = closeModal;
-        root.querySelector('#pr-dialog').onclick = ()=>{ closeModal(); openReceiptScreen(parts, true); };
-        root.querySelector('#pr-again').onclick = async (ev)=>{
-          ev.currentTarget.disabled = true;
-          closeModal();
-          // Never kick the drawer a second time for the same sale.
-          const again = await Printer.printReceipt(parts.sale, parts.items, parts.payments, Object.assign({}, parts.ropts, {fallback: false, openDrawer: false}));
-          handlePrintResult(again, parts, {manual: true});
-        };
-      }});
-    return;
-  }
-  if(res.method === 'dialog'){
-    // A reprint that couldn't reach the printer: the print screen has opened instead.
-    toast((res.error || 'The printer could not be reached.') + ' The print screen opened instead.', 'warn');
-    return;
-  }
-  openModal({title: 'The receipt did not print', body: `
-    <div class="notice warn">${escapeHtml(res.error || 'Printing failed.')}</div>
-    <p>The sale is saved. You can print the receipt with the print screen, or fix the printer on the printer screen.</p>`,
-    foot: `<button class="btn btn-outline" data-cancel>Close</button><button class="btn btn-outline" id="pr-setup">${icon('settings')} Printer screen</button><button class="btn btn-primary" id="pr-dialog">${icon('receipt')} Use print screen</button>`,
-    onMount: (root)=>{
-      root.querySelector('[data-cancel]').onclick = closeModal;
-      root.querySelector('#pr-setup').onclick = ()=>{ closeModal(); navigatePOS('printer'); };
-      root.querySelector('#pr-dialog').onclick = ()=>{ closeModal(); openReceiptScreen(parts, true); };
-    }});
+  return v;
+}
+function saveQrTicketLog(v){
+  const cut = Date.now() - QR_TICKET_KEEP_MS;
+  Object.keys(v.ids).forEach(k=>{ if(!(Number(v.ids[k] && v.ids[k].at) > cut)) delete v.ids[k]; });
+  try{ localStorage.setItem(QR_TICKETS_KEY, JSON.stringify(v)); }catch(e){}
+}
+function qrTicketPrinted(id){ const e = qrTicketLog().ids[id]; return !!(e && e.p); }
+function markQrTicketPrinted(id){
+  const v = qrTicketLog();
+  v.ids[id] = {at: Date.now(), p: 1};
+  saveQrTicketLog(v);
+  if(posState.route === 'qr') renderQrBoard();
+}
+// Automatic printing was just switched on: orders already on the board don't all print now.
+function startQrTicketLog(){
+  const v = qrTicketLog();
+  v.since = new Date(Date.now() - 5*60*1000).toISOString();
+  (state.qrOrders || []).forEach(o=>{ if(o && o.id && !v.ids[o.id]) v.ids[o.id] = {at: Date.now(), p: 0}; });
+  saveQrTicketLog(v);
+}
+const QR_OPEN = ['PENDING', 'PREPARING', 'READY'];
+function autoPrintQrArrivals(list){
+  if(typeof Printer === 'undefined' || !printerReady) return;
+  const st = Printer.settings();
+  if(!st.auto_print_qr || !printerChosen() || !canPrintDirectHere()) return;
+  const v = qrTicketLog();
+  const from = Math.max(Date.parse(v.since) || 0, Date.now() - QR_TICKET_MAX_AGE_MS);
+  const fresh = (list || []).filter(o => o && o.id && QR_OPEN.includes(o.status) && !v.ids[o.id] && (Date.parse(o.created_at) || 0) >= from)
+    .sort((a, b)=> new Date(a.created_at) - new Date(b.created_at));
+  if(!fresh.length) return;
+  // Written down BEFORE printing: the next poll or a reload never prints it again.
+  fresh.forEach(o=>{ v.ids[o.id] = {at: Date.now(), p: 0}; });
+  saveQrTicketLog(v);
+  const jobs = fresh.map(o=>{ const cur = state.qrOrders.find(x=>x.id===o.id) || o; return ticketJob(cur, {source: 'QR'}, ()=> markQrTicketPrinted(o.id)); });
+  runPrintJobs(jobs, {saved: 'The orders are on the QR board: print their tickets from there when the printer is back.'});
+}
+// The "Print ticket" / "Reprint ticket" button on a QR order card.
+async function printQrTicket(o){
+  const again = qrTicketPrinted(o.id);
+  await runPrintJobs([ticketJob(o, {source: 'QR', reprint: again}, ()=> markQrTicketPrinted(o.id))], {okToast: 'Ticket printed', manual: true});
 }
 
 /* ---- Printer status (sidebar) and screen ---- */
@@ -2463,16 +2740,22 @@ let printerReady = false;
 function initPrinter(){
   if(typeof Printer === 'undefined') return;
   Printer.on('status', ()=>{ updatePrinterPill(); if(posState.route === 'printer') renderPrinterStatus(); });
-  Printer.init().then(()=>{ printerReady = true; updatePrinterPill(); if(posState.route === 'printer') renderPrinterScreen(); }).catch(()=>{});
+  Printer.init().then(()=>{
+    printerReady = true; updatePrinterPill();
+    if(posState.route === 'printer') renderPrinterScreen();
+    autoPrintQrArrivals(state.qrOrders);          // orders that came in while this page was closed
+  }).catch(()=>{});
 }
 // {key: 'none'|'on'|'off'|'busy', text}
 function printerState(){
   const s = Printer.status();
-  if(s.connection === 'dialog' || !printerDirect()) return {key: 'none', text: 'Printer not set up', long: 'Receipts open the print screen. Connect a receipt printer below to print straight to it.'};
+  if(s.connection === 'dialog' || !printerDirect()) return {key: 'none', text: 'Printer not set up', long: 'Nothing prints by itself until a receipt printer is connected. On a computer, plug in the USB cable and tap Connect USB printer.'};
   if(s.busy) return {key: 'busy', text: 'Printing…', long: 'Printing…'};
   if(s.connecting) return {key: 'busy', text: 'Connecting…', long: 'Connecting to ' + (s.name || 'the printer') + '…'};
   if(s.connected) return {key: 'on', text: 'Printer connected', long: 'Connected to ' + (s.name || 'the printer') + '.'};
-  return {key: 'off', text: 'Printer not connected', long: (s.name || 'The printer') + ' is not connected. It reconnects by itself when it is switched on and close by, or tap Reconnect.'};
+  if(s.usb_needs_tap) return {key: 'off', text: 'Printer not connected', long: 'The browser needs you to choose the USB printer again (once). Tap Connect USB printer.'};
+  const how = s.connection === 'usb' ? 'plugged in and switched on' : s.connection === 'bluetooth' ? 'switched on and close by' : 'switched on';
+  return {key: 'off', text: 'Printer not connected', long: (s.name || 'The printer') + ' is not connected. It reconnects by itself when it is ' + how + ', or tap Reconnect.'};
 }
 function updatePrinterPill(){
   const pill = document.getElementById('printer-pill');
@@ -2486,6 +2769,15 @@ function updatePrinterPill(){
 function segHtml(name, options, value){
   return `<div class="seg" role="group" data-seg="${name}">${options.map(o=>`<button type="button" class="seg-btn ${String(o.v)===String(value)?'active':''}" data-v="${escapeHtml(String(o.v))}" aria-pressed="${String(o.v)===String(value)}">${escapeHtml(o.l)}</button>`).join('')}</div>`;
 }
+function printerHelpHtml(){
+  const h = typeof Printer.helpSteps === 'function' ? Printer.helpSteps() : null;
+  if(!h) return '';
+  return `<details class="pr-help" ${h.platform === 'mac' || h.platform === 'windows' || h.platform === 'other' ? 'open' : ''}>
+      <summary>${escapeHtml('Step by step: ' + (h.title || 'this browser'))}</summary>
+      <ol class="pr-steps">${(h.steps || []).map(s=>`<li>${escapeHtml(s)}</li>`).join('')}</ol>
+      ${(h.notes || []).length ? `<ul class="pr-notes">${h.notes.map(s=>`<li>${escapeHtml(s)}</li>`).join('')}</ul>` : ''}
+    </details>`;
+}
 function renderPrinterScreen(){
   const content = document.getElementById('content');
   content.className = 'printer-content';
@@ -2496,6 +2788,8 @@ function renderPrinterScreen(){
   const mgr = hasRole('MANAGER');
   const toggle = (id, on, title, sub, locked) => `<label class="pr-toggle ${locked?'locked':''}" for="${id}"><span><b>${escapeHtml(title)}</b><small>${escapeHtml(sub)}</small></span>
     <span class="switch"><input type="checkbox" id="${id}" ${on?'checked':''} ${locked?'disabled':''}><span class="slider-tog"></span></span></label>`;
+  // USB first: the recommended way on a computer (Mac / Windows with Chrome, Edge or Brave).
+  const usbMain = sup.usb && !sup.apple_mobile;
   content.innerHTML = `
     <div class="printer-page">
       <div class="card pr-card pr-wide" id="pr-status"></div>
@@ -2503,26 +2797,31 @@ function renderPrinterScreen(){
         <h3 class="card-title">Connect a printer</h3>
         <p class="hint" id="pr-support">${escapeHtml(Printer.supportText())}</p>
         <div class="pr-connect">
-          <button class="btn btn-primary btn-big" id="pr-ble" ${sup.bluetooth?'':'disabled'}>${icon('printer')} Connect Bluetooth printer</button>
+          <button class="btn ${usbMain?'btn-primary':'btn-outline'} btn-big" id="pr-usb" ${sup.usb?'':'disabled'}>${icon('printer')} Connect USB printer${usbMain?' <span class="pr-rec">Recommended on computers</span>':''}</button>
+          <button class="btn ${usbMain?'btn-outline':'btn-primary'} btn-big" id="pr-ble" ${sup.bluetooth?'':'disabled'}>${icon('printer')} Connect Bluetooth printer</button>
           ${sup.serial ? `<button class="btn btn-outline btn-big" id="pr-serial">${icon('printer')} Connect printer port</button>` : ''}
         </div>
-        ${sup.bluetooth ? `<button class="btn btn-ghost btn-sm pr-all" id="pr-ble-all">${icon('search', {size: 18})} Show all Bluetooth devices</button>
-          <p class="hint">Your printer isn't in the list? Tap "Show all Bluetooth devices" and pick it there.</p>` : ''}
-        <ol class="pr-steps">
-          <li>Switch the printer on and put paper in.</li>
-          <li>Tap <b>Connect Bluetooth printer</b>${sup.serial ? ' (or <b>Connect printer port</b> if it is paired in the computer\'s Bluetooth settings or plugged in by USB)' : ''}.</li>
-          <li>Pick the printer in the list (it is often called "Printer001", "XP-58" or "BlueTooth Printer"), then tap <b>Pair</b> or <b>Connect</b>.</li>
-          <li>Tap <b>Print test slip</b>. After this, the counter reconnects by itself.</li>
-        </ol>
+        <div class="pr-more">
+          ${sup.usb ? `<button class="btn btn-ghost btn-sm pr-all" id="pr-usb-all">${icon('search', {size: 18})} Show all USB devices</button>` : ''}
+          ${sup.bluetooth ? `<button class="btn btn-ghost btn-sm pr-all" id="pr-ble-all">${icon('search', {size: 18})} Show all Bluetooth devices</button>` : ''}
+        </div>
+        ${sup.usb || sup.bluetooth ? `<p class="hint">Your printer isn't in the list? Tap ${[sup.usb ? '"Show all USB devices"' : '', sup.bluetooth ? '"Show all Bluetooth devices"' : ''].filter(Boolean).join(' or ')} and pick it there.</p>` : ''}
+        ${printerHelpHtml()}
       </div></div>
       <div class="pr-col"><div class="card pr-card">
-        <h3 class="card-title">Receipt settings</h3>
-        <p class="hint">Saved on this counter only.</p>
+        <h3 class="card-title">Print by itself</h3>
+        <p class="hint">Saved on this counter only. Nothing opens the print screen by itself.</p>
+        ${toggle('pr-auto', st.auto_print, 'Print the receipt after each sale', 'Off: after a sale, tap "Print receipt" on the order screen when the customer wants one.')}
+        ${toggle('pr-ticket', st.auto_print_ticket, 'Print a barista ticket after each sale', 'The order for the bar, without prices. A QR order whose ticket already printed when it arrived doesn\'t print a second one.')}
+        ${toggle('pr-qr', st.auto_print_qr, 'Print QR orders when they arrive', 'Turn this on for ONE counter only, or every counter prints each order. Each order prints once; use "Reprint ticket" on the order for another copy.')}
+        ${toggle('pr-shift', st.auto_print_shift, 'Print the shift report when the shift is closed', 'The Z report prints right after Confirm close shift. The X-report prints when you tap Print X-report.')}
+        ${toggle('pr-drawer', st.open_drawer_on_cash, 'Open the cash drawer on cash sales', mgr ? 'Needs a cash drawer plugged into the printer.' : (st.open_drawer_on_cash ? 'On.' : 'Off.') + ' Only a manager can change this.', !mgr)}
+      </div>
+      <div class="card pr-card">
+        <h3 class="card-title">Paper</h3>
         <div class="pr-row"><span class="pr-label">Paper width</span>${segHtml('paper_width', [{v:58,l:'58 mm'},{v:80,l:'80 mm'}], st.paper_width)}</div>
         <div class="pr-row"><span class="pr-label">Peso sign on paper</span>${segHtml('peso_style', [{v:'P',l:'P150.00'},{v:'PHP',l:'PHP 150.00'},{v:'none',l:'150.00'}], st.peso_style)}</div>
         <div class="pr-row"><span class="pr-label">Copies of each receipt</span>${segHtml('copies', [{v:1,l:'1'},{v:2,l:'2'},{v:3,l:'3'}], st.copies)}</div>
-        ${toggle('pr-auto', st.auto_print, 'Print the receipt after each sale', 'Off: after a sale, tap "Print receipt" on the order screen when the customer wants one.')}
-        ${toggle('pr-drawer', st.open_drawer_on_cash, 'Open the cash drawer on cash sales', mgr ? 'Needs a cash drawer plugged into the printer.' : (st.open_drawer_on_cash ? 'On.' : 'Off.') + ' Only a manager can change this.', !mgr)}
       </div>
       <div class="card pr-card">
         <h3 class="card-title">Check the printer</h3>
@@ -2544,6 +2843,8 @@ function renderPrinterScreen(){
     }catch(e){ toast(e.friendly || friendlyError(e), /No printer was chosen|No printer port was chosen/.test(e.friendly || '') ? 'warn' : 'error'); }
     renderPrinterScreen();
   });
+  const usb = document.getElementById('pr-usb'); if(usb) usb.onclick = connect(()=> Printer.chooseUsb());
+  const usbAll = document.getElementById('pr-usb-all'); if(usbAll) usbAll.onclick = connect(()=> Printer.chooseUsb({showAll: true}));
   const ble = document.getElementById('pr-ble'); if(ble) ble.onclick = connect(()=> Printer.choose());
   const all = document.getElementById('pr-ble-all'); if(all) all.onclick = connect(()=> Printer.choose({showAll: true}));
   const ser = document.getElementById('pr-serial'); if(ser) ser.onclick = connect(()=> Printer.chooseSerial());
@@ -2558,13 +2859,26 @@ function renderPrinterScreen(){
     toast('Saved');
   }));
   const who = ()=> posState.currentUser ? posState.currentUser.name : '';
-  document.getElementById('pr-auto').onchange = async (e)=>{ await Printer.saveSettings({auto_print: e.target.checked}); queueAudit('Print receipt after each sale: ' + (e.target.checked ? 'on' : 'off'), 'by ' + who()); toast(e.target.checked ? 'Receipts print after each sale' : 'Receipts print only when you tap Print receipt'); };
+  // A print switch: saved on this counter, written in the activity log.
+  const sw = (id, key, auditName, onText, offText, after)=>{
+    document.getElementById(id).onchange = async (e)=>{
+      const on = e.target.checked;
+      await Printer.saveSettings({[key]: on});
+      if(after) after(on);
+      queueAudit(auditName + ': ' + (on ? 'on' : 'off'), 'by ' + who());
+      toast(on ? onText : offText);
+    };
+  };
+  sw('pr-auto', 'auto_print', 'Print receipt after each sale', 'Receipts print after each sale', 'Receipts print only when you tap Print receipt');
+  sw('pr-ticket', 'auto_print_ticket', 'Print barista ticket after each sale', 'A barista ticket prints after each sale', 'No barista ticket after a sale');
+  sw('pr-qr', 'auto_print_qr', 'Print QR orders when they arrive', 'New QR orders print on this counter', 'QR orders no longer print by themselves here', (on)=>{ if(on) startQrTicketLog(); });
+  sw('pr-shift', 'auto_print_shift', 'Print shift report when the shift is closed', 'The shift report prints when the shift is closed', 'The shift report prints only when you tap Print');
   document.getElementById('pr-drawer').onchange = async (e)=>{
     if(!hasRole('MANAGER')){ e.target.checked = !e.target.checked; toast('Only a manager can change this.', 'warn'); return; }
     await Printer.saveSettings({open_drawer_on_cash: e.target.checked}); queueAudit('Cash drawer on cash sales: ' + (e.target.checked ? 'on' : 'off'), 'by ' + who()); toast(e.target.checked ? 'The drawer opens on cash sales' : 'The drawer no longer opens by itself'); };
   const test = async (btn, drawer)=> busyRun(btn, async ()=>{
     if(drawer && !hasRole('MANAGER')){ toast('Only a manager can open the cash drawer.', 'warn'); return; }
-    if(!printerDirect()){ toast('Connect a Bluetooth printer or printer port first.', 'warn'); return; }
+    if(!printerDirect()){ toast('No printer yet. Tap Connect USB printer (or Connect a Bluetooth printer / printer port) first.', 'warn'); return; }
     const res = await Printer.printTest({openDrawer: !!drawer});
     if(drawer && res.drawer_kick_sent){
       queueAudit('Cash drawer opened (test slip)', `Printer: ${res.printer_name || 'receipt printer'} · by ${posState.currentUser ? posState.currentUser.name : ''}`);
@@ -2576,12 +2890,12 @@ function renderPrinterScreen(){
   document.getElementById('pr-test').onclick = (ev)=> test(ev.currentTarget, false);
   const td = document.getElementById('pr-test-drawer'); if(td) td.onclick = (ev)=> test(ev.currentTarget, true);
   document.getElementById('pr-forget').onclick = async ()=>{
-    const ok = await confirmDialog('Forget the printer on this counter? Receipts will open the print screen until you connect a printer again.', 'Forget printer');
+    const ok = await confirmDialog('Forget the printer on this counter? Nothing prints until you connect a printer again.', 'Forget printer');
     if(!ok) return;
     const name = Printer.status().name;
     await Printer.forget();
     queueAudit('Receipt printer forgotten', name || '');
-    toast('Printer forgotten. Receipts open the print screen.');
+    toast('Printer forgotten. Connect a printer to print again.');
     renderPrinterScreen();
   };
 }
@@ -2594,13 +2908,13 @@ function renderPrinterStatus(){
   box.innerHTML = `<div class="pr-status p-${p.key}"><span class="pr-big-dot" aria-hidden="true"></span>
       <div class="pr-status-main"><b>${escapeHtml(p.text)}</b><span>${escapeHtml(p.long)}</span>
       ${s.paper_width ? `<small>${escapeHtml(s.paper_width + ' mm paper · ' + s.chars + ' letters per line')}${s.last_printed_at ? ' · last printed ' + escapeHtml(fmtTime(s.last_printed_at)) : ''}</small>` : ''}</div>
-      ${remembered ? `<button class="btn btn-primary" id="pr-reconnect">${icon('refresh')} Reconnect</button>` : ''}</div>
+      ${remembered ? `<button class="btn btn-primary" id="pr-reconnect">${icon('refresh')} ${s.usb_needs_tap ? 'Connect USB printer' : 'Reconnect'}</button>` : ''}</div>
     ${s.last_error ? `<div class="notice warn pr-err">${icon('alert', {size: 18})} <span>${escapeHtml(s.last_error)}</span></div>` : ''}`;
   const rc = document.getElementById('pr-reconnect');
   if(rc) rc.onclick = async ()=>{
     rc.disabled = true;
-    const ok = await Printer.reconnect().catch(()=>false);
-    toast(ok ? 'Printer connected' : 'Couldn\'t reach the printer. Check it is on and close by, or tap Connect Bluetooth printer.', ok ? 'success' : 'warn');
+    const ok = await reconnectPrinterFromTap();
+    toast(ok ? 'Printer connected' : 'Couldn\'t reach the printer. Check it is switched on (and plugged in, or close by), then tap Reconnect again.', ok ? 'success' : 'warn');
     renderPrinterStatus();
   };
 }
@@ -2746,13 +3060,13 @@ function renderQrBoard(){
     <div class="seg" role="group" aria-label="Show as"><button class="seg-btn ${view==='plan'?'active':''}" id="qr-view-plan" aria-pressed="${view==='plan'}">${icon('map', {size: 18})} Floor plan</button><button class="seg-btn ${view==='list'?'active':''}" id="qr-view-list" aria-pressed="${view==='list'}">${icon('grid', {size: 18})} List</button></div>
     <span class="shift-badge qr-count">${waiting} waiting · ${making} being made</span>`;
   const tools = `<div class="qr-tools">
-    <label class="inline-check qr-auto"><input type="checkbox" id="qr-auto-ticket" ${localStorage.getItem('cccc.qr.autoTicket')==='1'?'checked':''}> Print ticket on accept</label>
+    ${qrAutoTicketChip()}
     <button class="btn btn-outline btn-sm" id="qr-refresh">${icon('refresh', {size: 18})} Refresh</button>
     <button class="btn btn-outline btn-sm" id="qr-soldout">${icon('x', {size: 18})} Sold-out items</button></div>`;
   const wireTools = ()=>{
   document.getElementById('qr-view-plan').onclick = ()=> setQrView('plan');
   document.getElementById('qr-view-list').onclick = ()=> setQrView('list');
-  document.getElementById('qr-auto-ticket').onchange = (e)=>{ try{ localStorage.setItem('cccc.qr.autoTicket', e.target.checked?'1':'0'); }catch(err){} };
+  document.getElementById('qr-auto-chip').onclick = ()=> navigatePOS('printer');
   document.getElementById('qr-refresh').onclick = ()=>{ pollQrOrders(); refreshFloorPlan(true); toast('Checking for new orders…'); };
   document.getElementById('qr-soldout').onclick = openSoldOutManager;
   };
@@ -2818,7 +3132,8 @@ function qrCard(o){
     if(!paid) btns.push(`<button class="btn btn-sm btn-amber" data-qr-act="PAY" data-id="${id}">Take payment</button>`);
     btns.push(`<button class="btn btn-sm btn-primary" data-qr-act="COMPLETE" data-id="${id}" ${dis||(!paid?'disabled':'')}>Served / picked up</button>`);
   }
-  btns.push(`<button class="btn btn-sm btn-ghost" data-qr-act="TICKET" data-id="${id}">${icon('printer', {size: 18})} Ticket</button>`);
+  const printed = qrTicketPrinted(o.id);
+  btns.push(`<button class="btn btn-sm btn-ghost" data-qr-act="TICKET" data-id="${id}" title="${printed?'The ticket printed on this counter. Tap for another copy.':'Print the order ticket for the bar'}">${icon('printer', {size: 18})} ${printed?'Reprint ticket':'Print ticket'}</button>`);
   const stateTag = o.status==='PENDING' ? '<span class="tag">New</span>' : (o.status==='READY' ? '<span class="tag ok">Ready</span>' : '<span class="tag soft">Being made</span>');
   return `<div class="qr-card ${o.status==='PENDING'?'is-new':''} ${paid?'':'unpaid'}">
     <div class="qr-card-top"><span class="qr-no">${escapeHtml(o.order_number)}</span>${stateTag}
@@ -2891,7 +3206,7 @@ async function onQrOrderAlreadyPaid(op){
 async function qrAction(orderId, action){
   const o = state.qrOrders.find(x=>x.id===orderId);
   if(!o) return;
-  if(action==='TICKET'){ printKitchenTicket(o); return; }
+  if(action==='TICKET'){ printQrTicket(o); return; }
   if(action==='PAY'){
     if(!activeShift()){ toast('Start a shift first (Orders screen).', 'error'); navigatePOS('pos'); return; }
     // Online: make sure another counter hasn't taken payment for this order already.
@@ -2933,20 +3248,43 @@ async function qrAction(orderId, action){
       const verb = {ACCEPT:'accepted', READY:'marked ready', COMPLETE:'completed', REJECT:'rejected'}[action];
       toast(`${o.order_number} ${verb}`);
       queueAudit('QR order '+verb, `${o.order_number} · ${o.table_label||''}${reason?' — '+reason:''}`, orderId);
-      if(action==='ACCEPT' && document.getElementById('qr-auto-ticket')?.checked) printKitchenTicket(r.order);
     }
   }catch(e){ toast(friendlyError(e), 'error'); }
   renderQrBoard();
 }
-function printKitchenTicket(o){
-  openPrintWindow(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(o.order_number)}</title>
-    <style>body{font-family:'Courier New',monospace;width:280px;margin:16px auto;font-size:14px;} h1{font-size:26px;margin:0;} .big{font-size:16px;font-weight:700;} hr{border:none;border-top:1px dashed #888;} .mod{padding-left:14px;font-size:12.5px;} @media print{body{width:72mm;margin:0;}}</style></head><body>
-    <h1>${escapeHtml(o.order_number)}</h1>
-    <div class="big">${escapeHtml(o.table_label||'')} · ${o.order_type==='TAKEAWAY'?'TAKEAWAY':'DINE-IN'}</div>
-    <div>${escapeHtml(o.customer_nickname||'')} · ${fmtTime(o.created_at)} ${o.paid_at?'· PAID':''}</div><hr>
-    ${(o.items||[]).map(it=>`<div class="big">${Number(it.quantity)} × ${escapeHtml(it.name)}</div>${(it.modifiers||[]).map(m=>`<div class="mod">- ${escapeHtml(m.label)}</div>`).join('')}${it.notes?`<div class="mod">“${escapeHtml(it.notes)}”</div>`:''}`).join('')}
-    ${o.customer_note?`<hr><div>Note: ${escapeHtml(o.customer_note)}</div>`:''}
-    </body></html>`, true);
+// "Tickets print on arrival" / "off" on the QR board (the switch is on the Printer screen).
+function qrAutoTicketChip(){
+  const on = typeof Printer !== 'undefined' && Printer.settings().auto_print_qr && printerChosen();
+  const why = typeof Printer === 'undefined' ? '' : !Printer.settings().auto_print_qr ? 'Tickets: tap Print ticket' : !printerChosen() ? 'No printer: tickets don\'t print' : 'Tickets print when orders arrive';
+  return `<button class="btn btn-ghost btn-sm qr-auto ${on?'on':''}" id="qr-auto-chip" title="Change this on the Printer screen">${icon('printer', {size: 18})} ${escapeHtml(why)}</button>`;
+}
+// The order ticket on the print screen (only from a "Use print screen" tap). QR order or counter
+// sale. Same lines as the paper ticket (Printer.ticketBytes): the payment status is its own fixed
+// line, from paid_at / topts.paid ONLY (security L1: a nickname like "Ana PAID" can't look like it),
+// and the customer's name is labelled "Name:".
+function ticketHtml(o, topts){
+  topts = topts || {};
+  const qr = String(topts.source || o.source || (o.order_number ? 'QR' : 'COUNTER')).toUpperCase() === 'QR';
+  const no = o.order_number || o.transaction_number || '';
+  const type = o.order_type==='TAKEAWAY' ? 'TAKEAWAY' : o.order_type==='DINE_IN' ? 'DINE-IN' : '';
+  const where = [o.table_label||'', type].filter(Boolean).join(' - ');
+  const paid = !!(o.paid_at || topts.paid);
+  const status = paid ? 'PAID' : (qr ? 'NOT PAID - PAY AT COUNTER' : '');
+  const nick = o.customer_nickname || o.customer_name || topts.customerName || '';
+  const when = o.created_at || o.transaction_date;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(no)}</title>
+    <style>body{font-family:'Courier New',monospace;width:280px;margin:16px auto;font-size:14px;} h1{font-size:26px;margin:0;text-align:center;} .c{text-align:center;} .big{font-size:16px;font-weight:700;} .status{font-size:20px;font-weight:700;text-align:center;padding:4px 0;border-top:1px dashed #888;border-bottom:1px dashed #888;margin:6px 0;} hr{border:none;border-top:1px dashed #888;} .mod{padding-left:14px;font-size:12.5px;} @media print{body{width:${(typeof Printer!=='undefined' && Printer.settings().paper_width===80)?'72':'48'}mm;margin:0;}}</style></head><body>
+    <h1>${escapeHtml(no || 'ORDER')}</h1>
+    <div class="c big">${qr ? 'QR ORDER' : 'COUNTER ORDER'}</div>
+    ${where ? `<div class="c big">${escapeHtml(where)}</div>` : ''}
+    ${status ? `<div class="status">${status}</div>` : ''}
+    ${nick ? `<div>Name: ${escapeHtml(nick)}</div>` : ''}
+    ${when ? `<div>${escapeHtml(fmtDateTime(when))}</div>` : ''}<hr>
+    ${(o.items||[]).map(it=>`<div class="big">${Number(it.quantity)} x ${escapeHtml(it.name)}</div>${(it.modifiers||[]).map(m=>`<div class="mod">- ${escapeHtml(m.label||m.name||'')}</div>`).join('')}${it.notes?`<div class="mod">"${escapeHtml(it.notes)}"</div>`:''}`).join('')}
+    <hr>${(o.customer_note||o.notes)?`<div class="big">Note: ${escapeHtml(o.customer_note||o.notes)}</div><hr>`:''}
+    <div>${(o.items||[]).reduce((n,it)=>n+(Number(it.quantity)||1),0)} item(s)</div>
+    ${topts.reprint?'<div class="c">(Reprint)</div>':''}
+    </body></html>`;
 }
 function openSoldOutManager(){
   const list = sellableRecipes().sort((a,b)=>a.name.localeCompare(b.name));
@@ -3191,6 +3529,277 @@ function useCustomerForOrder(c){
 /* =====================================================================
    SHIFT & CASH
    ===================================================================== */
+/* =====================================================================
+   WASTE LOG (release 1.4, A15)
+   Menu items (with their options, on the same option sheet) or single stock ingredients,
+   a quantity and a reason. Queued as fo_sync op 'waste' (works offline); the server works out
+   the stock and cost itself. This counter takes the same stock off its own numbers right away
+   (wasteStockDeltas) until the next refresh. Only Complimentary needs a manager's approval,
+   exactly like a discount (OVERRIDE PIN online, or the signed-in manager's own sign-in).
+   The draft is kept on this counter (per staff member) so a reload loses nothing.
+   ===================================================================== */
+const WASTE_DRAFT_KEY = 'cccc.fo.wasteDraft';
+const WASTE_LOG_KEY = 'fo.wasteLog';          // what this counter logged (for the shift summary)
+function wasteDraft(){
+  const me = posState.currentUser;
+  let d = null;
+  try{ d = JSON.parse(localStorage.getItem(WASTE_DRAFT_KEY) || 'null'); }catch(e){ d = null; }
+  if(!d || !me || d.staff_id !== me.id || !Array.isArray(d.items)) d = {staff_id: me ? me.id : null, items: [], reason: '', note: ''};
+  return d;
+}
+function saveWasteDraft(d){ try{ localStorage.setItem(WASTE_DRAFT_KEY, JSON.stringify(d)); }catch(e){} }
+function clearWasteDraft(){ try{ localStorage.removeItem(WASTE_DRAFT_KEY); }catch(e){} }
+
+// Draft lines -> the items buildWasteData / wasteStockLines read. onlyFilled: leave out lines without an amount yet.
+function wasteItemsFromDraft(d, onlyFilled){
+  return d.items.filter(it => !onlyFilled || Number(it.quantity) > 0).map(it => {
+    if(it.type === 'recipe'){
+      const rec = state.recipes.find(r => r.id === it.recipe_id);
+      return {recipe_id: it.recipe_id, quantity: Number(it.quantity), modifiers: rec ? modifiersFromSelections(rec, it.selections || []) : []};
+    }
+    return {ingredient_id: it.ingredient_id, quantity: it.quantity === '' || it.quantity == null ? NaN : Number(it.quantity), unit: it.unit || null};
+  });
+}
+// Cost at today's costs, only when this counter knows the cost of every ingredient involved
+// (counters don't receive purchase prices, so usually it doesn't: the owner sees the cost in
+// Back Office → Waste report). -> {cost, known}
+function wasteCostInfo(items){
+  let lines = [];
+  try{ lines = wasteStockLines(items); }catch(e){ return {cost: 0, known: false}; }
+  if(!lines.length) return {cost: 0, known: true};
+  const known = lines.every(l => (ingredientCosting(l.ingredient_id).current || 0) > 0);
+  return {cost: known ? wasteCostPreview(items) : 0, known};
+}
+function wasteLineText(it){
+  if(it.type === 'recipe'){
+    const opts = (it.labels || []).length ? ` (${it.labels.join(', ')})` : '';
+    return `${Number(it.quantity) || 0} × ${it.name}${opts}`;
+  }
+  return `${it.quantity === '' || it.quantity == null ? '?' : Number(it.quantity)} ${unitLabel(it.unit || '')} ${it.name}`;
+}
+// Plain words for a waste entry that can't be saved (codes from buildWasteData).
+function wasteErrorText(e, d){
+  const code = (e && (e.code || e.message)) || '';
+  const nameOf = (rid) => { const r = state.recipes.find(x => x.id === rid); return r ? r.name : 'an item'; };
+  if(code === 'OPTION_REQUIRED') return `Choose ${(e.missing || []).map(m => m.name).join(' and ')} for ${nameOf(e.recipe_id)}: tap Options on that line.`;
+  if(code === 'BAD_WASTE' && e.problems) return `An option on ${nameOf(e.recipe_id)} is no longer on the menu. Remove that line and add it again.`;
+  if(code === 'BAD_WASTE' && !(d && d.items.length)) return 'Add at least one item first.';
+  if(code === 'BAD_WASTE') return 'A waste entry can have at most 30 lines. Log the rest as a second entry.';
+  if(code === 'UNKNOWN_RECIPE' || code === 'UNKNOWN_INGREDIENT') return 'One of the items is no longer on this counter\'s menu. Remove it and add it again.';
+  if(code === 'BAD_QUANTITY') return 'Check the amounts: each line needs an amount above 0 (at most 100 of a menu item).';
+  return friendlyError(e);
+}
+
+async function openWasteLog(focusIndex){
+  if(!posState.currentUser) return;
+  const d = wasteDraft();
+  const manager = hasRole('MANAGER');
+  const body = `
+    <p class="hint waste-intro">Drinks or food thrown away, given free, or made for calibration. The stock is taken off like a sale.</p>
+    <div class="waste-section-title">What was wasted</div>
+    <div class="waste-lines" id="waste-lines">${d.items.length ? d.items.map((it, i) => `
+      <div class="waste-line" data-i="${i}">
+        <div class="waste-line-main"><b>${escapeHtml(it.name)}</b>
+          ${it.type === 'recipe' ? ((it.labels || []).length ? `<small>${it.labels.map(escapeHtml).join(' · ')}</small>` : '') : '<small>Ingredient</small>'}</div>
+        <div class="waste-line-qty">${it.type === 'recipe'
+          ? `<button class="qty-btn" data-wdec="${i}" aria-label="One less ${escapeHtml(it.name)}">${icon('minus', {size: 18})}</button><span class="qty-val">${Number(it.quantity)}</span><button class="qty-btn" data-winc="${i}" aria-label="One more ${escapeHtml(it.name)}">${icon('plus', {size: 18})}</button>`
+          : `<input type="number" step="any" min="0" inputmode="decimal" class="waste-amount" data-wqty="${i}" value="${escapeHtml(it.quantity == null ? '' : String(it.quantity))}" placeholder="Amount" aria-label="Amount of ${escapeHtml(it.name)}">
+             <select data-wunit="${i}" aria-label="Unit">${unitsForIngredient(ingredientById(it.ingredient_id)).map(u => `<option value="${escapeHtml(u)}" ${u === it.unit ? 'selected' : ''}>${escapeHtml(unitLabel(u))}</option>`).join('')}</select>`}</div>
+        <div class="waste-line-acts">
+          ${it.type === 'recipe' && recipeOptionGroups(state.recipes.find(r => r.id === it.recipe_id)).length ? `<button class="btn btn-ghost btn-sm" data-wopts="${i}">${icon('edit', {size: 18})} Options</button>` : ''}
+          <button class="btn btn-ghost btn-sm icon-only" data-wrm="${i}" aria-label="Remove ${escapeHtml(it.name)}">${icon('trash', {size: 18})}</button>
+        </div>
+      </div>`).join('') : '<div class="waste-empty">Nothing added yet.</div>'}</div>
+    <div class="waste-add">
+      <button class="btn btn-outline btn-big" id="waste-add-menu">${icon('cup', {size: 20})} Add a menu item</button>
+      <button class="btn btn-outline btn-big" id="waste-add-ing">${icon('box', {size: 20})} Add an ingredient</button>
+    </div>
+    <div class="waste-section-title">Reason</div>
+    <div class="waste-reasons" role="radiogroup" aria-label="Reason">${WASTE_REASONS.map(r => `
+      <button class="waste-reason ${d.reason === r.id ? 'selected' : ''}" data-reason="${r.id}" role="radio" aria-checked="${d.reason === r.id}">${escapeHtml(r.label)}${r.needs_approval ? '<small>Manager approval</small>' : ''}${r.needs_note ? '<small>Add a note</small>' : ''}</button>`).join('')}</div>
+    <div id="waste-approval-note"></div>
+    <div class="form-row" style="margin-top:12px;"><label for="waste-note">Note <span class="text-light" id="waste-note-need">${d.reason === 'OTHER' ? '(needed)' : '(optional)'}</span></label>
+      <input id="waste-note" maxlength="${WASTE_NOTE_MAX}" value="${escapeHtml(d.note || '')}" placeholder="e.g. Dropped on the floor"></div>
+    ${manager ? '<div class="waste-cost" id="waste-cost"></div>' : ''}`;
+  openModal({title: 'Log waste', wide: true, body,
+    foot: `${d.items.length ? '<button class="btn btn-ghost" id="waste-clear">Clear</button>' : ''}<button class="btn btn-outline" data-close>Close</button><button class="btn btn-primary" id="waste-save">Log waste</button>`,
+    onMount: (root) => {
+      const save = () => saveWasteDraft(d);
+      const again = (fi) => { save(); openWasteLog(fi); };
+      root.querySelector('[data-close]').onclick = closeModal;
+      function approvalNote(){
+        const box = root.querySelector('#waste-approval-note');
+        if(d.reason !== 'COMPLIMENTARY'){ box.innerHTML = ''; return; }
+        const own = hasRole('MANAGER') && !shortPinUser() && ownLoginToken();
+        box.innerHTML = own
+          ? `<div class="notice">You approve this yourself (you are signed in as a ${escapeHtml(String(ROLE_WORDS[posState.currentUser.role] || '').toLowerCase())}).</div>`
+          : (!isOnline()
+            ? `<div class="notice warn">${icon('wifi-off', {size: 18})} Complimentary needs a manager's PIN, and checking it needs internet. Log it when the counter is back online, or ask a signed-in manager.</div>`
+            : `<div class="notice">A manager enters their PIN to approve when you tap Log waste.</div>`);
+      }
+      function costNote(){
+        const box = root.querySelector('#waste-cost');
+        if(!box) return;
+        const items = wasteItemsFromDraft(d, true).filter(it => !(it.ingredient_id && !(it.quantity > 0)));
+        if(!items.length){ box.innerHTML = ''; return; }
+        const c = wasteCostInfo(items);
+        box.innerHTML = c.known
+          ? `Cost at today's prices: <b>${fmtMoney(c.cost)}</b> <span class="text-light">(managers only)</span>`
+          : `<span class="text-light">The cost isn't available on this counter. The owner sees it in Back Office → Waste report.</span>`;
+      }
+      approvalNote(); costNote();
+      root.querySelectorAll('[data-winc]').forEach(b => b.onclick = () => { const it = d.items[+b.dataset.winc]; it.quantity = Math.min(WASTE_MAX_RECIPE_QTY, Number(it.quantity) + 1); again(); });
+      root.querySelectorAll('[data-wdec]').forEach(b => b.onclick = () => { const it = d.items[+b.dataset.wdec]; if(Number(it.quantity) > 1){ it.quantity = Number(it.quantity) - 1; again(); } });
+      root.querySelectorAll('[data-wrm]').forEach(b => b.onclick = () => { d.items.splice(+b.dataset.wrm, 1); again(); });
+      root.querySelectorAll('[data-wqty]').forEach(inp => inp.oninput = () => { d.items[+inp.dataset.wqty].quantity = inp.value; save(); costNote(); });
+      root.querySelectorAll('[data-wunit]').forEach(sel => sel.onchange = () => { d.items[+sel.dataset.wunit].unit = sel.value; save(); costNote(); });
+      root.querySelectorAll('[data-wopts]').forEach(b => b.onclick = () => {
+        const i = +b.dataset.wopts, it = d.items[i];
+        const rec = state.recipes.find(r => r.id === it.recipe_id);
+        if(!rec) return;
+        save();
+        openModifierPicker(rec, {quantity: Number(it.quantity) || 1, selections: it.selections || []}, wasteSheetOpts(rec, (r) => {
+          const dd = wasteDraft();
+          if(dd.items[i]) Object.assign(dd.items[i], {quantity: r.quantity, selections: r.selections, labels: r.modifiers.map(m => m.label)});
+          saveWasteDraft(dd); openWasteLog();
+        }, 'Update'));
+      });
+      root.querySelector('#waste-add-menu').onclick = () => { save(); openWasteMenuPicker(); };
+      root.querySelector('#waste-add-ing').onclick = () => { save(); openWasteIngredientPicker(); };
+      root.querySelectorAll('[data-reason]').forEach(b => b.onclick = () => {
+        d.reason = b.dataset.reason; save();
+        root.querySelectorAll('[data-reason]').forEach(x => { const on = x === b; x.classList.toggle('selected', on); x.setAttribute('aria-checked', String(on)); });
+        root.querySelector('#waste-note-need').textContent = d.reason === 'OTHER' ? '(needed)' : '(optional)';
+        approvalNote();
+      });
+      root.querySelector('#waste-note').oninput = (e) => { d.note = e.target.value; save(); };
+      const clr = root.querySelector('#waste-clear');
+      if(clr) clr.onclick = async () => {
+        const ok = await confirmDialog('Clear this waste entry? Nothing has been logged yet.', 'Clear');
+        if(ok){ clearWasteDraft(); toast('Waste entry cleared'); } else openWasteLog();
+      };
+      root.querySelector('#waste-save').onclick = (ev) => submitWaste(d, root, ev.currentTarget);
+      if(focusIndex != null){ const f = root.querySelector(`[data-wqty="${focusIndex}"]`); if(f) f.focus(); }
+    }});
+}
+// The option sheet in "waste" mode: no note, at most 100, no stock check (it already happened).
+function wasteSheetOpts(recipe, onDone, label){
+  return {title: 'Waste: ' + recipe.name, addLabel: label || 'Add to waste', maxQty: WASTE_MAX_RECIPE_QTY, noNotes: true, noStockCheck: true,
+    onDone, onCancel: () => openWasteLog()};
+}
+function addWasteRecipe(recipe, r){
+  const d = wasteDraft();
+  if(d.items.length >= WASTE_MAX_ITEMS){ toast('A waste entry can have at most 30 lines. Log this one first.', 'warn'); openWasteLog(); return; }
+  d.items.push({type: 'recipe', recipe_id: recipe.id, name: recipe.name, quantity: r.quantity, selections: r.selections, labels: r.modifiers.map(m => m.label)});
+  saveWasteDraft(d);
+  openWasteLog();
+}
+function openWasteMenuPicker(){
+  const list = state.recipes.filter(r => r.active !== false && !isProductionRecipe(r))
+    .sort((a, b) => subcategoryRank(posCategoryOf(a), state.recipes) - subcategoryRank(posCategoryOf(b), state.recipes) || String(a.name).localeCompare(String(b.name)));
+  openModal({title: 'Waste: pick a menu item', wide: true, body: `
+    <label class="pos-search waste-search">${icon('search')}<input type="search" id="waste-msearch" placeholder="Search the menu" aria-label="Search the menu" autocomplete="off"></label>
+    <div class="waste-pick-grid" id="waste-mlist">${list.map(r => `<button class="waste-pick" data-wrec="${escapeHtml(r.id)}" data-name="${escapeHtml(String(r.name).toLowerCase())}"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(posCategoryOf(r))}</small></button>`).join('') || '<p>No menu items.</p>'}</div>`,
+    foot: `<button class="btn btn-outline" data-back>Back</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-back]').onclick = () => openWasteLog();
+      root.querySelector('#waste-msearch').oninput = (e) => {
+        const t = e.target.value.trim().toLowerCase();
+        root.querySelectorAll('[data-wrec]').forEach(b => { b.hidden = !!t && !b.dataset.name.includes(t); });
+      };
+      root.querySelectorAll('[data-wrec]').forEach(b => b.onclick = () => {
+        const rec = state.recipes.find(r => r.id === b.dataset.wrec);
+        if(!rec) return;
+        if(recipeOptionGroups(rec).length) openModifierPicker(rec, null, wasteSheetOpts(rec, (r) => addWasteRecipe(rec, r)));
+        else addWasteRecipe(rec, {quantity: 1, selections: [], modifiers: []});
+      });
+    }});
+}
+function openWasteIngredientPicker(){
+  // Stock items only: no merged ones, no operating supplies (ingredientPickerList's default).
+  const list = ingredientPickerList().slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  openModal({title: 'Waste: pick an ingredient', wide: true, body: `
+    <label class="pos-search waste-search">${icon('search')}<input type="search" id="waste-isearch" placeholder="Search ingredients" aria-label="Search ingredients" autocomplete="off"></label>
+    <div class="waste-pick-grid" id="waste-ilist">${list.map(i => `<button class="waste-pick" data-wing="${escapeHtml(i.id)}" data-name="${escapeHtml(String(i.name).toLowerCase())}"><b>${escapeHtml(i.name)}</b><small>Counted in ${escapeHtml(unitLabel(i.base_unit))}${isProducedItem(i) ? ' · house-made' : ''}</small></button>`).join('') || '<p>No ingredients.</p>'}</div>`,
+    foot: `<button class="btn btn-outline" data-back>Back</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-back]').onclick = () => openWasteLog();
+      root.querySelector('#waste-isearch').oninput = (e) => {
+        const t = e.target.value.trim().toLowerCase();
+        root.querySelectorAll('[data-wing]').forEach(b => { b.hidden = !!t && !b.dataset.name.includes(t); });
+      };
+      root.querySelectorAll('[data-wing]').forEach(b => b.onclick = () => {
+        const ing = ingredientById(b.dataset.wing);
+        if(!ing) return;
+        const d = wasteDraft();
+        if(d.items.length >= WASTE_MAX_ITEMS){ toast('A waste entry can have at most 30 lines. Log this one first.', 'warn'); openWasteLog(); return; }
+        d.items.push({type: 'ingredient', ingredient_id: ing.id, name: ing.name, quantity: '', unit: ing.base_unit});
+        saveWasteDraft(d);
+        openWasteLog(d.items.length - 1);
+      });
+    }});
+}
+
+async function submitWaste(d, root, btn){
+  const me = posState.currentUser;
+  if(!me || btn.disabled) return;
+  d.note = (root.querySelector('#waste-note').value || '').trim();
+  saveWasteDraft(d);
+  if(!d.items.length){ toast('Add at least one item first.', 'error'); return; }
+  const empty = d.items.findIndex(it => it.type === 'ingredient' && !(Number(it.quantity) > 0));
+  if(empty >= 0){ toast(`Enter how much ${d.items[empty].name} was wasted.`, 'error'); const f = root.querySelector(`[data-wqty="${empty}"]`); if(f) f.focus(); return; }
+  if(!d.reason){ toast('Choose a reason.', 'error'); return; }
+  const shift = activeShift();
+  const input = {reason: d.reason, note: d.note, staff_id: me.id, shift_id: shift ? shift.id : null, items: wasteItemsFromDraft(d)};
+  let data, approverName = null;
+  try{
+    data = buildWasteData(input);
+  }catch(e){
+    if((e.code || e.message) !== 'APPROVAL_REQUIRED'){ toast(wasteErrorText(e, d), 'error'); return; }
+    // Complimentary: a manager approves, exactly like a discount (checked by the server on upload).
+    closeModal();
+    const approver = await requireOverride('MANAGER');
+    if(!approver){ openWasteLog(); return; }
+    try{ data = buildWasteData(Object.assign({}, input, {approved_by: approver.id, approval_token: approver.token})); }
+    catch(e2){ toast(wasteErrorText(e2, d), 'error'); openWasteLog(); return; }
+    approverName = approver.name;
+  }
+  btn.disabled = true;
+  const cost = wasteCostInfo(data.items);
+  await Sync.queue('waste', data);
+  await rememberWaste({id: data.id, shift_id: data.shift_id, reason: data.reason, logged_at: data.logged_at,
+    staff_name: me.name, lines: d.items.length, text: d.items.map(wasteLineText).join('; '), cost: cost.known ? cost.cost : null});
+  queueAudit('Waste logged', `${wasteReasonLabel(data.reason)}: ${d.items.map(wasteLineText).join('; ')}${data.note ? ' (note: ' + data.note + ')' : ''}${approverName ? ' (approved by ' + approverName + ')' : ''}`, data.id);
+  clearWasteDraft();
+  closeModal();
+  toast(`Waste logged: ${d.items.length} line${d.items.length === 1 ? '' : 's'} (${wasteReasonLabel(data.reason)})${isOnline() ? '' : '. It uploads when the internet is back.'}`, 'success');
+  if(posState.route === 'pos') renderProductGrid();
+  if(posState.route === 'shift') renderShiftScreen({local: true});
+}
+async function loadWasteLog(){ try{ const l = await LocalDB.get(WASTE_LOG_KEY); return Array.isArray(l) ? l : []; }catch(e){ return []; } }
+async function rememberWaste(entry){
+  const list = (await loadWasteLog()).filter(x => x.id !== entry.id);
+  list.push(entry);
+  try{ await LocalDB.set(WASTE_LOG_KEY, list.slice(-300)); }catch(e){}
+}
+// Shift & cash: what this counter logged as waste during the open shift.
+async function shiftWasteHtml(shift){
+  const list = (await loadWasteLog()).filter(x => x.shift_id === shift.id);
+  const manager = hasRole('MANAGER');
+  const lines = list.reduce((s, x) => s + (Number(x.lines) || 0), 0);
+  const allCosted = list.length && list.every(x => x.cost != null);
+  const cost = list.reduce((s, x) => s + (Number(x.cost) || 0), 0);
+  const byReason = WASTE_REASONS.map(r => ({label: r.label, n: list.filter(x => x.reason === r.id).length})).filter(r => r.n);
+  return `<div class="section-title">Waste this shift</div>
+    <div class="card drawer-card waste-summary">
+      ${list.length ? `<div class="drow"><span>Entries logged on this counter</span><b>${list.length} (${lines} line${lines === 1 ? '' : 's'})</b></div>
+        ${byReason.map(r => `<div class="drow"><span>${escapeHtml(r.label)}</span><b>${r.n}</b></div>`).join('')}
+        ${manager ? `<div class="drow"><span>Cost</span><b>${allCosted ? fmtMoney(cost) : '<span class="text-light" style="font-weight:500;">See Back Office → Waste report</span>'}</b></div>` : ''}
+        <details class="waste-list"><summary>Show entries</summary>${list.slice().reverse().map(x => `<div class="waste-entry"><span class="text-light">${fmtTime(x.logged_at)}</span> ${escapeHtml(wasteReasonLabel(x.reason))} · ${escapeHtml(x.text || '')} <span class="text-light">· ${escapeHtml(x.staff_name || '')}</span></div>`).join('')}</details>`
+        : '<div class="text-light">No waste logged on this counter this shift.</div>'}
+    </div>`;
+}
+
 function renderStartShiftGate(){
   const content = document.getElementById('content');
   content.className = '';
@@ -3240,11 +3849,15 @@ async function renderShiftScreen(opts){
   if(!shift){ renderStartShiftGate(); return; }
   const m = shiftMetrics(shift);
   const note = shiftFreshNote(posState.shiftCheckOk);
+  const wasteHtml = await shiftWasteHtml(shift);
+  if(posState.route !== 'shift') return;
   document.getElementById('topbar-actions').innerHTML = `
     <button class="btn btn-outline" id="cash-mgmt-btn">${icon('cash')} Pay in / pay out</button>
+    <button class="btn btn-outline" id="shift-waste-btn">${icon('trash')} Log waste</button>
     <button class="btn btn-outline" id="xreport-btn">${icon('printer')} Print X-report</button>
     <button class="btn btn-danger" id="close-shift-btn">Close shift</button>`;
   document.getElementById('cash-mgmt-btn').onclick = openCashManagementModal;
+  document.getElementById('shift-waste-btn').onclick = ()=> openWasteLog();
   document.getElementById('xreport-btn').onclick = printXReport;
   document.getElementById('close-shift-btn').onclick = openCloseShiftFlow;
   content.innerHTML = `
@@ -3265,7 +3878,8 @@ async function renderShiftScreen(opts){
       <div class="drow total"><span><b>Expected Cash in Drawer</b></span><b>${fmtMoney(m.expectedCash)}</b></div>
     </div>
     ${m.cashMovements.length?`<div class="section-title">Pay Ins / Pay Outs</div><div class="table-wrap"><table><thead><tr><th>Time</th><th>Type</th><th>Amount</th><th>Reason</th><th>By</th></tr></thead><tbody>
-      ${m.cashMovements.map(c=>`<tr><td>${fmtTime(c.at)}</td><td>${c.type==='PAY_IN'?'Pay In':'Pay Out'}</td><td>${fmtMoney(c.amount)}</td><td>${escapeHtml(c.reason)}</td><td>${escapeHtml(c.performed_by_name||'')}</td></tr>`).join('')}</tbody></table></div>`:''}`;
+      ${m.cashMovements.map(c=>`<tr><td>${fmtTime(c.at)}</td><td>${c.type==='PAY_IN'?'Pay In':'Pay Out'}</td><td>${fmtMoney(c.amount)}</td><td>${escapeHtml(c.reason)}</td><td>${escapeHtml(c.performed_by_name||'')}</td></tr>`).join('')}</tbody></table></div>`:''}
+    ${wasteHtml}`;
 }
 
 function openCashManagementModal(){
@@ -3397,7 +4011,7 @@ function showCloseShiftDialog(shift, closer, closeApprovalToken, checked, preset
         queueAudit('Shift closed', `${shift.shift_number} — variance ${fmtMoney(variance)}`, shift.id);
         closeModal();
         toast('Shift closed');
-        showShiftReport(shift.id);
+        showShiftReport(shift.id, {justClosed: true});
       };
     }});
 }
@@ -3412,10 +4026,13 @@ function shiftSalesLines(shift, m){
   rows.push({label: 'Transactions', hint: '', text: String(count), total: false});
   return rows;
 }
-function showShiftReport(shiftId){
+// The shift report box. justClosed: the shift was closed a moment ago -> the Z report prints by
+// itself (Printer screen switch). Printing problems show inside this box, never replacing it.
+function showShiftReport(shiftId, opts){
   const shift = state.shifts.find(s=>s.id===shiftId);
   const m = shiftMetrics(shift);
   openModal({title:`Shift Report — ${escapeHtml(shift.shift_number||'')}`, wide:true, body:`
+    <div id="sr-print-status" class="sr-print-status" aria-live="polite"></div>
     <div style="font-size:13.5px;line-height:1.8;margin-bottom:14px;">
       <div>Cashier: <b>${escapeHtml(shift.cashier_name)}</b>${shift.closed_by_name && shift.closed_by_name!==shift.cashier_name?` · closed by <b>${escapeHtml(shift.closed_by_name)}</b>`:''}</div>
       <div>Opened: <b>${fmtDateTime(shift.opened_at)}</b> — Closed: <b>${fmtDateTime(shift.closed_at)}</b> (${shiftDuration(shift)})</div>
@@ -3433,8 +4050,17 @@ function showShiftReport(shiftId){
     ${shift.notes?`<p class="hint" style="margin-top:10px;">${escapeHtml(shift.notes)}</p>`:''}`,
   foot:`<button class="btn btn-outline" id="sr-print">${icon('printer')} Print</button><button class="btn btn-primary" data-done>Done</button>`,
   onMount:(root)=>{
+    const box = root.querySelector('#sr-print-status');
     root.querySelector('[data-done]').onclick = ()=>{ closeModal(); navigatePOS('pos'); };
-    root.querySelector('#sr-print').onclick = ()=> printShiftReport(shift, m, false);
+    root.querySelector('#sr-print').onclick = async (ev)=>{
+      const b = ev.currentTarget; b.disabled = true;
+      await printInto(box, [shiftReportJob(shift.id, false)], true);
+      if(document.body.contains(b)) b.disabled = false;
+    };
+    if(opts && opts.justClosed && typeof Printer !== 'undefined' && Printer.settings().auto_print_shift){
+      if(canPrintDirectHere()) printInto(box, [shiftReportJob(shift.id, false)]);
+      else autoPrintNoteOnce();
+    }
   }});
 }
 function shiftReportHtml(shift, m, isX){
@@ -3457,29 +4083,42 @@ function shiftReportHtml(shift, m, isX){
     ${shift.notes?`<hr><div>${escapeHtml(shift.notes)}</div>`:''}
     </body></html>`;
 }
-function printShiftReport(shift, m, isX){
-  openPrintWindow(shiftReportHtml(shift, m, isX), true);
-}
-// X-report: print the latest figures. The window is opened right away (a pop-up is only allowed
-// straight after a tap) and filled in once the server has been asked, unless the figures were
-// checked a moment ago (they are when this screen was just opened).
-async function printXReport(){
+// X-report: the latest figures (the server is asked first unless they were checked a moment
+// ago), straight to the receipt printer. Problems: the usual message ("Use print screen" there).
+async function printXReport(ev){
   const shift = activeShift();
   if(!shift) return;
-  if(!isOnline() || Date.now() - posState.shiftSyncedAt < 20000){
-    printShiftReport(shift, shiftMetrics(shift), true);
+  const btn = ev && ev.currentTarget;
+  if(btn && btn.disabled) return;
+  if(!printerDirect()){
+    // No usable receipt printer: the tap opens the print screen. The window opens right away
+    // (allowed only straight after a tap) and is filled once the latest figures are in.
+    if(!isOnline() || Date.now() - posState.shiftSyncedAt < 20000){ shiftReportJob(shift.id, true).screen(); return; }
+    const win = window.open('', '_blank');
+    if(!win){ toast('Please allow pop-ups to view/print', 'error'); return; }
+    try{ win.document.write('<p style="font-family:sans-serif;margin:24px;">Getting the latest figures…</p>'); }catch(e){}
+    posState.shiftCheckOk = await refreshOpenShift({timeout: SHIFT_CHECK_MS});
+    const cur = activeShift() || shift;
+    try{
+      win.document.open(); win.document.write(shiftReportHtml(cur, shiftMetrics(cur), true)); win.document.close();
+      win.focus(); setTimeout(()=>{ try{ win.print(); }catch(e){} }, 350);
+    }catch(e){ console.warn('could not fill the X-report', e); }
+    if(posState.route === 'shift' && !document.getElementById('active-modal-overlay')) renderShiftScreen({local: true});
     return;
   }
-  const win = window.open('', '_blank');
-  if(!win){ toast('Please allow pop-ups to view/print', 'error'); return; }
-  try{ win.document.write('<p style="font-family:sans-serif;margin:24px;">Getting the latest figures…</p>'); }catch(e){}
-  posState.shiftCheckOk = await refreshOpenShift({timeout: SHIFT_CHECK_MS});
-  const current = activeShift() || shift;
+  if(btn) btn.disabled = true;
+  let refreshed = false;
   try{
-    win.document.open(); win.document.write(shiftReportHtml(current, shiftMetrics(current), true)); win.document.close();
-    win.focus(); setTimeout(()=>{ try{ win.print(); }catch(e){} }, 350);
-  }catch(e){ console.warn('could not fill the X-report', e); }
-  if(posState.route === 'shift') renderShiftScreen({local: true});
+    if(isOnline() && Date.now() - posState.shiftSyncedAt >= 20000){
+      posState.shiftCheckOk = await refreshOpenShift({timeout: SHIFT_CHECK_MS});
+      refreshed = true;
+    }
+    const current = activeShift() || shift;
+    await runPrintJobs([shiftReportJob(current.id, true)], {okToast: 'X-report printed', saved: 'Nothing changed: the shift is still open.'});
+  } finally {
+    if(btn && document.body.contains(btn)) btn.disabled = false;
+  }
+  if(refreshed && posState.route === 'shift' && !document.getElementById('active-modal-overlay')) renderShiftScreen({local: true});
 }
 
 /* =====================================================================

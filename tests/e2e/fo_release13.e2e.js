@@ -158,7 +158,9 @@ function fakeBluetooth(){
       await must(async () => /Americano/.test(await printed()), 'gcash receipt');
       ok(!/\[DRAWER\]/.test(await printed()), 'P1: GCash sale -> no drawer kick');
       // auto-print off + direct printer: drawer only on cash, receipt by the button
-      await page.evaluate(() => Printer.saveSettings({auto_print: false}));
+      // 1.4 (lead-approved 2026-11-08): the barista ticket switch is on by default now; switch it off too, so this
+      // check is still only about the receipt's auto-print setting
+      await page.evaluate(() => Printer.saveSettings({auto_print: false, auto_print_ticket: false}));
       await resetBle(); const pop1 = popups;
       await tap('Americano'); await sellCash();
       await must(async () => /\[DRAWER\]/.test(await printed()), 'drawer kick only');
