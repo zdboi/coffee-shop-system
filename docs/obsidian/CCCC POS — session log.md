@@ -2,7 +2,7 @@
 tags: [cccc, pos, session-log]
 project: Cavite City Coffee Club POS
 updated: 2026-11-02
-checkpoint: 14
+checkpoint: 16
 repo: zdboi/coffee-shop-system (branch wip/cccc-online-qr)
 ---
 
@@ -14,7 +14,28 @@ It has three apps on one Supabase database:
 - **Back Office:** the owner's email login only.
 - **QR order page:** customers order from their phones and pay at the counter.
 
-## Where things stand (Nov 9): release 1.4 ready for me
+## Where things stand (Nov 9, night): release 1.4.1 ready for me
+- **1.4 is live** (Nov 9) and is the **last working version** (checkpoint 15).
+- **1.4.1 = shareable menu link** (checkpoint 16, PR #6, script 011). Steps are in `docs/RELEASE_1.4.1.md`: backup → run 011 → merge #6 → reload → Settings → Menu link.
+  - **Link:** `zdboi.github.io/coffee-shop-system/menu/`. View-only, so no ordering.
+  - **Live menu:** photos, prices, option prices, "Sold out today", my sub-category order.
+  - **Highlighted item** ("Today's pick") and a **Visit us** box (address, hours, map, Facebook, Instagram).
+  - **Preview card** in Messenger and Facebook: shop name + "Ano ang kape mo today?".
+  - 4,183 checks pass; security reviewed. The QR menu loads faster too.
+- **Also today:**
+  - HD logos and banners (JPG + SVG) delivered.
+  - Dropped the "Bienvenido na Kapihan!" tagline. It's still on the printed QR table cards in the app; I decide later.
+  - Sticker sheet mockups (10 stickers, A4) saved on the design canvas.
+- **Wave 3 (1.5), waiting for my go:**
+  - QR accounts and security;
+  - archive customers without a phone;
+  - Barista drink button;
+  - R&D log;
+  - blind end-of-shift stock count;
+  - highlighted item on the QR order page.
+- **Wave 4 (1.6):** Accounting overview, investor equity, editable payment methods + per-method charge.
+
+## Earlier (Nov 9): release 1.4 ready for me
 - **1.3 is live** (Nov 2, 23:00) and is the **last working version** (checkpoint 13).
 - **1.4 is built, tested and security-reviewed** (4,019 checks, 0 failing; checkpoint 14). Pull request #5.
 - **To publish it,** follow `docs/RELEASE_1.4.md`:
