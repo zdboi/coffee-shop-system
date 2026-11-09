@@ -116,3 +116,16 @@ Owner: **don't start 1.3 until I say so.**
   - Wave 3 (1.5) = QR accounts and security.
   - Wave 4 (1.6) "Money & owners" = B1 Accounting overview, B2 investor equity, B4 editable payment methods, B5 payment-method charges.
   - Later, planned together: B3 referrals and RPG loyalty.
+
+## New items for Wave 3 (owner, 2026-11-09 10:55); decided
+- **B6. Customers with or without a phone number (owner):** "segregate customers who input their numbers and those who don't; for those who don't, automatically archive their data."
+  - **Decision: hide right away.** Customers with no phone never show in the main lists, only under "Archived"; their data is kept.
+  - Overlaps the Wave 3 guest/registered work (Q1/A6), which changes the same customer data, so it is built there.
+- **B7. "Barista drink" button (owner):** "houses the calibration pull, milk, sauces and syrups used; all counts as wastage; done every day for coffee quality."
+  - **Decision: a one-tap daily preset.** The owner sets the usual kit once in the Back Office. Staff tap the button, adjust amounts and save.
+  - It saves as a waste entry with reason CALIBRATION.
+  - Overlaps the 1.4 waste log (reason "Calibration / barista drink"), which it reuses.
+- **B8. R&D (owner):** "input ingredients/items to an R&D section; all used for research and development of new products; counts as wastage."
+  - **Decision: a Back Office R&D log.** Ingredients used are logged with a project name. They count as waste (new reason RND) and show as R&D cost per project in reports.
+  - Overlaps the waste log and Waste report (1.4), which it reuses.
+- **Placement:** all three join **Wave 3 (1.5)**, with QR accounts & security.
