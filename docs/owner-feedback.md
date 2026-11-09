@@ -148,3 +148,16 @@ Owner: **don't start 1.3 until I say so.**
   - the web-size wide/stacked logo images in `cccc/shared/brand/`, which aren't shown on any screen;
   - the QR stamp card header says "Bienvenido!", a different phrase.
 - Waiting for the owner on whether to change these now or in Wave 3.
+
+## B10. Public menu link for social media (owner, 2026-11-09 19:07)
+- Owner: "Design a simple visual menu that changes with the current available menu, integrated in the app, so when somebody on social media asks for a menu I can send a link."
+- **Overlap:** the QR order page already shows the live menu, but only through a table QR token, and that link allows ordering. A view-only public link is new.
+- **Decisions (19:08):**
+  - **Link:** a view-only page with no ordering, no sign-in and no customer data.
+  - **It shows:** prices (including option prices), photos, and location & hours (typed once in Settings). Open/closed status is not wanted.
+  - **Sold-out items** are shown greyed out as "Sold out today".
+  - **First step:** a design mock on the design canvas (phone view + link preview), then build.
+- **Build needs** (when approved):
+  - a new anonymous read-only RPC, e.g. `public_menu(p_shop)`, returning display data only (no stock amounts, no ids that matter);
+  - a new page under `cccc/menu/`;
+  - Settings fields for address, map link, hours and socials.
