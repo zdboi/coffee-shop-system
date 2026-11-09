@@ -315,3 +315,165 @@ async function menuCopyLink(input){
   }catch(e){ /* fall through */ }
   window.prompt('Copy this link:', text);
 }
+
+/* ---- QR code for the menu link (release 1.4.2) ----
+   One QR code for the SAVED link (menuLinkFor(settings.public_code)), only when the link is on.
+   Made with the same vendored qrcode.js as the table cards, error level Q (still reads when a
+   printed card is a little scuffed), with a white quiet zone of 4 squares all round.
+   - Download PNG: square, at least 1200 px, whole pixels per square (crisp edges).
+   - Download SVG: the same picture as a vector file (any size).
+   - Print card: an A6 or A5 card in the 1.3 table-card look (terracotta band with the tile logo
+     and wordmark, butter body), "Scan for our menu" and the short link under the code. */
+const MENU_QR_LEVEL = 'Q';
+const MENU_QR_QUIET = 4;          // squares of white around the code (the QR standard asks for 4)
+const MENU_QR_MIN_PX = 1200;
+const MENU_QR_SIZES = {
+  A6: {label: 'A6 card (105 × 148 mm)', w: 105},
+  A5: {label: 'A5 card (148 × 210 mm)', w: 148},
+};
+let MENU_QR_PREFS = {size: 'A6', crop: true};
+
+// The QR squares for a link: {n, dark(r, c)}.
+function menuQrMatrix(link){
+  const q = qrcode(0, MENU_QR_LEVEL);
+  q.addData(String(link));
+  q.make();
+  const n = q.getModuleCount();
+  return {n, dark: (r, c) => q.isDark(r, c)};
+}
+// The QR as an SVG (white background + quiet zone; one path for the dark squares).
+function menuQrSvg(link, opts){
+  opts = opts || {};
+  const mx = menuQrMatrix(link), Q = MENU_QR_QUIET, size = mx.n + Q * 2;
+  let d = '';
+  for(let r = 0; r < mx.n; r++) for(let c = 0; c < mx.n; c++) if(mx.dark(r, c)) d += `M${c + Q} ${r + Q}h1v1h-1z`;
+  const label = 'QR code for ' + link;
+  const dims = opts.px ? ` width="${opts.px}" height="${opts.px}"` : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}"${dims} shape-rendering="crispEdges" role="img" aria-label="${esc(label)}">`
+    + `<title>${esc(label)}</title><rect width="${size}" height="${size}" fill="#ffffff"/><path fill="#000000" d="${d}"/></svg>`;
+}
+// The QR drawn on a canvas: whole pixels per square, at least MENU_QR_MIN_PX wide.
+function menuQrCanvas(link){
+  const mx = menuQrMatrix(link), Q = MENU_QR_QUIET, cells = mx.n + Q * 2;
+  const scale = Math.ceil(MENU_QR_MIN_PX / cells), px = cells * scale;
+  const cv = document.createElement('canvas');
+  cv.width = px; cv.height = px;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, px, px);
+  g.fillStyle = '#000000';
+  for(let r = 0; r < mx.n; r++) for(let c = 0; c < mx.n; c++) if(mx.dark(r, c)) g.fillRect((c + Q) * scale, (r + Q) * scale, scale, scale);
+  return cv;
+}
+// The link as people type it (no "https://").
+function menuShortLinkText(link){ return String(link || '').replace(/^https?:\/\//i, ''); }
+function menuQrFileBase(code){
+  return `${fileNameSlug()}-menu-qr${code && code !== MENU_SHORT_LINK_CODE ? '-' + String(code).replace(/[^a-z0-9-]/g, '') : ''}`;
+}
+
+function menuQrBlockHtml(m){
+  const link = menuLinkFor(m.public_code);
+  const ready = !!(link && m.menu_public);
+  return `<div class="ml-qr" id="ml-qr">
+      <div class="ml-qr-pic${ready ? '' : ' ml-qr-off'}" id="ml-qr-pic">${ready ? menuQrSvg(link) : '<span aria-hidden="true">QR</span>'}</div>
+      <div class="ml-qr-side">
+        <div class="ml-qr-title">QR code</div>
+        ${ready
+          ? `<p class="hint" style="margin:2px 0 10px;">Customers scan it with their phone camera to open your menu. It opens <span class="mono" id="ml-qr-link">${esc(menuShortLinkText(link))}</span>. If you change the shop code, this code changes too: print it again.</p>`
+          : `<p class="hint ml-qr-note" id="ml-qr-note" style="margin:2px 0 10px;">Save and switch on the menu link first. The QR code is made from your saved link.</p>`}
+        <div class="ml-qr-actions">
+          <button class="btn btn-outline btn-sm" type="button" id="ml-qr-png" ${ready ? '' : 'disabled'}>Download PNG</button>
+          <button class="btn btn-outline btn-sm" type="button" id="ml-qr-svg" ${ready ? '' : 'disabled'}>Download SVG</button>
+        </div>
+        <div class="ml-qr-actions" style="margin-top:8px;">
+          <select id="ml-qr-size" ${ready ? '' : 'disabled'} aria-label="Card size">
+            ${Object.keys(MENU_QR_SIZES).map(k => `<option value="${esc(k)}" ${MENU_QR_PREFS.size === k ? 'selected' : ''}>${esc(MENU_QR_SIZES[k].label)}</option>`).join('')}
+          </select>
+          <button class="btn btn-primary btn-sm" type="button" id="ml-qr-print" ${ready ? '' : 'disabled'}>Print card</button>
+        </div>
+      </div>
+    </div>`;
+}
+function wireMenuQr(root, m){
+  const $ = (id) => root.querySelector('#' + id);
+  const link = menuLinkFor(m.public_code);
+  if(!(link && m.menu_public)) return;
+  const base = menuQrFileBase(String(m.public_code || '').trim().toLowerCase());
+  $('ml-qr-png').onclick = () => {
+    try{
+      const cv = menuQrCanvas(link), name = base + '.png';
+      if(cv.toBlob) cv.toBlob(b => { if(b) downloadFile(name, b, 'image/png'); else toast('Could not make the picture. Try again.', 'error'); }, 'image/png');
+      else downloadFile(name, cv.toDataURL('image/png'), 'image/png');
+    }catch(e){ console.error('menu QR png failed', e); toast('Could not make the picture. Try again.', 'error'); }
+  };
+  $('ml-qr-svg').onclick = () => {
+    downloadFile(base + '.svg', '<?xml version="1.0" encoding="UTF-8"?>\n' + menuQrSvg(link, {px: 1200}), 'image/svg+xml');
+  };
+  $('ml-qr-size').onchange = () => { MENU_QR_PREFS.size = MENU_QR_SIZES[$('ml-qr-size').value] ? $('ml-qr-size').value : 'A6'; };
+  $('ml-qr-print').onclick = () => {
+    MENU_QR_PREFS.size = MENU_QR_SIZES[$('ml-qr-size').value] ? $('ml-qr-size').value : 'A6';
+    printMenuQrCard(link, MENU_QR_PREFS);
+  };
+}
+// One card centred on an A4 page (portrait), with corner marks to cut along — the same look as
+// the 1.3 table cards (printQrSheet in bo-admin.js), which stay as they are.
+function menuQrCardHtml(link, s){
+  const custom = brandTheme(s) === 'CUSTOM';
+  return `<div class="card">
+    <div class="band">
+      ${brandLogoHtml('mark-large', {className: 'mark', alt: '', settings: s})}
+      ${brandWordmarkHtml(custom ? 'cream' : 'terracotta', {className: 'wm', settings: s})}
+    </div>
+    <div class="body">
+      <div class="scan">Scan for our menu</div>
+      <div class="qr">${menuQrSvg(link)}</div>
+      <div class="link">${esc(menuShortLinkText(link))}</div>
+    </div>
+    <div class="foot"></div>
+    <i class="cm tl"></i><i class="cm tr"></i><i class="cm bl"></i><i class="cm br"></i>
+  </div>`;
+}
+function printMenuQrCard(link, prefs){
+  prefs = prefs || MENU_QR_PREFS;
+  const L = MENU_QR_SIZES[prefs.size] || MENU_QR_SIZES.A6;
+  const s = state.settings;
+  const shop = businessName() || appDisplayName();
+  const main = brandTheme(s) === 'CUSTOM' ? qrSafeColor(s.primary_color, '#B5432B') : '#B5432B';
+  const tokens = new URL('tokens.css', BRAND_DIR).href;
+  const h = (L.w * 1.4142).toFixed(2);
+  const padTop = Math.max(0, (297 - L.w * 1.4142) / 2).toFixed(2);
+  const u = (L.w / 105).toFixed(4);
+  const win = openPrintWindow(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Menu QR code — ${esc(shop)}</title>
+    <link rel="stylesheet" href="${esc(tokens)}">
+    <style>
+      @page{size:A4 portrait;margin:0;}
+      *{box-sizing:border-box;}
+      html,body{margin:0;background:#e9e2d2;color:#1F1B19;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+      .noprint{position:sticky;top:0;z-index:5;background:#1F1B19;color:#FBF6EA;padding:10px 16px;font-size:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;}
+      .noprint button{font:inherit;font-weight:700;background:#B5432B;color:#fff;border:0;border-radius:8px;padding:8px 16px;cursor:pointer;}
+      .sheet{width:210mm;height:297mm;margin:10mm auto;background:#fff;display:flex;justify-content:center;align-items:flex-start;padding-top:${padTop}mm;overflow:hidden;}
+      .card{--u:${u}mm;--main:${main};position:relative;width:${L.w}mm;height:${h}mm;display:flex;flex-direction:column;background:#FBF6EA;
+        border-radius:calc(var(--u)*4);${prefs.crop ? '' : 'outline:0.25mm dashed #c9bda5;'}page-break-inside:avoid;break-inside:avoid;}
+      .band{background:var(--main);border-radius:calc(var(--u)*4) calc(var(--u)*4) 0 0;padding:calc(var(--u)*5) calc(var(--u)*6) calc(var(--u)*4);display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*2.5);}
+      .band .mark{width:calc(var(--u)*20);height:calc(var(--u)*20);border-radius:calc(var(--u)*4);object-fit:contain;}
+      .band .wm{max-width:86%;height:calc(var(--u)*11);object-fit:contain;}
+      .band .brand-name-text{color:#fff;font-weight:800;font-size:calc(var(--u)*5.5);text-align:center;}
+      .body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:calc(var(--u)*3) calc(var(--u)*6);background:#F1E4B3;}
+      .scan{font-family:var(--cc-font-display);text-transform:uppercase;color:#8E2F1C;font-size:calc(var(--u)*9);line-height:1.05;letter-spacing:.02em;text-align:center;margin-bottom:calc(var(--u)*4);}
+      .qr{width:calc(var(--u)*62);height:calc(var(--u)*62);background:#fff;border-radius:calc(var(--u)*3);box-shadow:0 0 0 calc(var(--u)*.6) #1F1B19;overflow:hidden;}
+      .qr svg{width:100%;height:100%;display:block;}
+      .link{margin-top:calc(var(--u)*4);font-family:ui-monospace,'SFMono-Regular',Menlo,Consolas,monospace;font-weight:700;font-size:calc(var(--u)*3.6);color:#1F1B19;text-align:center;overflow-wrap:anywhere;max-width:100%;}
+      .foot{background:var(--main);height:calc(var(--u)*6);border-radius:0 0 calc(var(--u)*4) calc(var(--u)*4);}
+      .cm{display:${prefs.crop ? 'block' : 'none'};position:absolute;width:3mm;height:3mm;border-color:#1F1B19;border-style:solid;border-width:0;}
+      .cm.tl{top:-4mm;left:-4mm;border-right-width:.2mm;border-bottom-width:.2mm;}
+      .cm.tr{top:-4mm;right:-4mm;border-left-width:.2mm;border-bottom-width:.2mm;}
+      .cm.bl{bottom:-4mm;left:-4mm;border-right-width:.2mm;border-top-width:.2mm;}
+      .cm.br{bottom:-4mm;right:-4mm;border-left-width:.2mm;border-top-width:.2mm;}
+      @media print{html,body{background:#fff;} .noprint{display:none;} .sheet{margin:0;}}
+    </style></head><body>
+    <div class="noprint"><span>Menu QR card · ${esc(L.label)} · print on A4 (portrait), "Background graphics" on, margins "Default" or "None". Cut at the corner marks.</span>
+      <button type="button" onclick="print()">Print</button></div>
+    <div class="sheet">${menuQrCardHtml(link, s)}</div>
+    </body></html>`, false);
+  if(win) applyChanges([Ops.audit('Menu QR card printed', `${L.label} · ${menuShortLinkText(link)}`)]).catch(() => {});
+  return win;
+}

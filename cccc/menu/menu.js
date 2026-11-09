@@ -235,20 +235,34 @@
       return;
     }
     const {cats, types} = orderedCategories(items);
-    chips.innerHTML = `<div class="col chips-in">${cats.map((c, i) => `<a class="chip${i === 0 ? ' on' : ''}" href="#sec-${i}" data-jump="sec-${i}">${esc(c)}</a>`).join('')}</div>`;
-    chips.hidden = cats.length < 2;
-    const sections = cats.map((c, i) => {
+    const multi = cats.length > 1;
+    // Keep the tab the person was on when the menu refreshes (by name; else the same place).
+    let active = S.activeName != null ? cats.indexOf(S.activeName) : -1;
+    if(active < 0) active = Math.min(Math.max(0, S.active | 0), cats.length - 1);
+    S.cats = cats; S.active = active; S.activeName = cats[active]; S.lock = null;
+
+    chips.innerHTML = multi ? `<div class="col chips-in" role="tablist" aria-label="Menu sections">${cats.map((c, i) =>
+      `<button type="button" class="chip" role="tab" id="tab-btn-${i}" aria-controls="sec-${i}" aria-selected="false" tabindex="-1" data-tab="${i}">${esc(c)}</button>`).join('')}</div>` : '';
+    chips.hidden = !multi;
+    const panels = cats.map((c, i) => {
       const its = [];
       items.forEach((it, idx) => { if(catOf(it) === c) its.push([it, idx]); });
       const grid = types[c] === 'PASTRY';
-      return `<section class="sec" id="sec-${i}" aria-labelledby="sec-h-${i}">
+      const nav = multi ? `<div class="pnav">
+          ${i > 0 ? `<button type="button" class="pbtn prev" data-go="${i - 1}">${CHEV_L}<span><span class="sr-only">Previous: </span>${esc(cats[i - 1])}</span></button>` : ''}
+          ${i < cats.length - 1 ? `<button type="button" class="pbtn next" data-go="${i + 1}"><span><span class="sr-only">Next: </span>${esc(cats[i + 1])}</span>${CHEV_R}</button>` : ''}
+        </div>` : '';
+      return `<section class="sec panel" id="sec-${i}" ${multi ? `role="tabpanel" aria-labelledby="tab-btn-${i}" tabindex="0"` : `aria-labelledby="sec-h-${i}"`}>
         <h2 class="disp sec-h" id="sec-h-${i}">${squareHtml(c)}<span>${esc(c)}</span></h2>
         <div class="${grid ? 'grid' : 'list'}">${its.map(([it, idx]) => grid ? gridCard(it, idx) : listCard(it, idx)).join('')}</div>
+        ${nav}
       </section>`;
     }).join('');
-    main.innerHTML = `${staleHtml()}${highlightHtml(m)}${sections}${visitHtml(m.visit)}${footHtml(m)}`;
-    watchSections();
+    main.innerHTML = `${staleHtml()}${highlightHtml(m)}<div class="track${multi ? '' : ' single'}" id="track">${panels}</div>${visitHtml(m.visit)}${footHtml(m)}`;
+    setupTrack();
   }
+  const CHEV_L = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const CHEV_R = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   function staleHtml(){
     if(!S.stale) return '';
     return `<div class="stale" role="status">${ico('wifi-off', 18)}<span>Showing the menu we saved earlier. We couldn't reach the shop just now.</span><button type="button" class="retry" data-retry>Try again</button></div>`;
