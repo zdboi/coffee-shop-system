@@ -169,3 +169,5 @@ Owner: **don't start 1.3 until I say so.**
     - Shown as a large photo card at the top of the menu link.
     - If it's sold out today it stays, greyed, with "Sold out today".
     - Menu link only (not the QR order page) unless the owner asks.
+- **B11 (owner, 2026-11-09 19:24):** "put [the highlighted product] on the QR ordering page too, but in the Wave 3 update."
+  - Wave 3 (1.5) shows the same highlighted item (set in Settings → Menu link) at the top of the QR order page, so customers can tap it to order.
