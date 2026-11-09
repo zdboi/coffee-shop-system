@@ -1,4 +1,6 @@
 -- Seed for tests/e2e/menu_public.e2e.js (release 1.4.1 public menu page): a rich menu + the menu link settings. Applied by that test on top of tests/sql/20_seed_e2e.sql. (From customer-qr-dev, 2026-11-09.)
+-- Photo URLs http://localhost:8893/... are placeholders: the test points them at files the stand-in serves
+-- (tile icon; "missing.jpg" -> a 404 path) once it knows its port.
 select id as bid from businesses limit 1 \gset
 \set B '''':bid''''
 update recipes set sort_order = 10, category='Hot', image_url='http://localhost:8893/latte.jpg' where name='Americano';

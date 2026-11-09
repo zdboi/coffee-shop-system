@@ -12,6 +12,10 @@ const OUT = path.join(process.env.QA_SHOTS || path.join(require('os').tmpdir(), 
 const SQL = (q) => execSync(`psql -h /tmp -p 54329 -U postgres -d ${DB} -Atqc "${q}"`).toString();
 require('fs').mkdirSync(OUT, {recursive: true});
 execSync(`psql -h /tmp -p 54329 -U postgres -d ${DB} -q -v ON_ERROR_STOP=1 -f ${path.join(__dirname, '..', 'sql', '24_seed_menu.sql')}`, {stdio: 'ignore'});
+// Menu photos: the seed names http://localhost:8893/...; point them at files this stand-in really serves
+// (the shop's tile icon), and "missing.jpg" at a path that does not exist (404), so both cases are real.
+const ORIGIN = 'http://localhost:' + PORT;
+SQL(`update recipes set image_url = case when image_url like '%/missing.jpg' then '${ORIGIN}/tests/fixtures/no-such-photo.jpg' else '${ORIGIN}/cccc/shared/brand/tile-icon-192.png' end where image_url like 'http://localhost:8893/%'`);
 let fails = 0, checks = 0;
 const ok = (c, m) => { checks++; console.log((c ? 'ok   ' : 'FAIL ') + m); if(!c) fails++; };
 
@@ -67,6 +71,11 @@ const ok = (c, m) => { checks++; console.log((c ? 'ok   ' : 'FAIL ') + m); if(!c
   ok(log.errors.length === 0, 'no page errors ' + log.errors);
   // broken image -> no-photo tile
   ok(await page.$eval('#item-3 .thumb', e => e.classList.contains('nophoto')), 'broken photo turns into no-photo tile');
+  // a real photo loads (item 0, Cafe latte, and the highlight photo)
+  await page.locator('#item-0 .thumb img').scrollIntoViewIfNeeded();
+  const loaded = async (sel) => page.waitForFunction((q) => { const i = document.querySelector(q); return i && i.complete && i.naturalWidth > 0; }, sel, {timeout: 8000}).then(() => true).catch(() => false);
+  ok(await loaded('#item-0 .thumb img'), 'item photo actually loads (naturalWidth > 0)');
+  ok(await loaded('.hl-photo img'), 'highlight photo actually loads (naturalWidth > 0)');
   // lazy images
   ok(await page.$$eval('.thumb img, .gphoto img', a => a.every(i => i.loading === 'lazy')), 'item photos lazy');
   await page.screenshot({path: OUT + '390-top.png'});
