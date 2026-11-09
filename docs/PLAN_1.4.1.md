@@ -10,6 +10,9 @@ Owner: "build it" (2026-11-09 19:19). Decisions: `docs/owner-feedback.md` B10. L
 - **Design:** the owner-approved mock in `docs/design/menu-link-mock.dc.html` (phone layout).
 - **Link preview image:** `cccc/shared/brand/menu-link-preview.png` (1200×630), the owner's version: name + "Ano ang kape mo today?".
 
+## Highlighted product (owner, 19:23)
+One item the owner picks, with an optional label (default "Today's pick") and blurb, shown as a large card at the top of the menu page. If it is sold out, it is shown greyed.
+
 ## Pieces
 1. **DB (db-security-engineer), `011`:**
    - `public_menu(p_shop text)`, callable by `anon`. It returns display data only: shop name and logo; menu items shown on QR (name, photo URL, price, sub-category, type, sold out); option groups with labels and price deltas, without stock data, ingredient ids, costs or recipes; the sub-category order and colours; and the public "Visit us" fields.

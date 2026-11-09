@@ -161,3 +161,11 @@ Owner: **don't start 1.3 until I say so.**
   - a new anonymous read-only RPC, e.g. `public_menu(p_shop)`, returning display data only (no stock amounts, no ids that matter);
   - a new page under `cccc/menu/`;
   - Settings fields for address, map link, hours and socials.
+- **B10 addition (owner, 2026-11-09 19:23):** "include an option where I can put a highlight product among the products available."
+  - **Overlap:** none (no featured-item feature exists).
+  - **Lead defaults:**
+    - **One** highlighted item, chosen in Back Office → Settings → Menu link.
+    - Optional label (default "Today's pick") and a short blurb.
+    - Shown as a large photo card at the top of the menu link.
+    - If it's sold out today it stays, greyed, with "Sold out today".
+    - Menu link only (not the QR order page) unless the owner asks.
