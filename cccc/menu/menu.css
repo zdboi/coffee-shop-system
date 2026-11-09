@@ -116,6 +116,7 @@ a.hl:active{transform:scale(.99);}
 .visit :focus-visible{box-shadow:0 0 0 3px var(--cc-ink),0 0 0 6px var(--cc-butter);}
 
 .foot{margin:0;text-align:center;font-size:13px;line-height:1.5;color:var(--cc-ink-2);}
+.foot-more{font-weight:600;color:var(--cc-ink);}
 
 /* empty / not found / offline */
 .empty{margin:28px 0 8px;padding:28px 22px;background:var(--cc-card);border:1px solid var(--cc-line);border-radius:20px;text-align:center;}

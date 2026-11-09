@@ -255,7 +255,9 @@
   }
   function footHtml(m){
     const note = priceNote(m.pricing);
-    return `<p class="foot">Order and pay at the counter, or scan the QR code on your table.<br>${note ? esc(note) + '<br>' : ''}Prices may change; this menu updates live.</p>`;
+    // truncated: the database sends at most 300 items; the rest are on the counter's menu.
+    const more = m.truncated === true ? `<p class="foot foot-more">Some items aren't shown here — ask us at the counter.</p>` : '';
+    return `${more}<p class="foot">Order and pay at the counter, or scan the QR code on your table.<br>${note ? esc(note) + '<br>' : ''}Prices may change; this menu updates live.</p>`;
   }
   function renderNotFound(){
     applyTheme(null);
