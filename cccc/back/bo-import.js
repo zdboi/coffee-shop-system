@@ -465,9 +465,11 @@ function convertCcccPayload(payload, existingIds, notes){
   });
   if(skippedPhones) notes.push(`${plural(skippedPhones, 'customer')} came in without a mobile number because another customer already has it (merge them in Customers if they are the same person).`);
   if(!sameShop && payload.business) notes.push('This backup is from another shop account: its table QR codes got new codes.');
+  // 1.4.1: the menu link's "Visit us" details and highlight label / text come along (bo-menulink.js);
+  // the on/off switch, the shop code and the highlighted item stay as they are in this shop.
   return {tables: out, legacyPins: [], unlinked, broken, already, leftOut: [], dropped: new Set(),
     saleNumbers: new Map((src.sales || []).filter(x => x && x.id).map(x => [x.id, x.transaction_number || ''])),
-    settings: src.settings ? mapOldSettings(src.settings) : null};
+    settings: src.settings ? Object.assign(mapOldSettings(src.settings), {_menu: menuImportValues(src.settings)}) : null};
 }
 
 /* ================= running an import ================= */
@@ -587,14 +589,17 @@ async function runImport(payload, opts){
       }catch(e){ notes.push('The old logo could not be uploaded — add it again in Settings → Branding.'); }
     }
     if(ch._gdriveClientId && !state.settings.gdriveClientId){ state.settings.gdriveClientId = ch._gdriveClientId; saveDeviceSettings(); }
-    delete ch._logo_data; delete ch._gdriveClientId;
+    const menu = (BO.hasMenuLink && ch._menu) ? ch._menu : {};
+    delete ch._logo_data; delete ch._gdriveClientId; delete ch._menu;
     const row = {};
     SERVER_SETTING_KEYS.forEach(k => { row[k] = k in ch ? ch[k] : state.settings[k]; });
+    Object.assign(row, menu);      // only when this database has the menu link columns (011)
     row.updated_at = nowISO();
     const ops = [Ops.upsert('settings', row)];
     if(ch.business_name) ops.push(Ops.upsert('businesses', {name: String(ch.business_name)}));
     await applyChanges(ops);
     notes.push('Shop name, colours, tax and receipt settings were brought in.');
+    if(Object.keys(menu).length) notes.push('The menu link\'s "Visit us" details and highlight text were brought in (the link\'s on/off switch, shop code and highlighted item were not changed).');
   }
   const already = conv.already;
   const imported = IMPORT_ORDER.reduce((n, t) => n + addedBy[t], 0);

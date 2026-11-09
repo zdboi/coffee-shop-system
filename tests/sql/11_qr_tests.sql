@@ -7,13 +7,19 @@ select qr_token as tok5 from dining_tables where label = 'Table 5' \gset
 
 -- ===== not signed in at all (anon key only) =====
 select test.login(null);
+-- 1.4.1 (011 revokes anon table privileges): true when the count query gives 0 rows OR is refused
+create or replace function test.zero_or_denied(q text) returns boolean language plpgsql as $f$
+declare n bigint;
+begin execute q into n; return n = 0;
+exception when insufficient_privilege then return true; end $f$;
+grant execute on function test.zero_or_denied(text) to anon, authenticated;
 set role anon;
 select test.ok((public.get_qr_menu(:'tok')->'business'->>'name') = 'Cavite City Coffee Club', 'menu loads without login');
 select test.ok(jsonb_array_length(public.get_qr_menu(:'tok')->'items') = 1, 'menu shows only sellable items (production recipe hidden)');
 select test.ok(public.get_qr_menu(:'tok')->'items'->0->'modifier_groups'->0->'options'->1 ? 'ingredient_id' = false, 'public menu hides ingredient ids');
 select test.ok(public.get_qr_menu('nope')->>'error' = 'TABLE_NOT_FOUND', 'unknown QR token');
 select test.ok((public.qr_session(:'tok')->'customer') = 'null'::jsonb, 'no login -> no customer');
-select test.ok((select count(*) from recipes) = 0, 'anon role reads nothing directly');
+select test.ok(test.zero_or_denied('select count(*) from recipes'), 'anon role reads nothing directly (0 rows, or permission denied since 011)');   -- 1.4.1: lead-approved 2026-11-09
 reset role;
 
 -- ===== customer phone #1 (anonymous login) =====

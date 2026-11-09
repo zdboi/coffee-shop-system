@@ -296,7 +296,8 @@ from pg_proc p where p.pronamespace = 'public'::regnamespace
     'bo_bootstrap','sales_report','search_customers','fo_sync','fo_add_customer','qr_update_order','merge_customers','delete_customer_data',
     'fo_floor_plan','ingredient_brand_stock','fo_customer_list','fo_customer_detail',   -- 1.2 (008): lead-approved additions 2026-10-29
     'start_fresh_preview','start_fresh',   -- 1.3 (009): lead-approved additions 2026-11-02 (owner-only inside)
-    'merge_ingredients_preview','merge_ingredients','save_supplied_item','waste_report','net_income_report');   -- 1.4 (010): lead-approved additions 2026-11-03
+    'merge_ingredients_preview','merge_ingredients','save_supplied_item','waste_report','net_income_report',   -- 1.4 (010): lead-approved additions 2026-11-03
+    'public_menu');   -- 1.4.1 (011): lead-approved addition 2026-11-09
 select test.chk(not has_function_privilege('authenticated', 'public._write_row(text,jsonb,text,text,uuid)', 'execute')
            and not has_function_privilege('authenticated', 'public._update_row(text,jsonb,text,uuid)', 'execute')
            and not has_function_privilege('authenticated', 'public._writable_tables()', 'execute')

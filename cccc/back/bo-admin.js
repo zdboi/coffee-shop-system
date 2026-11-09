@@ -1,6 +1,6 @@
 /* =====================================================================
    BACK OFFICE — setup: tables & QR codes, staff & PINs, counter devices,
-   audit log and settings (general, branding, receipts, QR ordering,
+   audit log and settings (general, branding, receipts, QR ordering, menu link (bo-menulink.js),
    loyalty).
    ===================================================================== */
 
@@ -668,7 +668,7 @@ const COLOR_PRESETS = {
   Minimal:  {primary_color:'#222222', secondary_color:'#444444', accent_color:'#888888', background_color:'#fafafa', card_color:'#ffffff', text_color:'#1a1a1a'},
   Dark:     {primary_color:'#0f0f0f', secondary_color:'#2a2a2a', accent_color:'#c17a3d', background_color:'#1c1c1c', card_color:'#2b2b2b', text_color:'#f0ece4'},
 };
-const SETTINGS_TABS = [{id: 'general', label: 'General'}, {id: 'branding', label: 'Branding'}, {id: 'receipt', label: 'Receipts & tax'}, {id: 'qr', label: 'QR ordering'}, {id: 'loyalty', label: 'Loyalty'}];
+const SETTINGS_TABS = [{id: 'general', label: 'General'}, {id: 'branding', label: 'Branding'}, {id: 'receipt', label: 'Receipts & tax'}, {id: 'qr', label: 'QR ordering'}, {id: 'loyalty', label: 'Loyalty'}, {id: 'menu', label: 'Menu link'}];
 
 // Saves the shop settings row (+ the business name when it changed) in one call.
 async function saveSettings(changes, auditAction, auditDetails){
@@ -773,6 +773,7 @@ function renderSettings(){
       <button class="btn btn-primary" id="qr-save">Save</button>
     </div>`;
   if(tab === 'loyalty') html = loyaltySettingsHtml(s);
+  if(tab === 'menu') html = menuLinkHtml();
   content.innerHTML = `<div class="settings-block" style="max-width:760px;">
     <div class="seg" style="margin-bottom:16px;flex-wrap:wrap;" role="tablist">${SETTINGS_TABS.map(t => `<button class="seg-btn ${tab === t.id ? 'active' : ''}" data-tab="${t.id}" role="tab" aria-selected="${tab === t.id}">${t.label}</button>`).join('')}</div>
     ${html}
@@ -824,6 +825,7 @@ function renderSettings(){
     });
   }
   if(tab === 'loyalty') wireLoyaltySettings(content);
+  if(tab === 'menu') wireMenuLink(content);
   if(tab === 'branding'){
     let pendingLogo;   // undefined = unchanged, null = remove, Blob = new
     const draft = () => {

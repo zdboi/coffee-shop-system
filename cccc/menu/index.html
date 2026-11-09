@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Cavite City Coffee Club — Menu</title>
+<meta name="description" content="Ano ang kape mo today?">
+<meta name="theme-color" content="#B5432B">
+<!-- Link preview (Facebook, Messenger, Viber…). Social sites read these without running scripts. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Cavite City Coffee Club">
+<meta property="og:title" content="Cavite City Coffee Club — Menu">
+<meta property="og:description" content="Ano ang kape mo today?">
+<meta property="og:url" content="https://zdboi.github.io/coffee-shop-system/cccc/menu/">
+<meta property="og:image" content="https://zdboi.github.io/coffee-shop-system/cccc/shared/brand/menu-link-preview.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Cavite City Coffee Club menu: Ano ang kape mo today?">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Cavite City Coffee Club — Menu">
+<meta name="twitter:description" content="Ano ang kape mo today?">
+<meta name="twitter:image" content="https://zdboi.github.io/coffee-shop-system/cccc/shared/brand/menu-link-preview.png">
+<link rel="icon" type="image/png" sizes="192x192" href="../shared/brand/tile-icon-192.png">
+<link rel="apple-touch-icon" href="../shared/brand/tile-icon-192.png">
+<!-- One small web font, from this site: Brunson for titles (font-display: swap). Body text is the phone's own font. -->
+<link rel="preload" href="../shared/brand/brunson.woff" as="font" type="font/woff" crossorigin>
+<link rel="stylesheet" href="../shared/brand/tokens.css">
+<link rel="stylesheet" href="./menu.css">
+</head>
+<body>
+<a class="skip" href="#menu-main">Skip to the menu</a>
+<header class="mhead" id="mhead">
+  <div class="col mhead-in">
+    <div class="brand">
+      <span class="brand-logo" id="brand-logo"><img src="../shared/brand/tile-icon-192.webp" alt="" width="60" height="60" decoding="async"></span>
+      <span class="brand-name" id="brand-name"><img class="brand-wordmark" src="../shared/brand/wordmark-terracotta.webp" alt="Cavite City Coffee Club" width="142" height="60" decoding="async"></span>
+    </div>
+    <div class="mhead-row">
+      <h1 class="disp mtitle">Menu</h1>
+      <span class="mhead-note" id="mhead-note">Updated live from our counter</span>
+    </div>
+  </div>
+</header>
+<nav class="chips" id="chips" aria-label="Menu sections" hidden></nav>
+<main class="col main" id="menu-main" tabindex="-1">
+  <p class="loading" id="loading">Opening the menu…</p>
+</main>
+
+<script src="../shared/config.js"></script>
+<script src="../shared/cloud.js"></script>
+<!-- Brand logo helpers, icons and the shared sub-category order (no sign-in code is used on this page). -->
+<script src="../shared/ui.js"></script>
+<script src="./menu.js"></script>
+</body>
+</html>

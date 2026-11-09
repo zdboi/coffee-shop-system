@@ -116,3 +116,58 @@ Owner: **don't start 1.3 until I say so.**
   - Wave 3 (1.5) = QR accounts and security.
   - Wave 4 (1.6) "Money & owners" = B1 Accounting overview, B2 investor equity, B4 editable payment methods, B5 payment-method charges.
   - Later, planned together: B3 referrals and RPG loyalty.
+
+## New items for Wave 3 (owner, 2026-11-09 10:55); decided
+- **B6. Customers with or without a phone number (owner):** "segregate customers who input their numbers and those who don't; for those who don't, automatically archive their data."
+  - **Decision: hide right away.** Customers with no phone never show in the main lists, only under "Archived"; their data is kept.
+  - Overlaps the Wave 3 guest/registered work (Q1/A6), which changes the same customer data, so it is built there.
+- **B7. "Barista drink" button (owner):** "houses the calibration pull, milk, sauces and syrups used; all counts as wastage; done every day for coffee quality."
+  - **Decision: a one-tap daily preset.** The owner sets the usual kit once in the Back Office. Staff tap the button, adjust amounts and save.
+  - It saves as a waste entry with reason CALIBRATION.
+  - Overlaps the 1.4 waste log (reason "Calibration / barista drink"), which it reuses.
+- **B8. R&D (owner):** "input ingredients/items to an R&D section; all used for research and development of new products; counts as wastage."
+  - **Decision: a Back Office R&D log.** Ingredients used are logged with a project name. They count as waste (new reason RND) and show as R&D cost per project in reports.
+  - Overlaps the waste log and Waste report (1.4), which it reuses.
+- **Placement:** all three join **Wave 3 (1.5)**, with QR accounts & security.
+- **B9. End-of-shift stock count (owner, 2026-11-09 11:03):** "a checklist on the POS to input the actual count/weight of products before closing shift; missing stock counts as waste; prompt to double check before confirming; only the admin can revise."
+  - **Overlap:** the Back Office already has "Adjust stock" (one item at a time) and "Record waste". There is no counter count and no count list.
+  - **Decisions:**
+    - **Which items:** the owner ticks "Count at closing" per ingredient or item in the Back Office, and only those appear.
+    - **Blind count:** staff don't see expected amounts. The double-check prompt then lists only the items that differ, so staff recount those before confirming.
+    - **Required before Close shift.** It works offline and uploads later.
+    - **Missing amounts** are recorded as waste with a new reason, COUNT_SHORTAGE (shown as "Missing at count").
+    - **Extra stock** raises stock to the count and is flagged in "Needs review". It is never negative waste.
+    - **Only the owner (ADMIN)** can revise a submitted count, in the Back Office, with an audit entry.
+  - **Placement:** Wave 3 (1.5).
+
+## Brand: tagline dropped (owner, 2026-11-09 16:39)
+- Owner: "Drop the Bienvenido na Kapihan. I don't want that to be our catchphrase anymore."
+- **Done:** the HD logos and banners (given as a ZIP) no longer have the tagline. The stacked logo also loses the two rules and stars around it, and the horizontal logo's name is re-centred.
+- **Still in the app:**
+  - the "Bienvenido na Kapihan!" footer on the branded QR table cards (`cccc/back/bo-admin.js`);
+  - the web-size wide/stacked logo images in `cccc/shared/brand/`, which aren't shown on any screen;
+  - the QR stamp card header says "Bienvenido!", a different phrase.
+- Waiting for the owner on whether to change these now or in Wave 3.
+
+## B10. Public menu link for social media (owner, 2026-11-09 19:07)
+- Owner: "Design a simple visual menu that changes with the current available menu, integrated in the app, so when somebody on social media asks for a menu I can send a link."
+- **Overlap:** the QR order page already shows the live menu, but only through a table QR token, and that link allows ordering. A view-only public link is new.
+- **Decisions (19:08):**
+  - **Link:** a view-only page with no ordering, no sign-in and no customer data.
+  - **It shows:** prices (including option prices), photos, and location & hours (typed once in Settings). Open/closed status is not wanted.
+  - **Sold-out items** are shown greyed out as "Sold out today".
+  - **First step:** a design mock on the design canvas (phone view + link preview), then build.
+- **Build needs** (when approved):
+  - a new anonymous read-only RPC, e.g. `public_menu(p_shop)`, returning display data only (no stock amounts, no ids that matter);
+  - a new page under `cccc/menu/`;
+  - Settings fields for address, map link, hours and socials.
+- **B10 addition (owner, 2026-11-09 19:23):** "include an option where I can put a highlight product among the products available."
+  - **Overlap:** none (no featured-item feature exists).
+  - **Lead defaults:**
+    - **One** highlighted item, chosen in Back Office → Settings → Menu link.
+    - Optional label (default "Today's pick") and a short blurb.
+    - Shown as a large photo card at the top of the menu link.
+    - If it's sold out today it stays, greyed, with "Sold out today".
+    - Menu link only (not the QR order page) unless the owner asks.
+- **B11 (owner, 2026-11-09 19:24):** "put [the highlighted product] on the QR ordering page too, but in the Wave 3 update."
+  - Wave 3 (1.5) shows the same highlighted item (set in Settings → Menu link) at the top of the QR order page, so customers can tap it to order.

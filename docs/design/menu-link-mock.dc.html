@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Menu page on a phone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+@font-face{font-family:'Brunson';src:url('/_blob/babd91689ea1937182d31411a4931c78') format('truetype');font-display:block}
+body{margin:0}
+a{color:#8E2F1C}a:hover{color:#B5432B}
+</style>
+</helmet>
+<div style="width: 390px; height: 2010px; box-sizing: border-box; background: #FBF6EA; font-family: Inter, system-ui, sans-serif; color: #1F1B19; display: flex; flex-direction: column">
+
+  <!-- Header -->
+  <header style="background: #B5432B; padding: 22px 20px 20px; display: flex; flex-direction: column; gap: 14px">
+    <div style="display: flex; align-items: center; gap: 14px">
+      <img src="/_blob/915516111bb27b9d0f2932a76ff4b1d3" alt="" style="width: 60px; height: 60px; display: block">
+      <div style="font-family: Brunson, Impact, sans-serif; font-size: 30px; line-height: .9; letter-spacing: .01em">
+        <div style="color: #F1E4B3">CAVITE CITY</div>
+        <div style="color: #1F1B19">COFFEE CLUB</div>
+      </div>
+    </div>
+    <div style="display: flex; align-items: baseline; justify-content: space-between">
+      <h1 style="margin: 0; font-family: Brunson, Impact, sans-serif; font-weight: 400; font-size: 52px; line-height: 1; color: #FBF6EA">MENU</h1>
+      <span style="font-size: 13px; font-weight: 500; color: #F1E4B3">Updated live from our counter</span>
+    </div>
+  </header>
+
+  <!-- Category chips -->
+  <nav aria-label="Menu sections" style="display: flex; gap: 8px; padding: 14px 20px; overflow-x: auto; border-bottom: 1px solid #E6DCC6; background: #FBF6EA">
+    <a href="#hot" style="flex: none; padding: 10px 16px; border-radius: 999px; background: #1F1B19; color: #FBF6EA; font-size: 14px; font-weight: 600; text-decoration: none">Hot</a>
+    <a href="#iced" style="flex: none; padding: 10px 16px; border-radius: 999px; background: #F1E4B3; color: #1F1B19; font-size: 14px; font-weight: 600; text-decoration: none">Iced</a>
+    <a href="#noncoffee" style="flex: none; padding: 10px 16px; border-radius: 999px; background: #F1E4B3; color: #1F1B19; font-size: 14px; font-weight: 600; text-decoration: none">Non-coffee</a>
+    <a href="#pastry" style="flex: none; padding: 10px 16px; border-radius: 999px; background: #F1E4B3; color: #1F1B19; font-size: 14px; font-weight: 600; text-decoration: none">Pastry</a>
+    <a href="#food" style="flex: none; padding: 10px 16px; border-radius: 999px; background: #F1E4B3; color: #1F1B19; font-size: 14px; font-weight: 600; text-decoration: none">Rice meals</a>
+  </nav>
+
+  <main style="padding: 8px 20px 24px; display: flex; flex-direction: column; gap: 26px">
+
+    <!-- Hot -->
+    <section id="hot" style="display: flex; flex-direction: column; gap: 12px">
+      <h2 style="margin: 18px 0 0; display: flex; align-items: center; gap: 10px; font-family: Brunson, Impact, sans-serif; font-weight: 400; font-size: 32px; line-height: 1"><span style="width: 14px; height: 14px; border-radius: 3px; background: #9E8B57"></span>HOT</h2>
+      <article style="display: flex; gap: 14px; padding: 12px; background: #FFFFFF; border: 1px solid #E6DCC6; border-radius: 16px">
+        <div style="width: 76px; height: 76px; flex: none; border-radius: 12px; background: #EADBC0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #6E5F52">Photo</div>
+        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+          <div style="display: flex; justify-content: space-between; gap: 8px"><h3 style="margin: 0; font-size: 16px; font-weight: 600">Café latte</h3><span style="font-size: 16px; font-weight: 700; color: #8E2F1C">₱120</span></div>
+          <p style="margin: 0; font-size: 13px; line-height: 1.45; color: #5A4C42">12oz · 16oz +₱20</p>
+          <p style="margin: 0; font-size: 13px; line-height: 1.45; color: #5A4C42">Oat milk +₱30 · Extra shot +₱40</p>
+        </div>
+      </article>
+      <article style="display: flex; gap: 14px; padding: 12px; background: #FFFFFF; border: 1px solid #E6DCC6; border-radius: 16px">
+        <div style="width: 76px; height: 76px; flex: none; border-radius: 12px; background: #EADBC0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #6E5F52">Photo</div>
+        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+          <div style="display: flex; justify-content: space-between; gap: 8px"><h3 style="margin: 0; font-size: 16px; font-weight: 600">Americano</h3><span style="font-size: 16px; font-weight: 700; color: #8E2F1C">₱100</span></div>
+          <p style="margin: 0; font-size: 13px; line-height: 1.45; color: #5A4C42">12oz · 16oz +₱20</p>
+        </div>
+      </article>
+    </section>
+
+    <!-- Iced -->
+    <section id="iced" style="display: flex; flex-direction: column; gap: 12px">
+      <h2 style="margin: 0; display: flex; align-items: center; gap: 10px; font-family: Brunson, Impact, sans-serif; font-weight: 400; font-size: 32px; line-height: 1"><span style="width: 14px; height: 14px; border-radius: 3px; background: #6E8FA8"></span>ICED</h2>
+      <article style="display: flex; gap: 14px; padding: 12px; background: #FFFFFF; border: 1px solid #E6DCC6; border-radius: 16px">
+        <div style="width: 76px; height: 76px; flex: none; border-radius: 12px; background: #EADBC0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #6E5F52">Photo</div>
+        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+          <div style="display: flex; justify-content: space-between; gap: 8px"><h3 style="margin: 0; font-size: 16px; font-weight: 600">Iced Spanish latte</h3><span style="font-size: 16px; font-weight: 700; color: #8E2F1C">₱150</span></div>
+          <p style="margin: 0; font-size: 13px; line-height: 1.45; color: #5A4C42">16oz · Oat milk +₱30</p>
+        </div>
+      </article>
+      <article aria-label="Iced caramel macchiato, sold out today" style="display: flex; gap: 14px; padding: 12px; background: #F4EEE2; border: 1px solid #E6DCC6; border-radius: 16px">
+        <div style="width: 76px; height: 76px; flex: none; border-radius: 12px; background: #E3DACB; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #6E5F52">Photo</div>
+        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+          <div style="display: flex; justify-content: space-between; gap: 8px"><h3 style="margin: 0; font-size: 16px; font-weight: 600; color: #6E5F52">Iced caramel macchiato</h3><span style="font-size: 16px; font-weight: 700; color: #6E5F52">₱160</span></div>
+          <span style="align-self: flex-start; padding: 4px 10px; border-radius: 999px; background: #1F1B19; color: #FBF6EA; font-size: 12px; font-weight: 600">Sold out today</span>
+        </div>
+      </article>
+    </section>
+
+    <!-- Non-coffee -->
+    <section id="noncoffee" style="display: flex; flex-direction: column; gap: 12px">
+      <h2 style="margin: 0; display: flex; align-items: center; gap: 10px; font-family: Brunson, Impact, sans-serif; font-weight: 400; font-size: 32px; line-height: 1"><span style="width: 14px; height: 14px; border-radius: 3px; background: #7E9A6B"></span>NON-COFFEE</h2>
+      <article style="display: flex; gap: 14px; padding: 12px; background: #FFFFFF; border: 1px solid #E6DCC6; border-radius: 16px">
+        <div style="width: 76px; height: 76px; flex: none; border-radius: 12px; background: #EADBC0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #6E5F52">Photo</div>
+        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+          <div style="display: flex; justify-content: space-between; gap: 8px"><h3 style="margin: 0; font-size: 16px; font-weight: 600">Matcha latte</h3><span style="font-size: 16px; font-weight: 700; color: #8E2F1C">₱140</span></div>
+          <p style="margin: 0; font-size: 13px; line-height: 1.45; color: #5A4C42">Hot · Iced +₱10</p>
+        </div>
+      </article>
+    </section>
+
+    <!-- Pastry -->
+    <section id="pastry" style="display: flex; flex-direction: column; gap: 12px">
+      <h2 style="margin: 0; display: flex; align-items: center; gap: 10px; font-family: Brunson, Impact, sans-serif; font-weight: 400; font-size: 32px; line-height: 1"><span style="width: 14px; height: 14px; border-radius: 3px; background: #D8A43A"></span>PASTRY</h2>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+        <article style="display: flex; flex-direction: column; gap: 8px; padding: 10px; background: #FFFFFF; border: 1px solid #E6DCC6; border-radius: 16px">
+          <div style="height: 104px; border-radius: 10px; background: #EADBC0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #6E5F52">Photo</div>
+          <h3 style="margin: 0; font-size: 15px; font-weight: 600">Ensaymada</h3>
+          <span style="font-size: 15px; font-weight: 700; color: #8E2F1C">₱75</span>
+        </article>
+        <article style="display: flex; flex-direction: column; gap: 8px; padding: 10px; background: #FFFFFF; border: 1px solid #E6DCC6; border-radius: 16px">
+          <div style="height: 104px; border-radius: 10px; background: #EADBC0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #6E5F52">Photo</div>
+          <h3 style="margin: 0; font-size: 15px; font-weight: 600">Ube cheese pandesal</h3>
+          <span style="font-size: 15px; font-weight: 700; color: #8E2F1C">₱55</span>
+        </article>
+      </div>
+    </section>
+
+    <!-- Rice meals -->
+    <section id="food" style="display: flex; flex-direction: column; gap: 12px">
+      <h2 style="margin: 0; display: flex; align-items: center; gap: 10px; font-family: Brunson, Impact, sans-serif; font-weight: 400; font-size: 32px; line-height: 1"><span style="width: 14px; height: 14px; border-radius: 3px; background: #B5432B"></span>RICE MEALS</h2>
+      <article style="display: flex; gap: 14px; padding: 12px; background: #FFFFFF; border: 1px solid #E6DCC6; border-radius: 16px">
+        <div style="width: 76px; height: 76px; flex: none; border-radius: 12px; background: #EADBC0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #6E5F52">Photo</div>
+        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+          <div style="display: flex; justify-content: space-between; gap: 8px"><h3 style="margin: 0; font-size: 16px; font-weight: 600">Tapsilog</h3><span style="font-size: 16px; font-weight: 700; color: #8E2F1C">₱180</span></div>
+          <p style="margin: 0; font-size: 13px; line-height: 1.45; color: #5A4C42">Extra egg +₱20</p>
+        </div>
+      </article>
+    </section>
+
+    <!-- Visit us -->
+    <section aria-labelledby="visit" style="margin-top: 4px; padding: 20px; background: #1F1B19; color: #FBF6EA; border-radius: 20px; display: flex; flex-direction: column; gap: 14px">
+      <h2 id="visit" style="margin: 0; font-family: Brunson, Impact, sans-serif; font-weight: 400; font-size: 30px; line-height: 1; color: #F1E4B3">VISIT US</h2>
+      <div style="display: flex; gap: 12px; align-items: flex-start">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" style="flex: none; margin-top: 2px"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z" fill="none" stroke="#F1E4B3" stroke-width="2"></path><circle cx="12" cy="9.5" r="2.5" fill="none" stroke="#F1E4B3" stroke-width="2"></circle></svg>
+        <p style="margin: 0; font-size: 15px; line-height: 1.5">[YOUR ADDRESS], Cavite City</p>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: flex-start">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" style="flex: none; margin-top: 2px"><circle cx="12" cy="12" r="9" fill="none" stroke="#F1E4B3" stroke-width="2"></circle><path d="M12 7v5l3 2" fill="none" stroke="#F1E4B3" stroke-width="2" stroke-linecap="round"></path></svg>
+        <p style="margin: 0; font-size: 15px; line-height: 1.5">[DAYS] · [OPENING HOURS]</p>
+      </div>
+      <a href="#map" style="display: flex; align-items: center; justify-content: center; min-height: 48px; border-radius: 12px; background: #B5432B; color: #FBF6EA; font-size: 15px; font-weight: 600; text-decoration: none">Open in Maps</a>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+        <a href="#facebook" style="display: flex; align-items: center; justify-content: center; min-height: 46px; border-radius: 12px; border: 1px solid #5A4C42; color: #FBF6EA; font-size: 14px; font-weight: 600; text-decoration: none">Facebook</a>
+        <a href="#instagram" style="display: flex; align-items: center; justify-content: center; min-height: 46px; border-radius: 12px; border: 1px solid #5A4C42; color: #FBF6EA; font-size: 14px; font-weight: 600; text-decoration: none">Instagram</a>
+      </div>
+    </section>
+
+    <p style="margin: 0; text-align: center; font-size: 13px; line-height: 1.5; color: #5A4C42">Order and pay at the counter, or scan the QR code on your table.<br>Prices may change; this menu updates live.</p>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":2010}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
