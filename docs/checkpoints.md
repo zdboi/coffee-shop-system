@@ -38,6 +38,7 @@ Older working versions stay in the table below, so you can go back further if ne
 | 13 | **Release 1.3 live** | 2026-11-02 23:00 | You ran `009_release_1_3.sql` and merged pull request #4. This is now the last working version. |
 | 14 | **Release 1.4 ready** | 2026-11-09 | Wave 2 "Menu & inventory": merge ingredients, option library (Hot/Iced, take-away cup + lid, extra shot, non-dairy swap), supplied items, grams for sauces, counter waste log, expenses + net income + waste report; plus USB thermal printing on Mac (receipt, barista ticket with PAID line, QR tickets, shift report; no PDF prompts). Final test run 65 suites / 4,019 checks, 0 failing; security reviews passed. Waiting for you to publish (`docs/RELEASE_1.4.md`). |
 | 15 | **Release 1.4 live** | 2026-11-09 10:41 | You ran `010_release_1_4.sql` and merged pull request #5. This is now the last working version. |
+| 16 | **Release 1.4.1 ready** | 2026-11-09 | Shareable menu link (view-only page, live menu, highlighted item, Visit us, social preview card), Settings → Menu link; faster QR menu; anon table rights removed. Final test run 68 suites / 4,183 checks, 0 failing; security reviews passed. Waiting for you to publish (`docs/RELEASE_1.4.1.md`). |
 
 ## Look at or download a checkpoint
 
