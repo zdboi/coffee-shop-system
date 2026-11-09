@@ -9,6 +9,8 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 const PARTS = ['part0_smoke.js', 'part1_setup.js', 'part2_sales.js', 'part3_import.js', 'part4_admin.js', 'part5_import_refunds.js', 'part6_sale_lock.js'];
 const size = process.env.BO_VIEWPORT || '1280x900';
+// the parts make sales and then read "today": run all of them on one Manila day (up to ~12 min with slow parts)
+require('./lib/h').waitClearOfManilaMidnightSync(15);
 let checks = 0, failed = 0, crashed = null;
 for(const p of PARTS){
   console.log(`---- bo/${p} @ ${size}`);

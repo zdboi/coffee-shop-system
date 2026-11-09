@@ -184,3 +184,18 @@ Owner: **don't start 1.3 until I say so.**
 - **Open question:** did the owner run `011_release_1_4_1.sql` before merging? Until it is run, the menu link shows "not available".
 - **Owner (2026-11-09 23:55):** B13 and B14 move to **Wave 3 (1.5)**. Building them now is fine, but they are released together with Wave 3, not as a separate 1.4.2.
 - **Owner (2026-11-10 00:00):** ran 011 before merging #6, so 1.4.1 is live. On B13/B14: "then you can proceed if only a pull request is needed". Release them as **1.4.2** (a PR only, no DB) once tested, not with Wave 3.
+
+## B15. Partial & multiple production + TCO procurement (owner, 2026-11-10 00:11), Wave 3
+- Owner: "allow Partial & Multiple production. I need to be able to produce sauces/syrups based on what are the available amount of ingredients. If some ingredients are currently scarce, I might produce a half-production… Also, allow me to be able to procure productions from TCO (my first coffee shop branch)… TCO will produce some of our sauces using their own ingredients. Keep a 'to return' list so I will know what ingredients I need to give back to TCO."
+- **Overlap check (lead):** Back Office → Production already scales ingredients by *expected yield ÷ the recipe's normal yield*, so typing half the normal yield already makes a half batch, and double makes two batches. What's new:
+  - quick batch-size buttons (½×, 1×, 2×, custom);
+  - "how much can I make with what's in stock?" (the biggest batch the scarcest ingredient allows, with that ingredient named);
+  - producing from TCO: adds the product to stock without taking our ingredients, and records what's owed to TCO;
+  - a "To return to TCO" list, cleared when ingredients are given back (logged as stock leaving).
+- **Owner decisions (2026-11-10):**
+  - Batch size: ½×, 1× and 2× buttons, a custom size, and **"Max I can make"**, which fills in the biggest batch current stock allows and names the scarce ingredient.
+  - TCO debt: **chosen per batch**. Either the same ingredients back (worked out from the recipe) or a peso amount (valued at our ingredient costs).
+  - TCO is **just a name in our list** for now, a supplier-like contact. It doesn't join as a second shop in the app.
+
+## Team fix queued for Wave 3 (QA, 2026-11-10)
+- Counter dates stock lines and the "Today · all counters" view by the device's own clock day, not by Manila time. There's no effect while the tablet is set to Philippine time. Fix: use the shop time zone (front-office-dev, with core-sync-engineer for `todayISO`).

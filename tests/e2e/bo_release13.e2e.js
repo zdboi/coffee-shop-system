@@ -52,6 +52,7 @@ function seed(){
 }
 
 (async () => {
+  await H.waitClearOfManilaMidnight(10);   // makes sales, then reads Start fresh's "today 00:00" default: one Manila day
   const biz = seed();
   const browser = await chromium.launch();
   const errors = [];

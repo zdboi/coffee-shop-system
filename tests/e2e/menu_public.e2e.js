@@ -66,7 +66,10 @@ const ok = (c, m) => { checks++; console.log((c ? 'ok   ' : 'FAIL ') + m); if(!c
   ok(!ls.some(k => /session/.test(k)), 'no session in storage: ' + ls);
   ok(ls.includes('cccc.menu.cache.cccc'), 'menu cached');
   // tap targets
-  const small = await page.$$eval('a.chip, .visit a, .hl', a => a.filter(x => x.getBoundingClientRect().height < 44).map(x => x.textContent));
+  // 1.4.2 (lead-approved 2026-11-10): the sub-category tabs are <button role="tab" class="chip"> inside <main>
+  const tabs = await page.$$eval('main button[role="tab"].chip', a => a.length);
+  ok(tabs === 5, 'tap-target check covers the 5 sub-category tabs', tabs);
+  const small = await page.$$eval('main button[role="tab"].chip, .visit a, .hl', a => a.filter(x => x.getBoundingClientRect().height < 44).map(x => x.textContent));
   ok(small.length === 0, '44px targets ' + small);
   ok(log.errors.length === 0, 'no page errors ' + log.errors);
   // broken image -> no-photo tile
