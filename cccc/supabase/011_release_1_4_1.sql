@@ -14,13 +14,17 @@
 --                              (lower-case letters, digits and "-", 2..30)
 --        public_address, public_hours, public_map_url,
 --        public_facebook_url, public_instagram_url   the "Visit us" box
+--        menu_highlight_recipe_id, menu_highlight_label, menu_highlight_blurb
+--                              ONE highlighted item ("Today's pick") with a
+--                              short label and a short line of text
 --      The database checks every value itself (links must be https, sizes
 --      are limited), so no screen can save something broken.
 --   2. public_menu(code): the view-only menu for the link. Anyone may call it,
 --      without signing in. It returns DISPLAY data only: shop name, logo and
 --      colours, sub-category order and colours, the items shown on the QR
 --      menu (name, type, sub-category, description, photo, price, sold out)
---      with their option names and option prices, and the "Visit us" fields.
+--      with their option names and option prices, the highlighted item, and
+--      the "Visit us" fields.
 --      Never: ids, ingredients, stock amounts, costs, recipes, staff,
 --      customers or orders. A shop that is unknown OR has the link switched
 --      off gets the same answer: {"error":"NOT_FOUND"}.
@@ -49,6 +53,21 @@ alter table public.settings add column if not exists public_hours text;
 alter table public.settings add column if not exists public_map_url text;
 alter table public.settings add column if not exists public_facebook_url text;
 alter table public.settings add column if not exists public_instagram_url text;
+
+-- The highlighted item on the menu link ("Today's pick"), owner addition
+-- 2026-11-09: which menu item, a short label (empty = "Today's pick") and a
+-- short line of text under it.
+alter table public.settings add column if not exists menu_highlight_recipe_id uuid;
+alter table public.settings add column if not exists menu_highlight_label text;
+alter table public.settings add column if not exists menu_highlight_blurb text;
+-- If the item is deleted, the highlight is simply cleared.
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'settings_menu_highlight_fk') then
+    alter table public.settings add constraint settings_menu_highlight_fk
+      foreign key (menu_highlight_recipe_id) references public.recipes(id) on delete set null;
+  end if;
+end $$;
 
 -- No two shops may have the same code (empty codes are allowed for many shops).
 -- This index also makes public_menu's look-up by code instant.
@@ -95,6 +114,12 @@ $$;
 --   BAD_MAP_URL          map link isn't an https link
 --   BAD_FACEBOOK_URL     not an https link to facebook.com / fb.com / fb.me
 --   BAD_INSTAGRAM_URL    not an https link to instagram.com
+--   BAD_HIGHLIGHT        the highlighted item isn't one of this shop's items,
+--                        or (when it is newly picked) isn't active and shown on QR
+--   BAD_HIGHLIGHT_LABEL  label longer than 30 characters
+--   BAD_HIGHLIGHT_BLURB  text longer than 140 characters
+-- (In the highlight label / text, invisible control characters and line
+-- breaks are turned into spaces first.)
 create or replace function public._settings_check() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
@@ -133,6 +158,26 @@ begin
   end if;
   if not public._valid_public_url(new.public_instagram_url, array['instagram.com','www.instagram.com']) then
     raise exception 'BAD_INSTAGRAM_URL';
+  end if;
+
+  -- 011: the highlighted item
+  new.menu_highlight_label := nullif(btrim(regexp_replace(new.menu_highlight_label, '[\x01-\x1F\x7F]', ' ', 'g')), '');
+  new.menu_highlight_blurb := nullif(btrim(regexp_replace(new.menu_highlight_blurb, '[\x01-\x1F\x7F]', ' ', 'g')), '');
+  if length(new.menu_highlight_label) > 30 then raise exception 'BAD_HIGHLIGHT_LABEL'; end if;
+  if length(new.menu_highlight_blurb) > 140 then raise exception 'BAD_HIGHLIGHT_BLURB'; end if;
+  if new.menu_highlight_recipe_id is not null then
+    -- always: the item must be this shop's
+    if not exists (select 1 from public.recipes where id = new.menu_highlight_recipe_id and business_id = new.business_id) then
+      raise exception 'BAD_HIGHLIGHT';
+    end if;
+    -- only when the owner picks it (so a later settings save still works after
+    -- the item was hidden; the menu link then simply shows no highlight)
+    if (tg_op = 'INSERT' or old.menu_highlight_recipe_id is distinct from new.menu_highlight_recipe_id)
+       and not exists (select 1 from public.recipes where id = new.menu_highlight_recipe_id
+                         and coalesce(active, true) and coalesce(pos_visible, true) and coalesce(qr_visible, true)
+                         and coalesce(selling_price, 0) > 0) then
+      raise exception 'BAD_HIGHLIGHT';
+    end if;
   end if;
   return new;
 end $$;
@@ -205,6 +250,7 @@ $$;
 create or replace function public.public_menu(p_shop text) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare v_code text; v_s public.settings%rowtype; v_name text; v_hide boolean;
+  v_items jsonb; v_hl jsonb;
 begin
   -- 1. find the shop; a bad, unknown or switched-off code all get the same answer
   v_code := lower(btrim(coalesce(left(p_shop, 64), '')));
@@ -214,7 +260,41 @@ begin
   select coalesce(nullif(btrim(v_s.business_name), ''), b.name) into v_name from public.businesses b where b.id = v_s.business_id;
   v_hide := coalesce(v_s.qr_hide_out_of_stock, false);
 
-  -- 2. the answer (display data only)
+  -- 2. the items (at most 300), each worked out once; "idx" = its place in
+  --    the list (0 = first), used by the highlight to point at it
+  with r as (
+    select r0.*, (row_number() over (order by r0.sort_order nulls last, r0.name, r0.id) - 1)::int as idx
+    from public.recipes r0
+    where r0.business_id = v_s.business_id and coalesce(r0.active, true) and coalesce(r0.pos_visible, true)
+      and coalesce(r0.qr_visible, true) and coalesce(r0.selling_price, 0) > 0
+    order by idx
+    limit 300
+  ), x as (
+    select r.idx, r.id, jsonb_build_object(
+        'name', left(r.name, 80),
+        'recipe_type', coalesce(r.recipe_type, 'DRINKS'),
+        'subcategory', left(nullif(btrim(r.category), ''), 40),
+        'category', left(coalesce(nullif(btrim(r.category), ''), public._type_label(r.recipe_type)), 40),
+        'description', left(nullif(btrim(r.description), ''), 300),
+        'image_url', public._public_image_url(r.image_url),
+        'price', round(r.selling_price, 2),
+        'sold_out', coalesce(r.sold_out, false) or (v_hide and not public._recipe_makeable(r.id)),
+        'options', public._public_menu_options(r.modifier_groups)) as j
+    from r
+  )
+  select coalesce(jsonb_agg(x.j order by x.idx), '[]'::jsonb),
+         -- 3. the highlighted item: only when it is one of the items above
+         --    (so a hidden / inactive / deleted item is never shown); a sold-out
+         --    one is still returned with sold_out = true
+         (select jsonb_build_object('item_index', h.idx, 'name', h.j->'name', 'image_url', h.j->'image_url',
+                   'price', h.j->'price', 'sold_out', h.j->'sold_out',
+                   'label', coalesce(v_s.menu_highlight_label, 'Today''s pick'),
+                   'blurb', v_s.menu_highlight_blurb)
+          from x h where h.id = v_s.menu_highlight_recipe_id)
+    into v_items, v_hl
+  from x;
+
+  -- 4. the answer (display data only)
   return jsonb_build_object(
     'shop', jsonb_build_object('code', v_s.public_code, 'name', left(v_name, 80),
                                'logo_url', public._public_image_url(v_s.logo_url)),
@@ -228,23 +308,8 @@ begin
       'service_charge_pct', coalesce(v_s.service_charge_pct, 0), 'tax_inclusive', coalesce(v_s.tax_inclusive, false)),
     'subcategory_order', coalesce(v_s.subcategory_order, '[]'::jsonb),
     'subcategory_colors', coalesce(v_s.subcategory_colors, '{}'::jsonb),
-    'items', coalesce((
-      select jsonb_agg(jsonb_build_object(
-          'name', left(r.name, 80),
-          'recipe_type', coalesce(r.recipe_type, 'DRINKS'),
-          'subcategory', left(nullif(btrim(r.category), ''), 40),
-          'category', left(coalesce(nullif(btrim(r.category), ''), public._type_label(r.recipe_type)), 40),
-          'description', left(nullif(btrim(r.description), ''), 300),
-          'image_url', public._public_image_url(r.image_url),
-          'price', round(r.selling_price, 2),
-          'sold_out', coalesce(r.sold_out, false) or (v_hide and not public._recipe_makeable(r.id)),
-          'options', public._public_menu_options(r.modifier_groups)
-        ) order by r.sort_order nulls last, r.name)
-      from (select * from public.recipes r0
-            where r0.business_id = v_s.business_id and coalesce(r0.active, true) and coalesce(r0.pos_visible, true)
-              and coalesce(r0.qr_visible, true) and coalesce(r0.selling_price, 0) > 0
-            order by r0.sort_order nulls last, r0.name
-            limit 300) r), '[]'::jsonb)
+    'highlight', coalesce(v_hl, 'null'::jsonb),
+    'items', v_items
   );
 end $$;
 
