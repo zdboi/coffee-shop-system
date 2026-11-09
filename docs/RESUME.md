@@ -20,7 +20,8 @@ Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"
 - **QA:** `tests/run_all.sh --runs 2` passes 69/71 suites (4,295 checks). The 2 failures were one counter defect (D1), since fixed and re-tested. The money, stock, cash and brand-FIFO reconciliation (`tests/e2e/money12.e2e.js`) matches to the centavo. **Final run on the finished code (2026-11-02, `run_all.sh --runs 1`): 47 suites, 3,007 checks, 0 failing.**
 - **Security:** 008 passed two review rounds (all findings fixed). The 1.2 screens review found 4 low items, all fixed.
 
-## Now: release 1.4 is LIVE (PR #5 merged 2026-11-09 10:41; 651e706 = last working version, checkpoint 15; next DB script 011). Wave 3 (1.5) is NOT started: the owner said "do not start wave 3 yet". Its items: Q1–Q5 plus B6–B9 in owner-feedback.md.
+## Now: release 1.4 is LIVE (PR #5 merged 2026-11-09 10:41; 651e706 = last working version, checkpoint 15; next DB script 011).
+- **Lead to-do:** in the project changelog `claude/developer-changelog.md`, mark row 1.4 as live (2026-11-09, 010 run) and set "Database scripts: 004–010 run on live". Wave 3 (1.5) is NOT started: the owner said "do not start wave 3 yet". Its items: Q1–Q5 plus B6–B9 in owner-feedback.md.
 
 ### Release 1.4 (done; was waiting for the owner to publish (`docs/RELEASE_1.4.md`: backup → run 010 → merge PR → reload → photo-limit check → connect USB printer → set up)
 - **Contents:**
