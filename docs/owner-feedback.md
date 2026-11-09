@@ -171,3 +171,7 @@ Owner: **don't start 1.3 until I say so.**
     - Menu link only (not the QR order page) unless the owner asks.
 - **B11 (owner, 2026-11-09 19:24):** "put [the highlighted product] on the QR ordering page too, but in the Wave 3 update."
   - Wave 3 (1.5) shows the same highlighted item (set in Settings → Menu link) at the top of the QR order page, so customers can tap it to order.
+- **B12 (owner, 2026-11-09 23:46), for Wave 3:**
+  - **QR table cards:** remove "Bienvenido na Kapihan!" from the printed cards. The stamp card's "Bienvenido!" was not mentioned, so it stays.
+  - **Non-dairy swap wording on the QR page:** replace "In place of the usual" with a prompt, "Lactose intolerant? Have this instead", followed by the non-dairy swap options that are available right now (in stock, not sold out).
+  - Lead note: availability per swap option may need `get_qr_menu` to say whether each swap's milk is in stock (display flag only, no amounts).
