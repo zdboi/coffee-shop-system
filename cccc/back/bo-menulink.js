@@ -130,6 +130,8 @@ function menuLinkHtml(){
         </div>
         <div class="hint">Put it on Facebook, Instagram, Messenger or a printed card.${m.menu_public ? '' : ' Switch the link on and save before you share it.'}</div></div>
 
+      ${menuQrBlockHtml(m)}
+
       <div class="ml-preview">
         <div class="ml-preview-title">How the link looks when shared</div>
         <div class="ml-og">
@@ -246,6 +248,7 @@ function wireMenuLink(root){
     $('ml-status').textContent = now === saved ? (saved ? 'On: anyone with the link can see your menu.' : 'Off: the link shows "menu not found".')
       : (now ? 'Will be on after you press "Save menu link".' : 'Will be off after you press "Save menu link".');
   };
+  wireMenuQr(root, m);
   $('ml-copy').onclick = () => menuCopyLink($('ml-link'));
   $('ml-open').onclick = () => { const u = $('ml-link').value; if(u) window.open(u, '_blank', 'noopener'); };
 
