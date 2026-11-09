@@ -129,8 +129,8 @@ set role anon;
 select public.public_menu('cccc') as m \gset
 select test.chk(:'m'::jsonb ? 'items', 'anon gets the menu');
 select test.chk(public.public_menu('CCCC ') = :'m'::jsonb, 'code is case / space insensitive');
-select test.chk(test.err('select count(*) from public.settings') like '%permission denied%' or (select count(*) from public.settings) = 0, 'anon reads no settings directly');
-select test.chk(test.err('select count(*) from public.recipes') like '%permission denied%' or (select count(*) from public.recipes) = 0, 'anon reads no recipes directly');
+select test.chk(test.err('select count(*) from public.settings') like '%permission denied%', 'anon reads no settings directly');
+select test.chk(test.err('select count(*) from public.recipes') like '%permission denied%', 'anon reads no recipes directly');
 select test.chk(test.err($$select public._public_menu_options('[]')$$) like '%permission denied%', 'anon can''t call the helpers');
 select test.chk(test.err($$select public._settings_check()$$) like '%permission denied%' or test.err($$select public._settings_check()$$) like '%trigger%', 'anon can''t call the settings check');
 
@@ -142,7 +142,7 @@ select test.chk(not exists (
     '.visit','.visit.address','.visit.hours','.visit.map_url','.visit.facebook_url','.visit.instagram_url',
     '.pricing','.pricing.tax_pct','.pricing.service_charge_pct','.pricing.tax_inclusive',
     '.subcategory_order','.subcategory_order[]','.subcategory_colors',
-    '.highlight','.highlight.item_index','.highlight.name','.highlight.image_url','.highlight.price','.highlight.sold_out','.highlight.label','.highlight.blurb',
+    '.truncated','.highlight','.highlight.item_index','.highlight.name','.highlight.image_url','.highlight.price','.highlight.sold_out','.highlight.label','.highlight.blurb',
     '.items','.items[]','.items[].name','.items[].recipe_type','.items[].subcategory','.items[].category','.items[].description',
     '.items[].image_url','.items[].price','.items[].sold_out','.items[].options','.items[].options[]',
     '.items[].options[].name','.items[].options[].required','.items[].options[].multi','.items[].options[].options',
@@ -241,3 +241,60 @@ select test.chk(public.public_menu('cccc')->'highlight' = 'null'::jsonb, 'hidden
 reset role;
 delete from recipes where id = 'c3000000-0000-0000-0000-000000000001';
 select test.chk((select menu_highlight_recipe_id is null from settings where business_id = :'biz'), 'deleted item clears the highlight');
+
+-- ===== 5. security review fixes =====
+select test.login('00000000-0000-0000-0000-0000000000a1');
+set role authenticated;
+select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"settings","row":{"public_map_url":"https://maps.goo.gl/café"}}]')$$) like '%BAD_MAP_URL%', 'LOW4: non-ASCII link -> BAD_MAP_URL');
+select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"settings","row":{"public_facebook_url":"https://facebоok.com/x"}}]')$$) like '%BAD_FACEBOOK_URL%', 'LOW4: look-alike letter in host -> BAD_FACEBOOK_URL');
+select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"settings","row":{"public_hours":"Mon-Fri 7-9\r\nSat 8-10\rSun closed"}}]')$$) = 'NO ERROR', 'LOW5: Windows line breaks accepted');
+select test.chk((select public_hours from settings where business_id = :'biz') = E'Mon-Fri 7-9\nSat 8-10\nSun closed', 'LOW5: line breaks normalised');
+reset role;
+-- LOW 6: two shops racing for one code -> the trigger waits (advisory lock); simulated: the code check
+select test.chk(position('pg_advisory_xact_lock' in prosrc) > 0, 'LOW6: code change takes the per-code lock') from pg_proc where proname = '_settings_check';
+-- MEDIUM 3: rights
+select test.chk(not exists (select 1 from information_schema.role_table_grants where grantee = 'anon' and table_schema = 'public'), 'MED3: anon has no table rights in public',
+  (select string_agg(distinct table_name, ',') from information_schema.role_table_grants where grantee = 'anon' and table_schema = 'public'));
+select test.chk(not exists (select 1 from information_schema.role_table_grants where grantee = 'authenticated' and table_schema = 'public' and privilege_type in ('TRUNCATE','REFERENCES','TRIGGER')), 'MED3: authenticated has no TRUNCATE/REFERENCES/TRIGGER');
+select test.chk(has_table_privilege('authenticated', 'public.settings', 'select') and has_table_privilege('authenticated', 'public.recipes', 'insert'), 'MED3: authenticated keeps select / insert');
+create table public.zz_new_table (id int); 
+select test.chk(not has_table_privilege('anon', 'public.zz_new_table', 'select'), 'MED3: a table made later gives anon nothing');
+drop table public.zz_new_table;
+set role anon;
+select test.chk(test.err('select count(*) from public.settings') like '%permission denied%', 'MED3: anon reading settings -> permission denied');
+select test.chk(public.public_menu('cccc') ? 'items' or public.public_menu('cccc') = '{"error":"NOT_FOUND"}'::jsonb, 'MED3: public_menu still runs for anon');
+reset role;
+-- MEDIUM 2: colours and size budget
+update settings set menu_public = true, primary_color = 'red;background:url(x)', accent_color = '#C17A3D' where business_id = :'biz';
+set role anon;
+select test.chk((public.public_menu('cccc')->'theme'->>'primary_color') is null and (public.public_menu('cccc')->'theme'->>'accent_color') = '#C17A3D', 'MED2: only #RRGGBB colours');
+select test.chk((public.public_menu('cccc')->>'truncated')::boolean = false, 'MED2: small menu not truncated');
+reset role;
+insert into recipes (id, business_id, name, recipe_type, selling_price, sort_order, modifier_groups)
+select gen_random_uuid(), :'biz', 'Big ' || lpad(n::text, 2, '0'), 'FOOD', 10, 50,
+  (select jsonb_agg(jsonb_build_object('id', 'g' || g, 'name', 'G' || g, 'options',
+     (select jsonb_agg(jsonb_build_object('id', 'o' || o, 'label', 'O' || o, 'price_delta', 1)) from generate_series(1, 25) o))) from generate_series(1, 12) g)
+from generate_series(1, 15) n;
+set role anon;
+select public.public_menu('cccc') as big \gset
+select test.chk((select max(jsonb_array_length(i->'options')) from jsonb_array_elements(:'big'::jsonb->'items') i) = 10
+  and (select max(jsonb_array_length(g->'options')) from jsonb_array_elements(:'big'::jsonb->'items') i, jsonb_array_elements(i->'options') g) = 20, 'MED2: at most 10 groups x 20 options per item');
+select test.chk((select count(*) from jsonb_array_elements(:'big'::jsonb->'items') i, jsonb_array_elements(i->'options') g, jsonb_array_elements(g->'options') o) <= 2000
+  and (:'big'::jsonb->>'truncated')::boolean and length(:'big') < 600000, 'MED2: total options <= 2000, truncated = true',
+  (select count(*) from jsonb_array_elements(:'big'::jsonb->'items') i, jsonb_array_elements(i->'options') g, jsonb_array_elements(g->'options') o)::text);
+reset role;
+delete from recipes where name like 'Big %';
+-- HIGH 1: get_qr_menu gives the same answer as 009's version (open shop, hide option on and off)
+\ir 41a_old_get_qr_menu.sql
+insert into shifts (business_id, status, opened_at) values (:'biz', 'ACTIVE', now());
+update recipes set sold_out = true where name = 'Banana bread';
+select qr_token as tok from dining_tables where business_id = :'biz' and active limit 1 \gset
+select test.chk(public.get_qr_menu(:'tok') = test.old_get_qr_menu(:'tok') and jsonb_array_length(public.get_qr_menu(:'tok')->'items') > 0, 'HIGH1: get_qr_menu same as 009 (hide off)');
+update settings set qr_hide_out_of_stock = true where business_id = :'biz';
+insert into recipes (id, business_id, name, recipe_type, selling_price) values ('c3000000-0000-0000-0000-0000000000a1', :'biz', 'Flour cake', 'PASTRY', 60);
+insert into recipe_ingredients (id, business_id, recipe_id, ingredient_id, quantity, unit) values (gen_random_uuid(), :'biz', 'c3000000-0000-0000-0000-0000000000a1', 'c1000000-0000-0000-0000-000000000014', 50, 'g');
+select test.chk(public.get_qr_menu(:'tok') = test.old_get_qr_menu(:'tok'), 'HIGH1: get_qr_menu same as 009 (hide on)');
+select test.chk((select not (i->>'available')::boolean from jsonb_array_elements(public.get_qr_menu(:'tok')->'items') i where i->>'name' = 'Flour cake'), 'HIGH1: no-stock item unavailable (hide on)');
+set role anon;
+select test.chk((select (i->>'sold_out')::boolean from jsonb_array_elements(public.public_menu('cccc')->'items') i where i->>'name' = 'Flour cake'), 'HIGH1: public_menu agrees (sold out)');
+reset role;
