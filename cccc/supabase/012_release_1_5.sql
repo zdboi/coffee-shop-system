@@ -16,8 +16,12 @@
 --            unique per shop ignoring upper / lower case).
 --     Q3     At most 4 open (unpaid) tickets per table (was 10 waiting).
 --     Q4     One guest with an open ticket per table at a time.
+--            (Q3 and Q4 do NOT apply to the "Takeaway / Counter" QR code:
+--            owner decision 2026-11-10.)
 --     Q5     One phone per account: signing out / switching on a phone with
---            unpaid orders needs a "Yes", which cancels those orders here.
+--            unpaid orders needs a "Yes", which cancels only the orders still
+--            WAITING (not yet being made). Orders being made or ready stay
+--            and are paid at the counter (owner decision 2026-11-10).
 --     B6     Customers without a phone number are "archived": the counter's list
 --            hides them unless asked for the archived ones.
 --   PART B  COUNTER & STOCK
@@ -228,6 +232,9 @@ create trigger customers_username before insert or update on public.customers
 --   table_open_orders  4   open (not paid, not finished / declined / cancelled)
 --                          tickets at ONE table (Q3; was 10 waiting)
 --   table_guests       1   guests with an open ticket at one table (Q4)
+--   (The two table limits are for real tables only. The "Takeaway / Counter"
+--   QR code, kind TAKEAWAY, is shared by everyone in the queue, so it has
+--   neither: owner decision 2026-11-10.)
 --   shop_orders_10min 60   new QR orders for the whole shop in 10 minutes
 --   shop_signups_hour 40   new QR sign-ups for the whole shop in 1 hour
 -- (Per login, unchanged: 3 open orders, 10 orders per hour.)
@@ -316,8 +323,12 @@ end $$;
 --     (qr_switch_account): SIGN_OUT_FIRST (answered before any number is
 --     looked at, so it says nothing about numbers);
 --   * one phone per account: linking the account here removes its link on
---     any other phone (that phone becomes a guest; its unpaid orders stay
---     payable at the counter).
+--     any other phone (that phone becomes a guest). Nobody on that phone
+--     said "Yes", so NONE of its orders are cancelled (owner decision
+--     2026-11-10: a switch never cancels more than the waiting orders, and
+--     only after a "Yes"): waiting, being made or ready, they all stay and
+--     are paid at the counter as usual (usually it is the same person who
+--     simply moved to a new phone).
 -- Everything else as 004 (5 wrong tries per 15 minutes, shared with
 -- qr_register / qr_set_phone; NO_MATCH never says which part was wrong).
 create or replace function public.qr_relink(p_token text, p_phone text, p_nickname text) returns jsonb
@@ -347,42 +358,57 @@ begin
   return jsonb_build_object('customer', public._qr_customer_json(v_c), 'relinked', true);
 end $$;
 
--- A8. Sign out / switch account on this phone (Q5).
--- When this phone has unpaid open orders (waiting, being made or ready, not
--- paid) at this shop:
---   p_confirm false -> {error:'UNPAID_ORDERS', unpaid: n} and NOTHING changes
---                      (the page asks "You still have unpaid orders. Do you
---                      still want to proceed?")
---   p_confirm true  -> those orders are CANCELLED here (the counter sees them
---                      cancelled), then the phone is signed out.
--- Returns {ok:true, cancelled:n}. A phone with no account just gets ok.
+-- A8. Sign out / switch account on this phone (Q5, owner decision 2026-11-10).
+-- "Unpaid open orders" = this phone's orders at this shop with status
+-- PENDING, PREPARING or READY and not paid. Of those:
+--   WAITING      = PENDING (the counter has not started it)  -> cancelled
+--   IN PROGRESS  = PREPARING (being made) or READY           -> stay; still
+--                  paid at the counter as usual
+-- When there are unpaid open orders:
+--   p_confirm false -> {error:'UNPAID_ORDERS', unpaid: n, waiting: w,
+--                      in_progress: k} and NOTHING changes (the page asks
+--                      "You still have unpaid orders. Do you still want to
+--                      proceed?" and can say what will happen to them)
+--   p_confirm true  -> the WAITING ones become CANCELLED here (the counter
+--                      sees them cancelled), the others are left alone, then
+--                      the phone is signed out.
+-- Returns {ok:true, cancelled:w, kept:k}. A phone that is not signed in to
+-- an account (a guest) has nothing to sign out of: {ok:true, cancelled:0,
+-- kept:0} and its orders are not touched.
+-- Orders are locked first, so an order the counter accepts at the same moment
+-- is either cancelled before it is accepted or kept (never both).
 create or replace function public.qr_switch_account(p_token text, p_confirm boolean default false) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
-declare v_uid uuid := auth.uid(); v_t public.dining_tables; v_n integer; v_ids uuid[];
+declare v_uid uuid := auth.uid(); v_t public.dining_tables; v_n integer; v_wait integer; v_ids uuid[];
 begin
   v_t := public._qr_table(p_token);
   if v_t.id is null then return jsonb_build_object('error', 'TABLE_NOT_FOUND'); end if;
   if v_uid is null then return jsonb_build_object('error', 'NOT_SIGNED_IN'); end if;
-  select coalesce(array_agg(x.id), '{}') into v_ids from (
-    select o.id from public.qr_orders o
+  if not exists (select 1 from public.customer_devices where auth_user_id = v_uid and business_id = v_t.business_id) then
+    return jsonb_build_object('ok', true, 'cancelled', 0, 'kept', 0);
+  end if;
+  -- lock this phone's unpaid open orders (so their status can't change under us)
+  select coalesce(array_agg(x.id), '{}'), count(*), count(*) filter (where x.status = 'PENDING') into v_ids, v_n, v_wait from (
+    select o.id, o.status from public.qr_orders o
     where o.auth_user_id = v_uid and o.business_id = v_t.business_id
       and o.status in ('PENDING','PREPARING','READY') and o.paid_at is null
     for update) x;
-  v_n := cardinality(v_ids);
   if v_n > 0 and not coalesce(p_confirm, false) then
-    return jsonb_build_object('error', 'UNPAID_ORDERS', 'unpaid', v_n);
+    return jsonb_build_object('error', 'UNPAID_ORDERS', 'unpaid', v_n, 'waiting', v_wait, 'in_progress', v_n - v_wait);
   end if;
+  v_wait := 0;
   if v_n > 0 then
     update public.qr_orders set status = 'CANCELLED', reject_reason = 'Cancelled by the customer (account switched on the phone)'
-      where id = any(v_ids) and paid_at is null;
-    get diagnostics v_n = row_count;
+      where id = any(v_ids) and status = 'PENDING' and paid_at is null;
+    get diagnostics v_wait = row_count;
   end if;
   delete from public.customer_devices where auth_user_id = v_uid and business_id = v_t.business_id;
-  return jsonb_build_object('ok', true, 'cancelled', v_n);
+  return jsonb_build_object('ok', true, 'cancelled', v_wait, 'kept', v_n - v_wait);
 end $$;
 
 -- "Not you?" (004) now goes through the same check: with unpaid orders it
--- answers UNPAID_ORDERS (use qr_switch_account(token, true) after the "Yes").
+-- answers UNPAID_ORDERS (use qr_switch_account(token, true) after the "Yes",
+-- which cancels only the WAITING ones, as above).
 create or replace function public.qr_forget_device(p_token text) returns jsonb
 language sql volatile security definer set search_path = public as $$
   select public.qr_switch_account(p_token, false)
@@ -396,6 +422,9 @@ $$;
 --   * Q3: at most 4 open unpaid tickets per table -> TABLE_FULL
 --   * Q4: a guest at a table where ANOTHER guest has an open unpaid ticket
 --     -> GUEST_TABLE_BUSY (register, or wait until that ticket is paid)
+--   * Q3 and Q4 are skipped for the "Takeaway / Counter" code (kind TAKEAWAY);
+--     the per-phone limits (3 unpaid, 10 per hour) and the shop limit
+--     (60 per 10 minutes) still apply there.
 -- (The old 4-argument version is removed so the API never has to choose.)
 drop function if exists public.qr_place_order(text, jsonb, text, text);
 create or replace function public.qr_place_order(p_token text, p_items jsonb, p_note text default null,
@@ -432,12 +461,15 @@ begin
   -- Table and shop limits. Orders of one shop are placed one at a time
   -- (advisory lock), so two phones at the same moment can't both slip past a limit.
   perform pg_advisory_xact_lock(hashtext('cccc.qr_order:' || v_t.business_id::text));
-  -- 012 (Q3): open, unpaid tickets at this table
-  select count(*) into v_count from public.qr_orders
-    where table_id = v_t.id and status in ('PENDING','PREPARING','READY') and paid_at is null;
-  if v_count >= (public._qr_limits()->>'table_open_orders')::int then return jsonb_build_object('error', 'TABLE_FULL'); end if;
-  -- 012 (Q4): one guest with an open ticket per table
-  if v_guest then
+  -- 012 (Q3): open, unpaid tickets at this table (real tables only, not
+  -- the "Takeaway / Counter" code)
+  if coalesce(v_t.kind, 'DINE_IN') <> 'TAKEAWAY' then
+    select count(*) into v_count from public.qr_orders
+      where table_id = v_t.id and status in ('PENDING','PREPARING','READY') and paid_at is null;
+    if v_count >= (public._qr_limits()->>'table_open_orders')::int then return jsonb_build_object('error', 'TABLE_FULL'); end if;
+  end if;
+  -- 012 (Q4): one guest with an open ticket per table (real tables only)
+  if v_guest and coalesce(v_t.kind, 'DINE_IN') <> 'TAKEAWAY' then
     select count(distinct auth_user_id) into v_count from public.qr_orders
       where table_id = v_t.id and is_guest and auth_user_id is distinct from v_uid
         and status in ('PENDING','PREPARING','READY') and paid_at is null;

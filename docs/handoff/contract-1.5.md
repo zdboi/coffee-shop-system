@@ -28,10 +28,10 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 - Answer unchanged (`{order}` through `_qr_order_public`), order adds **`is_guest`** (boolean). Guest order: `customer_id` null, `customer_nickname` null.
 - Checks, in this order (all inside the shop lock):
   1. per phone: 3 open unpaid → `TOO_MANY_OPEN_ORDERS`; 10 per hour → `TOO_MANY_ORDERS` (unchanged);
-  2. **Q3** table: open unpaid tickets (`PENDING`/`PREPARING`/`READY`, `paid_at` null) at this table ≥ **4** → **`TABLE_FULL`** (was: 10 waiting → `TOO_MANY_ORDERS`). Accepted-but-unpaid tickets count; a paid one frees a place.
-  3. **Q4** guests only: another phone already has an open unpaid **guest** ticket at this table → **`GUEST_TABLE_BUSY`** ("Register, or wait until that order is paid"). Registered customers are not limited by this.
+  2. **Q3** table (real tables only, not "Takeaway / Counter"): open unpaid tickets (`PENDING`/`PREPARING`/`READY`, `paid_at` null) at this table ≥ **4** → **`TABLE_FULL`** (was: 10 waiting → `TOO_MANY_ORDERS`). Accepted-but-unpaid tickets count; a paid one frees a place.
+  3. **Q4** guests only, real tables only: another phone already has an open unpaid **guest** ticket at this table → **`GUEST_TABLE_BUSY`** ("Register, or wait until that order is paid"). Registered customers are not limited by this.
   4. shop: 60 orders / 10 min → `TOO_MANY_ORDERS` (unchanged).
-- Limits live in `_qr_limits()`: `table_open_orders 4`, `table_guests 1`. **They apply to every table, including "Takeaway / Counter"** (see open decision 1).
+- Limits live in `_qr_limits()`: `table_open_orders 4`, `table_guests 1`. **They apply to real tables only.** The "Takeaway / Counter" code (`dining_tables.kind = 'TAKEAWAY'`) never gets `TABLE_FULL` or `GUEST_TABLE_BUSY` (decision D1); the per-phone limits (3 unpaid → `TOO_MANY_OPEN_ORDERS`, 10 per hour → `TOO_MANY_ORDERS`) and the shop limit (60 per 10 min → `TOO_MANY_ORDERS`) still apply there.
 - `qr_orders.is_guest` is readable by counters (table read + `fo_bootstrap.qr_orders`). Counter shows "Guest" when `is_guest`.
 
 ### A3. Usernames (Q2)
@@ -43,13 +43,22 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 - Apps must not copy usernames into free text (notes, audit details): "delete customer data" only blanks nicknames in free text.
 
 ### A4. One phone per account + switching (Q5)
+**Order status words used here** (`qr_orders.status`, unpaid = `paid_at` null):
+| Status | Meaning | On "switch account" / "Not you?" after "Yes" |
+|---|---|---|
+| `PENDING` | waiting (the counter has not accepted it) | **cancelled** (`CANCELLED`) |
+| `PREPARING` | being made (accepted) | **stays**, still paid at the counter |
+| `READY` | ready to collect | **stays**, still paid at the counter |
+| `COMPLETED` / `REJECTED` / `CANCELLED`, or already paid | finished | not counted, not touched |
+
 - **`qr_switch_account(p_token text, p_confirm boolean default false)`** (signed-in QR customers only):
-  - unpaid open orders of this phone at this shop (`PENDING`/`PREPARING`/`READY`, not paid) and `p_confirm` false → `{error:'UNPAID_ORDERS', unpaid: n}`, **nothing changes**. Show "You still have unpaid orders. Do you still want to proceed?".
-  - "Yes" → call again with `p_confirm:true` → those orders become `CANCELLED` (`reject_reason` "Cancelled by the customer (account switched on the phone)"), the phone is signed out → `{ok:true, cancelled:n}`.
-  - no unpaid orders → `{ok:true, cancelled:0}` straight away.
-- **`qr_forget_device(p_token)`** ("Not you?") = `qr_switch_account(p_token, false)`; the 1.5 page should call `qr_switch_account` directly.
-- **`qr_relink`** changes: a phone that is already signed in → **`SIGN_OUT_FIRST`** (sign out with `qr_switch_account` first; answered before any number is looked at). On success the account's link on any **other** phone is removed (one phone per account; that phone becomes a guest, its unpaid orders stay payable at the counter). Rate limit / `NO_MATCH` unchanged.
-- Counter: orders cancelled this way arrive as `CANCELLED` through the normal `updated_at` polling, including ones already `PREPARING`/`READY` (see open decision 2).
+  - phone has unpaid `PENDING`/`PREPARING`/`READY` orders at this shop and `p_confirm` false → `{error:'UNPAID_ORDERS', unpaid: n, waiting: w, in_progress: k}` (n = w + k; w = `PENDING`, k = `PREPARING` + `READY`), **nothing changes**. Show "You still have unpaid orders. Do you still want to proceed?" and, when w > 0, that waiting orders will be cancelled; when k > 0, that orders being made can still be paid at the counter.
+  - "Yes" → call again with `p_confirm:true` → only the **`PENDING`** ones become `CANCELLED` (`reject_reason` "Cancelled by the customer (account switched on the phone)"); `PREPARING`/`READY` stay as they are; the phone is signed out → `{ok:true, cancelled: w, kept: k}`. (Orders are locked first: one the counter accepts at the same moment is either cancelled before the accept or kept.)
+  - no unpaid orders → `{ok:true, cancelled:0, kept:0}` straight away.
+  - a phone with no account (guest) → `{ok:true, cancelled:0, kept:0}`; its guest orders are not touched.
+- **`qr_forget_device(p_token)`** ("Not you?") = `qr_switch_account(p_token, false)` (same rule); the 1.5 page should call `qr_switch_account` directly.
+- **`qr_relink`** changes: a phone that is already signed in → **`SIGN_OUT_FIRST`** (sign out with `qr_switch_account` first; answered before any number is looked at). On success the account's link on any **other** phone is removed (one phone per account, decision D3; that phone becomes a guest). **None of that phone's orders are cancelled** (nobody there said "Yes"; usually it is the same person on a new phone): waiting, being made or ready, they stay and are paid at the counter. Answer unchanged (`{customer, relinked:true}`); rate limit / `NO_MATCH` unchanged.
+- Counter: orders cancelled this way arrive as `CANCELLED` through the normal `updated_at` polling (only ever ones that were `PENDING`, so nothing the barista already started).
 - Honest limit (unchanged): clearing browser data / private browsing = a new phone (a new guest).
 
 ### A5. Archived customers (B6)
@@ -175,8 +184,15 @@ INGREDIENTS rows: one per ingredient still owed, amounts in stock units. PESOS r
 - New tables: RLS on; `anon` nothing; counters read none of them; no API writes except `rnd_projects` (owner). `apply_changes` adds only `rnd_projects`.
 - QA's F10 allow-list (suite 33) must add: `qr_set_username, qr_switch_account, log_rnd_usage, delete_rnd_usage, revise_stock_count, partner_batch_preview, produce_partner_batch, partner_return, partner_pay`.
 
+## Decisions (owner, 2026-11-10)
+- **D1** "Takeaway / Counter" QR code is exempt from the per-table limits (4 open tickets, 1 guest). Per-phone and per-shop limits still apply. Real tables keep both (A2).
+- **D2** Switching account / "Not you?" cancels only orders still waiting (`PENDING`); `PREPARING` / `READY` stay and are paid at the counter (A4 table). `qr_relink` cancels nothing on the phone it signs out.
+- **D3** Signing in on a new phone (`qr_relink`) signs the old phone out (one phone per account).
+- **D4** No undo for a partner batch with a debt (`PARTNER_BATCH_HAS_DEBT`; settle it with returns / payments).
+- **D5** Stock counts and partner debts can't be restored by a backup import (they are written only by their own functions, never by `apply_changes`).
+
 ## Old apps (1.4) against 012
-- QR 1.4 page: works; never sends `p_guest`, so unregistered phones still get `REGISTER_FIRST`. "Not you?" with unpaid orders now gets `UNPAID_ORDERS` (the old page ignores it; the phone stays signed in). The table limit is now 4 unpaid tickets (`TABLE_FULL`, shown as a generic error).
+- QR 1.4 page: works; never sends `p_guest`, so unregistered phones still get `REGISTER_FIRST`. "Not you?" with unpaid orders now gets `UNPAID_ORDERS` (the old page ignores it; the phone stays signed in). The table limit is now 4 unpaid tickets on real tables (`TABLE_FULL`, shown as a generic error); none at "Takeaway / Counter".
 - Counter 1.4: works until an item is ticked "Count at closing" (then Close shift → `COUNT_REQUIRED`).
 - Back Office 1.4: works; customers lists still show archived customers until the 1.5 screens.
 
