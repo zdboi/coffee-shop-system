@@ -137,26 +137,32 @@ create index if not exists qr_orders_table_open_idx on public.qr_orders(table_id
 -- é, ñ, ü, ...). Greek, Cyrillic and other scripts are refused, so nobody
 -- can make a name that only LOOKS like someone else's ("Сora" with a Cyrillic
 -- С). Written as Unicode ranges: Basic Latin letters, Latin-1 letters (minus
--- × and ÷), Latin Extended-A and -B, Latin Extended Additional.
+-- × and ÷), Latin Extended-A and -B WITHOUT U+01C0..U+01C3 (click letters
+-- ǀ ǁ ǂ ǃ that look like | and !), Latin Extended Additional.
+-- (A letter in these ranges is only accepted when it also has a plain a-z
+-- form in the look-alike key below; exotic ones like ƨ or ȝ are refused.)
 create or replace function public._username_letters() returns text
 language sql immutable as $$
-  select 'A-Za-zÀ-ÖØ-öø-ɏḀ-ỿ'::text
+  select 'A-Za-zÀ-ÖØ-öø-ƿǄ-ɏḀ-ỿ'::text
 $$;
 
 -- The "look-alike key" of a username, used to decide whether two names are
 -- the same: names whose keys are equal count as the same name.
 --   * NFKD + accents removed (é -> e), then lower case (Mika = mika = Míka);
---   * a few letters with no accent form mapped (ø->o, đ->d, ł->l, ı->i,
---     ß->ss, æ->ae, œ->oe);
+--   * letters with a stroke, hook or bar and no accent form mapped to the
+--     plain letter (ø->o, đ->d, ħ->h, ł->l, ŧ->t, ƀ->b, ɨ->i, ƚ->l, ...), and
+--     ß->ss, æ->ae, œ->oe, þ->th, ƕ->hv;
 --   * . ' - _ count as spaces, runs of spaces as one (Mika_the-Bean = Mika the Bean);
 --   * look-alike digits / letters: 0 = o, 1 = l, "rn" = m.
 create or replace function public._username_key(p text) returns text
 language sql immutable as $$
   select btrim(regexp_replace(
            replace(translate(
-             replace(replace(replace(
-               translate(lower(regexp_replace(normalize(coalesce(p, ''), NFKD), '[̀-ͯ]', '', 'g')), 'øđłı', 'odli'),
-               'ß', 'ss'), 'æ', 'ae'), 'œ', 'oe'),
+             replace(replace(replace(replace(replace(
+               translate(lower(regexp_replace(normalize(coalesce(p, ''), NFKD), '[̀-ͯ]', '', 'g')),
+                 E'øðđħıĸłŋŧƀɓƃƈɗɖƌƒɠǥɨɩƙƚɲƞɵƥɍƭʈƴɏƶȥɀȿɇȼǝəɛɔʋɣȴȵȶȷɉɋƫʉʌ',
+                 'oddhiklntbbbcdddfggiiklnnoprttyyzzzseceeeovglntjjqtuv'),
+               E'ß', 'ss'), E'æ', 'ae'), E'œ', 'oe'), E'þ', 'th'), E'ƕ', 'hv'),
              '._''-01', '    ol'), 'rn', 'm'),
            '\s+', ' ', 'g'))
 $$;
@@ -177,8 +183,11 @@ create unique index if not exists customers_business_username_key2
 -- shop's staff or the shop itself.
 create or replace function public._username_reserved(p text) returns boolean
 language sql immutable as $$
-  select public._username_key(p) ~ '(^| )(staff|manager|admin|owner|cashier|barista|cccc|official)( |$)'
-      or public._username_key(p) ~ '(^| )cavite city coffee( |$)'
+  -- checked twice: with 1 read as l (the key) and with 1 read as i ("Bar1sta")
+  select k ~ '(^| )(staff|manager|admin|owner|cashier|barista|cccc|official)( |$)'
+      or k ~ '(^| )cavite city coffee( |$)'
+  from (values (public._username_key(p)), (public._username_key(replace(coalesce(p, ''), '1', 'i')))) v(k)
+  order by 1 desc limit 1
 $$;
 
 -- A username as a customer typed it, cleaned, or null when it isn't allowed:
@@ -205,6 +214,8 @@ begin
   if v ~ '\.[^ ]' then return null; end if;
   if v ~* ('(^|[^' || L || '])(https?|www)([^' || L || ']|$)') then return null; end if;
   if public._username_reserved(v) then return null; end if;
+  -- every letter must have a plain a-z form (refuses exotic letters such as ƨ ȝ ƿ)
+  if public._username_key(v) !~ '^[a-z0-9 ]*$' then return null; end if;
   return v;
 end $$;
 
@@ -449,9 +460,13 @@ begin
   if public._too_many_attempts(v_target, 'RELINK_NUMBER', 5, interval '24 hours') then
     return jsonb_build_object('error', 'TOO_MANY_ATTEMPTS');
   end if;
+  -- the customer row is locked: two phones opening the same account at the
+  -- same moment are handled one after the other, so the last one wins and
+  -- the account ends up on ONE phone (the other is signed out and told)
   select * into v_c from public.customers
     where business_id = v_t.business_id and phone = v_phone and merged_into is null
-      and lower(nickname) = lower(coalesce(public._clean_name(p_nickname), ''));
+      and lower(nickname) = lower(coalesce(public._clean_name(p_nickname), ''))
+    for update;
   if not found then
     insert into public.auth_attempts(subject, kind, success) values (v_uid, 'RELINK', false), (v_target, 'RELINK_NUMBER', false);
     return jsonb_build_object('error', 'NO_MATCH');
@@ -1136,6 +1151,46 @@ begin
   end if;
   return round(least(greatest(v_amt, 0),
                      greatest(coalesce(public._to_num(p_sale->>'subtotal'), 0) - coalesce(public._to_num(p_sale->>'discount_amount'), 0), 0)), 2);
+end $$;
+
+-- Merging two customer records (merge_customers, or the Back Office setting
+-- merged_into): as 008, the merged record's used rewards move to the kept
+-- record. Changed in 012 (B16): when the kept record ALSO used the same
+-- reward (same card, same stamp), the moved one is put on the kept record's
+-- LOWEST card where that reward is still free (e.g. both used card 1's free
+-- drink -> the moved one becomes card 2's free drink). So two used free
+-- drinks always count as two, and the card / ready rewards work out right
+-- (two cards' worth of stamps = two free drinks, never three).
+-- Unchanged from 008: rewards given back by a void / refund, or already kept
+-- as history, move along as history only (merged_from set; they don't count).
+create or replace function public._merge_rewards_trigger() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare r record; v_card integer;
+begin
+  -- given back / history rows: history only, as 008
+  update public.loyalty_redemptions x set merged_from = coalesce(x.merged_from, x.customer_id), customer_id = new.merged_into
+    where x.customer_id = new.id and x.business_id = new.business_id
+      and (x.released_at is not null or x.merged_from is not null);
+  -- counted rows: move each one, oldest card first, to the first free card
+  for r in select x.id, x.card_no, x.milestone from public.loyalty_redemptions x
+           where x.customer_id = new.id and x.business_id = new.business_id
+           order by x.card_no, x.milestone, x.created_at
+  loop
+    v_card := r.card_no;                     -- no clash: same card, as 008
+    -- clash: the kept record's lowest card (from card 1) where this reward is free
+    if exists (select 1 from public.loyalty_redemptions k2
+               where k2.business_id = new.business_id and k2.customer_id = new.merged_into
+                 and k2.card_no = r.card_no and k2.milestone = r.milestone
+                 and k2.released_at is null and k2.merged_from is null) then
+      select min(k) into v_card from generate_series(1, r.card_no + 1000) k
+        where not exists (select 1 from public.loyalty_redemptions k2
+                          where k2.business_id = new.business_id and k2.customer_id = new.merged_into
+                            and k2.card_no = k and k2.milestone = r.milestone
+                            and k2.released_at is null and k2.merged_from is null);
+    end if;
+    update public.loyalty_redemptions set customer_id = new.merged_into, card_no = v_card where id = r.id;
+  end loop;
+  return null;
 end $$;
 
 -- Back Office (owner only): the same stamp card answer for a list of
@@ -2515,8 +2570,9 @@ grant select on public.v_partner_to_return to authenticated;
 -- Every customer without a username gets one (the trigger above makes it).
 -- Running the script again changes nothing (they all have one by then).
 update public.customers set username = null where username is null and merged_into is null;
--- (a test copy that ran an earlier draft of this script: fill the key column)
-update public.customers set username_key = null where username is not null and username_key is null;
+-- (a test copy that ran an earlier draft of this script: fill / refresh the key column)
+update public.customers set username_key = null
+  where username is not null and username_key is distinct from public._username_key(username);
 
 -- =============================================================================
 -- Who may call the new / re-made functions
@@ -2539,7 +2595,7 @@ declare f record;
   mine text[] := array['_shop_day','_stock_of','_owner_staff','_username_letters','_username_key','_username_reserved',
     '_clean_username','_username_base','_new_username',
     '_customer_username_check','_loyalty_last_stamp','_loyalty_current_card','_customer_stamp_times','_loyalty_summary',
-    '_loyalty_reward_amount','bo_customer_loyalty','_qr_limits','_qr_customer_json','qr_session','qr_set_username','_relink_subject','qr_relink',
+    '_loyalty_reward_amount','_merge_rewards_trigger','bo_customer_loyalty','_qr_limits','_qr_customer_json','qr_session','qr_set_username','_relink_subject','qr_relink',
     'qr_switch_account','qr_forget_device','qr_place_order','_customer_for_staff','_counter_customer_json',
     'fo_customer_list','_qr_menu_groups','get_qr_menu','_barista_kit_problem','_settings_check',
     '_rnd_project_check','_rnd_project_delete_check','_stock_ref_taken','_waste_item','log_rnd_usage','delete_rnd_usage','_count_items','_apply_count_effects',

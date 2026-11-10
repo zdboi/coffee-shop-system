@@ -37,15 +37,15 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 
 ### A3. Usernames (Q2)
 - Column `customers.username` (text). Merged-away records have none.
-- **Unique per shop on a look-alike key** (L1), kept in `customers.username_key` (set only by the database; anything an app sends for it is replaced; apps never need to read or send it). Two names are "the same" when they match after: accents removed and lower case (`Míka` = `mika`); `ø đ ł ı ß æ œ` → `o d l i ss ae oe`; `.` `'` `-` `_` and runs of spaces = one space; `0` = `o`, `1` = `l`, `rn` = `m`. Taken → `USERNAME_TAKEN`.
+- **Unique per shop on a look-alike key** (L1), kept in `customers.username_key` (set only by the database; anything an app sends for it is replaced; apps never need to read or send it). Two names are "the same" when they match after: accents removed and lower case (`Míka` = `mika`); letters with a stroke / hook / bar mapped to the plain letter (`ø ð đ ħ ı ĸ ł ŋ ŧ ƀ Ɨ ƚ ƒ ɇ …` → `o d d h i k l n t b i l f e …`), `ß æ œ þ ƕ` → `ss ae oe th hv`; `.` `'` `-` `_` and runs of spaces = one space; `0` = `o`, `1` = `l`, `rn` = `m`. Taken → `USERNAME_TAKEN`.
 - Made automatically for every customer without one (backfill at install, then on every new customer from QR, counter or Back Office): `"<first word of nickname> the <coffee word> <title>"`, e.g. `Mika the Coffee Devourer`; a number is added after 20 taken tries (`Mika the Mocha Lover 42`). Name part = first word of the nickname, Latin letters only, max 12 chars; `Kape` when nothing usable or when that word is a staff / shop word (nickname "Admin" → `Kape the …`). Every made-up name passes the rules below.
 - Rules for a chosen username (checked by the database for **every** writer, incl. `apply_changes`):
   - first made **standard (Unicode NFKC)**, so full-width `０９１７` = `0917`, `Ｃｏｒａ` = `Cora`, special spaces = spaces (M2);
   - spaces trimmed / collapsed; **3–50** chars;
-  - **Latin letters only** (a–z, with accents such as é ñ ü; Greek, Cyrillic, other scripts refused, L1), digits **0–9 only** (other digit systems refused, M2), space, `.` `'` `-` `_`; no emoji / invisible characters;
+  - **Latin letters only** (a–z, with accents such as é ñ ü; Greek, Cyrillic, other scripts refused, L1), digits **0–9 only** (other digit systems refused, M2), space, `.` `'` `-` `_`; no emoji / invisible characters; the click letters `ǀ ǁ ǂ ǃ` (look like `|` and `!`) and any letter without a plain a–z form (e.g. `ƨ ȝ ƿ`) refused (re-check Low 2);
   - ≥ 2 letters; **≤ 4 digits** (0–9) in total (no phone numbers);
   - a `.` only before a space or at the end (no `x.com`); no `http`/`https`/`www` word;
-  - **no staff / shop word** as a whole word, any case, accents / look-alikes ignored (L1): `staff`, `manager`, `admin`, `owner`, `cashier`, `barista`, `cccc`, `official`, and the phrase `cavite city coffee` (`Staffy Mika` is fine, `Mika the 0wner` is not).
+  - **no staff / shop word** as a whole word, any case, accents / look-alikes ignored (L1), checked with `1` read as `l` and as `i`: `staff`, `manager`, `admin`, `owner`, `cashier`, `barista`, `cccc`, `official`, and the phrase `cavite city coffee` (`Staffy Mika` is fine; `Mika the 0wner`, `Rina the Bar1sta`, `Rina Sŧaff` are not).
   - Else `BAD_USERNAME`.
 - **`qr_set_username(p_token text, p_username text)`** (signed-in QR customers only) → `{customer}` or `{error}`: `TABLE_NOT_FOUND`, `NOT_SIGNED_IN`, `REGISTER_FIRST`, `BAD_USERNAME`, `USERNAME_TAKEN`, `TOO_MANY_ATTEMPTS` (10 refused tries / 15 min per phone).
 - Back Office edits `username` with `Ops.update('customers', {id, username})`; map `BAD_USERNAME` / `USERNAME_TAKEN`.
@@ -68,6 +68,7 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 - **`qr_forget_device(p_token)`** ("Not you?") = `qr_switch_account(p_token, false)` (same rule); the 1.5 page should call `qr_switch_account` directly.
 - **`qr_relink`** changes: a phone that is already signed in → **`SIGN_OUT_FIRST`** (sign out with `qr_switch_account` first; answered before any number is looked at). On success the account's link on any **other** phone is removed (one phone per account, decision D3; that phone becomes a guest and its next `qr_session` says `signed_out_elsewhere`, see A1). **None of that phone's orders are cancelled** (nobody there said "Yes"; usually it is the same person on a new phone): waiting, being made or ready, they stay and are paid at the counter. Answer unchanged (`{customer, relinked:true}`).
   - Limits: 5 wrong tries per phone per 15 min (unchanged) **and (L3) 5 wrong tries per typed number per 24 hours, counted over all phones**. After that, that number answers **`TOO_MANY_ATTEMPTS`** (the same answer as the per-phone limit) for the rest of the 24 hours, even with the right nickname. It is counted per number whether or not anyone has it, so the answer never tells whether a number is registered (decision 7). The lock ends by itself; meanwhile staff serve the customer at the counter as usual (find them in Customers and add the sale to their card). The database stores a fingerprint of shop + number for this, never the number.
+  - Two phones opening the same account at the same moment: the database handles them one after the other (the customer row is locked), so the account ends up on **one** phone (the later one); the other is signed out and told (`signed_out_elsewhere`). No unique rule on phone links: after a merge of two customer records both their phones legitimately point at the kept record.
   - Page copy for `TOO_MANY_ATTEMPTS` (both limits): "Too many tries. Please ask our staff at the counter, or try again later." 
 - Counter: orders cancelled this way arrive as `CANCELLED` through the normal `updated_at` polling (only ever ones that were `PENDING`, so nothing the barista already started).
 - Honest limit (unchanged): clearing browser data / private browsing = a new phone (a new guest).
@@ -98,7 +99,7 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 
 **Edge cases (decided):**
 - **Void / full refund of the sale that used card N's last reward**: the reward is given back (1.2 rule), so **card N+1 closes again**: the customer is back on card N at S/S, the free drink is ready again, the stamps of card N+1 show as saved again, card N leaves the history. Rewards already used on card N+1 **stay used** (they were real sales) and show as used when card N+1 opens again; until then card N+1 rewards are refused (`CARD_NOT_ISSUED`). Voids keep working; nobody gets a reward twice.
-- **Customer merges** (1.2 rules unchanged): the merged record's sales and used rewards move to the kept record (a reward both had used stays history only, `merged_from`), and the card is simply worked out again from the combined stamps and rewards.
+- **Customer merges**: the merged record's sales and used rewards move to the kept record and the card is worked out again from the combined stamps and rewards. **Changed in 012 (re-check Low 1):** a reward BOTH records had used (same card, same stamp) is no longer kept as history only: it moves to the kept record's **lowest card where that reward is still free** (both used card 1's free drink → card 1 and card 2 free drinks used). So two used free drinks always count as two: two cards' worth of stamps give two free drinks, never three. Unchanged 1.2 rules: a reward given back by a void / refund, or already history, moves as history only (`merged_from`).
 - **Delete customer data**: the used rewards are deleted with the record (as 1.2); the sales stay unlinked. No card or history is left.
 - **Guests**: no customer record, so no card and no history.
 - **Existing customers already past stamp 15 with the free drink unused** (live data): the same rule applies from the moment 012 is installed. They show card 1 at 15/15 with their later stamps saved; card 2 rewards that the 1.4 apps showed as ready are no longer ready until they use the free drink (nothing is lost: the moment they use it, card 2 opens with all saved stamps and its reached rewards ready). Rewards already used on card 2 under the old rule stay used.
@@ -245,6 +246,11 @@ INGREDIENTS rows: one per ingredient still owed, amounts in stock units. PESOS r
 - **L4** Counts: ticked items only; nothing ticked → `BAD_COUNT`; closing needs a count of every ticked item; `LARGE_SHORTAGE` also on the shift total (B9).
 - **L5** "Delete customer data" also blanks the username in free text (A3).
 
+## Security re-check fixes (2026-11-10)
+- **Low 1** Merge: a reward both records used moves to the kept record's lowest free card (A6), instead of history only.
+- **Low 2** Usernames: `ǀ ǁ ǂ ǃ` refused; stroke letters mapped in the look-alike key; letters without a plain a–z form refused; staff words also checked with `1` = `i` (A3).
+- **Relink race** The customer row is locked in `qr_relink`, so simultaneous relinks end on one phone (A4).
+
 ## Old apps (1.4) against 012
 - QR 1.4 page: works; never sends `p_guest`, so unregistered phones still get `REGISTER_FIRST`. "Not you?" with unpaid orders now gets `UNPAID_ORDERS` (the old page ignores it; the phone stays signed in). The table limit is now 4 unpaid tickets on real tables (`TABLE_FULL`, shown as a generic error); none at "Takeaway / Counter".
 - Counter 1.4: works until an item is ticked "Count at closing" (then Close shift → `COUNT_REQUIRED`).
@@ -256,7 +262,8 @@ INGREDIENTS rows: one per ingredient still owed, amounts in stock units. PESOS r
 - 33 F10: new functions above. 33 F5: table limit is 4 unpaid tickets (`TABLE_FULL`), accepted tickets still count.
 - 39 / 40: they use phone c1 as Zed after suite 11 re-linked Zed on phone c2; with "one phone per account" c1 is a guest by then. Re-link c1 first (both suites then pass fully).
 - 41 HIGH1: `get_qr_menu` now adds `highlight` and options' `available`; compare with those removed (equal).
-- 38 (B16): exactly one check, **"R: card 1 all redeemed"** (customer Stampy has 15 stamps and has used all three card-1 rewards, incl. stamp 15): it expects `card_no` 1 with all milestones `redeemed`; under B16 card 1 is complete, so the answer is `card_no` 2, 0/15, all milestones `locked`, `ready_rewards` empty, and card 1 in `history`. Every other 1.2 loyalty check passes unchanged.
+- 38 (B16): exactly one check, **"R: card 1 all redeemed"** (customer Stampy has 15 stamps and has used all three card-1 rewards, incl. stamp 15): it expects `card_no` 1 with all milestones `redeemed`; under B16 card 1 is complete, so the answer is `card_no` 2, 0/15, all milestones `locked`, `ready_rewards` empty, and card 1 in `history`. - 38 (re-check Low 1): exactly one more check, **"R: merge moves rewards; a reward both used is kept as history"**: it expects Edge's clashing card-1 stamp-5 reward to be kept with `merged_from` set. Now it moves to Stampy's card 2 stamp 5 (counted, `merged_from` null); the count of rows left on Edge (0) is unchanged.
+Every other 1.2 loyalty check passes unchanged.
 
 ## Owner steps (Supabase)
 None besides running `012_release_1_5.sql` (SQL Editor → New query → paste the whole file → Run; "Success"). It is safe to run twice. Then: tick "Count at closing" only after the 1.5 counter is live; mark TCO as "Partner branch" in Suppliers.
