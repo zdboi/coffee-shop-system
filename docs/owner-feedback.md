@@ -213,3 +213,4 @@ Owner: **don't start 1.3 until I say so.**
   - leave a forwarding page at the old address;
   - re-pair the counters.
   - Not started; waiting for the owner to choose the address.
+- **Supabase moved (owner, 2026-11-10 12:29):** the owner transferred the Supabase project to the business account. The project URL is unchanged (`qtkoxzuedxvqoktobtyg`), and the Back Office and counter uploads work. No app change is needed. From now on, 012 and later scripts are run from the business account. The GitHub move/address change is still pending the owner's choice.
