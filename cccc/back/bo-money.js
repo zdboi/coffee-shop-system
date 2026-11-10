@@ -220,6 +220,10 @@ function netIncomeLines(r){
     ['Ingredients used for sales', -num(I.sold), 'line'],
     ['Ingredients wasted', -num(I.wasted), 'line'],
   ];
+  // 012: parts of the waste line (already inside "Ingredients wasted", never taken off again)
+  if(num(I.rnd)) L.push(['Of which R&D (in the line above)', -num(I.rnd), 'part']);
+  (Array.isArray(r.rnd_projects) ? r.rnd_projects : []).forEach(p => { if(num(p.cost)) L.push(['R&D project: ' + (p.name || 'project'), -num(p.cost), 'part sub2']); });
+  if(num(I.count_shortage)) L.push(['Of which missing at count (in the line above)', -num(I.count_shortage), 'part']);
   EXPENSE_CATEGORIES.forEach(c => { if(by[c.id]) L.push(['Expenses: ' + c.label, -num(by[c.id]), 'line']); });
   Object.keys(by).filter(k => !EXPENSE_CATEGORIES.some(c => c.id === k)).forEach(k => L.push(['Expenses: ' + k, -num(by[k]), 'line']));
   L.push(['Net income', num(r.net_income), 'total']);
@@ -239,7 +243,7 @@ function netIncomeHtml(r){
     <div class="card ni-statement">
       <h3 class="ni-title">${esc(monthLabel(r.month || netState.month))} <span class="text-light">· ${esc(fmtDay(r.from))} to ${esc(fmtDay(r.to))}, shop time</span></h3>
       <table class="ni-table"><tbody>
-        ${netIncomeLines(r).map(([label, v, kind]) => `<tr class="ni-${kind}"><td>${esc(label)}</td><td class="num">${kind === 'line' && v > 0 ? '' : ''}${signed(v)}</td></tr>`).join('')}
+        ${netIncomeLines(r).map(([label, v, kind]) => `<tr class="${kind.split(' ').map(k => 'ni-' + k).join(' ')}"><td>${esc(label)}</td><td class="num">${kind === 'line' && v > 0 ? '' : ''}${signed(v)}</td></tr>`).join('')}
       </tbody></table>
       <p class="hint" style="margin-bottom:0;">Service charge collected: ${fmtMoney(S.service_charge)} (kept in net sales as income). Ingredients are costed with your costing method (${costingMethod() === 'latest' ? 'latest purchase price' : 'weighted average'}) as of the month's last day; stock counts and production are not costs here. Refunds count in the month they were given.</p>
     </div>`;
@@ -257,7 +261,15 @@ function exportNetIncomeCSV(){
 /* ================= Waste report (A15) ================= */
 const wrState = {preset: 'month', from: '', to: ''};
 let WR_LAST = null;
-function wasteReasonText(entry){ return entry.source === 'COUNTER' ? wasteReasonLabel(entry.reason) : String(entry.reason || 'Other'); }
+// A reason code (counter waste, R&D, missing at count) in plain words; the Back Office "Record waste" form
+// keeps the words the owner chose (e.g. "Expired"), shown as they are. (012 labels every waste-log row
+// without a counter as OFFICE, so the code check no longer depends on the source.)
+const WASTE_REASON_CODES = ['CALIBRATION', 'SPILLAGE', 'COMPLIMENTARY', 'EXPIRED', 'OTHER', 'RND', 'COUNT_SHORTAGE'];
+function wasteReasonText(entry){
+  const r = String((entry && entry.reason) || '');
+  return WASTE_REASON_CODES.includes(r) ? wasteReasonLabel(r) : (r || 'Other');
+}
+function wasteWhereText(x){ return x.source === 'COUNTER' ? 'Counter' : (x.reason === 'RND' ? 'R&D' : 'Back Office'); }
 async function renderWasteReport(){
   const content = document.getElementById('content');
   content.innerHTML = `
@@ -279,7 +291,8 @@ async function drawWasteReport(){
   let r, flags = {};
   try{
     r = await cloud.rpc('waste_report', {p_from: a, p_to: b});
-    const ids = (r.entries || []).filter(x => x.needs_review && x.source === 'COUNTER').map(x => x.id);
+    // every flagged row (counter or office): its reason codes are on the waste_logs row
+    const ids = (r.entries || []).filter(x => x.needs_review).map(x => x.id);
     for(let i = 0; i < ids.length; i += 100){
       const rows = await cloud.select('waste_logs', {select: 'id,review_reason,staff_id,signed_in_staff_id', in: {id: ids.slice(i, i + 100)}}).catch(() => []);
       (rows || []).forEach(x => { flags[x.id] = x.review_reason || ''; });
@@ -293,6 +306,7 @@ async function drawWasteReport(){
   if(!entries.length){ wrap.innerHTML = `<p class="hint">${esc(WR_LAST.label)}</p>` + emptyBlock('No waste logged in these dates.'); return; }
   const flagged = entries.filter(x => x.needs_review);
   const comp = entries.filter(x => x.source === 'COUNTER' && x.reason === 'COMPLIMENTARY');
+  const rnd = entries.filter(x => x.reason === 'RND'), shortage = entries.filter(x => x.reason === 'COUNT_SHORTAGE');
   // per day: one row per day, a column per reason (cost)
   const reasons = (r.by_reason || []).map(x => x.reason);
   const reasonLabelOf = (code) => { const e = entries.find(x => x.reason === code); return e ? wasteReasonText(e) : (WASTE_REASONS.some(w => w.id === code) ? wasteReasonLabel(code) : String(code)); };
@@ -307,6 +321,14 @@ async function drawWasteReport(){
       ${statCard('Complimentary', fmtMoney(comp.reduce((s, x) => s + num(x.cost), 0)), plural(comp.length, 'entry', 'entries') + ', manager approved')}
       ${statCard('To review', flagged.length, flagged.length ? 'see the flags below' : 'nothing flagged')}
     </div>
+    ${(r.by_project || []).length || shortage.length ? `<div class="grid grid-4 kpi-sans" style="margin-bottom:16px;">
+      ${statCard('R&amp;D', fmtMoney(rnd.reduce((s, x) => s + num(x.cost), 0)), plural(rnd.length, 'entry', 'entries') + ' · <a class="linklike" data-go-rnd>R&amp;D log</a>')}
+      ${statCard('Missing at count', fmtMoney(shortage.reduce((s, x) => s + num(x.cost), 0)), plural(shortage.length, 'count') + ' · <a class="linklike" data-go-counts>stock counts</a>')}
+    </div>` : ''}
+    ${(r.by_project || []).length ? `<div class="card wr-projects" style="margin-bottom:16px;"><b>R&amp;D cost by project</b>
+      <table class="wr-small"><thead><tr><th>Project</th><th>Status</th><th class="num">Entries</th><th class="num">Cost</th></tr></thead><tbody>
+        ${r.by_project.map(p => `<tr><td>${esc(p.name || '')}</td><td>${esc(rndStatusLabel(p.status))}</td><td class="num">${esc(String(p.entries))}</td><td class="num">${fmtMoney(p.cost)}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
     <div class="grid grid-2 wr-grid">
       <div class="card"><b>By reason</b>
         <table class="wr-small"><thead><tr><th>Reason</th><th class="num">Entries</th><th class="num">Cost</th></tr></thead><tbody>
@@ -322,21 +344,23 @@ async function drawWasteReport(){
       <thead><tr><th>Day</th><th>Where</th><th>Reason</th><th>What</th><th>Who</th><th class="num">Cost</th></tr></thead>
       <tbody>${entries.map(x => `<tr class="${x.needs_review ? 'wr-flag-row' : ''}">
         <td>${fmtDay(x.day)}</td>
-        <td>${x.source === 'COUNTER' ? '<span class="badge badge-gray">Counter</span>' : '<span class="badge badge-gray" style="opacity:.7;">Back Office</span>'}</td>
-        <td>${esc(wasteReasonText(x))}${x.note ? `<div class="hint">${esc(x.note)}</div>` : ''}</td>
+        <td><span class="badge badge-gray"${x.source === 'COUNTER' ? '' : ' style="opacity:.7;"'}>${esc(wasteWhereText(x))}</span></td>
+        <td>${esc(wasteReasonText(x))}${x.project_name ? `<div class="hint">Project: ${esc(x.project_name)}</div>` : ''}${x.note ? `<div class="hint">${esc(x.note)}</div>` : ''}</td>
         <td>${(x.items || []).map(it => `<div>${esc(fmtNum(it.quantity, 2).replace(/\.00$/, ''))}${it.unit ? ' ' + esc(unitLabel(it.unit)) : ' ×'} ${esc(it.name || (it.recipe_id ? 'menu item' : 'ingredient'))}${Array.isArray(it.modifiers) && it.modifiers.length ? ` <span class="text-light">(${it.modifiers.map(m => esc((m && m.label) || '')).join(', ')})</span>` : ''} <span class="text-light">${fmtMoney(it.cost)}</span></div>`).join('')}</td>
         <td>${esc(x.staff_name || (x.source === 'OFFICE' ? 'Back Office' : '—'))}${x.approved_by_name ? `<div class="hint">Approved by ${esc(x.approved_by_name)}</div>` : ''}
           ${x.needs_review ? `<div class="review-flag">${icon('alert', {size: 16})} ${esc(reviewReasonText(flags[x.id] || ''))}</div>` : ''}</td>
         <td class="num"><b>${fmtMoney(x.cost)}</b></td></tr>`).join('')}</tbody></table></div>
     <p class="hint wr-cost-note" style="margin-top:8px;">Costs here are kept at the ingredient cost on the day the waste was logged, so they can differ slightly from Net income, which values the month's waste at that month's cost.</p>
-    <p class="hint" style="margin-top:4px;">Counter waste is taken from stock the same way a sale is (recipe and options). Stamp-card freebies are not waste: they show as ₱0 sales with a loyalty reward.</p>`;
+    <p class="hint" style="margin-top:4px;">Counter waste is taken from stock the same way a sale is (recipe and options). Stamp-card freebies are not waste: they show as ₱0 sales with a loyalty reward. R&amp;D usage and stock missing at a closing count are waste too.</p>`;
+  wrap.querySelectorAll('[data-go-rnd]').forEach(a => a.onclick = () => navigate('rnd'));
+  wrap.querySelectorAll('[data-go-counts]').forEach(a => a.onclick = () => navigate('stockCounts'));
 }
 function exportWasteCSV(){
   const r = WR_LAST;
   if(!r || !(r.entries || []).length){ toast('Nothing to export', 'warn'); return; }
   const rows = [];
   r.entries.forEach(x => (x.items && x.items.length ? x.items : [{}]).forEach((it, k) => rows.push([
-    dayValue(x.day), x.source === 'COUNTER' ? 'Counter' : 'Back Office', wasteReasonText(x), x.note || '',
+    dayValue(x.day), wasteWhereText(x), wasteReasonText(x) + (x.project_name ? ' (' + x.project_name + ')' : ''), x.note || '',
     it.name || '', it.quantity == null ? '' : it.quantity, it.unit || '', Array.isArray(it.modifiers) ? it.modifiers.map(m => (m && m.label) || '').join(' / ') : '',
     num(it.cost).toFixed(2), k === 0 ? num(x.cost).toFixed(2) : '', x.staff_name || '', x.approved_by_name || '', x.needs_review ? reviewReasonText(r.flags[x.id] || '') : ''])));
   rows.push(['Total', '', '', '', '', '', '', '', '', num(r.total_cost).toFixed(2), '', '', '']);

@@ -548,3 +548,25 @@
   .waste-reasons{grid-template-columns:1fr 1fr;}
   .waste-pick-grid{grid-template-columns:1fr 1fr;}
 }
+
+/* ---- Release 1.5 ---- */
+/* B6: archived customers + usernames */
+.cust-username{font-size:14px;font-weight:700;color:var(--cc-terracotta-deep);margin:2px 0;overflow-wrap:anywhere;}
+.cp-arch{margin-top:8px;min-height:var(--cc-touch);}
+/* B16: saved stamps + past cards */
+.saved-stamps{display:flex;align-items:flex-start;gap:8px;margin-top:10px;}
+.saved-stamps svg{flex:none;margin-top:2px;}
+.past-cards{margin-top:12px;border-top:1px solid var(--cc-line);padding-top:6px;}
+.past-cards summary{cursor:pointer;font-weight:700;color:var(--cc-terracotta-deep);min-height:var(--cc-touch);display:flex;align-items:center;}
+.past-card-list{display:flex;flex-direction:column;gap:8px;margin-top:6px;}
+.past-card{border:1px solid var(--cc-line);border-radius:10px;padding:10px 12px;background:var(--cc-cream);font-size:14px;}
+.past-card-head{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;}
+.past-card-rw{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:3px;}
+.past-card-rw li{display:flex;align-items:center;gap:6px;}
+/* QR board: guest orders */
+.guest-tag{vertical-align:middle;}
+/* B9: count at closing */
+.count-line .waste-amount{width:120px;}
+.count-done{display:flex;align-items:flex-start;gap:8px;}
+.count-done svg{flex:none;margin-top:2px;}
+.count-done .linklike{display:inline-flex;align-items:center;min-height:var(--cc-touch);padding:0 4px;}

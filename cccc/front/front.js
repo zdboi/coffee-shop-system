@@ -836,6 +836,11 @@ function applyOpLocally(op, replay){
       // Release 1.4 (A15): the same stock the server will take off (it works it out itself).
       applyStockDeltas(wasteStockDeltas(d));
       break;
+    case 'stock_count':
+      // Release 1.5 (B9): this counter's stock goes to the counted amounts (missing -> WASTE,
+      // extra -> ADJUSTMENT), like the server does on arrival.
+      applyStockDeltas(stockCountDeltas(d));
+      break;
   }
   if(!replay) saveSnapshotSoon();
 }
@@ -1018,7 +1023,8 @@ async function renderAlerts(){
 
 // Plain words for the upload types shown to staff (unknown types show as they are).
 const OP_TYPE_LABELS = { shift_open:'Start shift', shift_close:'Close shift', cash_movement:'Pay in / pay out', sale:'Sale',
-  held_delete:'Remove held order', refund:'Refund / void', audit:'Activity note', sold_out:'Sold-out change', waste:'Waste log' };
+  held_delete:'Remove held order', refund:'Refund / void', audit:'Activity note', sold_out:'Sold-out change', waste:'Waste log',
+  stock_count:'Stock count' };
 function opTypeLabel(type){ return Object.prototype.hasOwnProperty.call(OP_TYPE_LABELS, type) ? OP_TYPE_LABELS[type] : String(type == null ? '' : type); }
 
 async function showFailedOps(){
@@ -1062,11 +1068,27 @@ async function showFailedOps(){
    the amount changed). The customer already paid, so a manager can save it at full price:
    the same sale id, a new upload id, no reward, totals worked out again by the shared maths,
    the payment exactly as taken (the server flags a short payment for the owner to review). */
-const REWARD_REFUSAL_CODES = ['REWARD_NOT_AVAILABLE', 'REWARD_AMOUNT_MISMATCH'];
+const REWARD_REFUSAL_CODES = ['REWARD_NOT_AVAILABLE', 'REWARD_AMOUNT_MISMATCH', 'CARD_NOT_ISSUED'];
 // Plain words for a refused upload (a discounted sale whose approval ran out gets its own sentence).
 function failedReasonText(f){
   if(f && f.type === 'sale' && errorCode(f.error) === 'APPROVAL_INVALID' && f.data && f.data.sale && Number(f.data.sale.discount_amount) > 0){
     return 'The manager approval for this discount has expired or was already used. To record it, ring the sale up again and ask a manager to approve the discount.';
+  }
+  if(f && f.type === 'sale' && errorCode(f.error) === 'CARD_NOT_ISSUED'){
+    return 'The stamp reward on this sale is on the customer\'s next card, which opens only after they use the last reward on their full card (for example the free drink). The sale was not saved. A manager can retry it without the reward.';
+  }
+  if(f && f.type === 'stock_count'){
+    const c = errorCode(f.error);
+    const n = f.data && Array.isArray(f.data.lines) ? f.data.lines.length : 0;
+    const what = ` (${n} item${n === 1 ? '' : 's'} counted${f.data && f.data.counted_at ? ' at ' + fmtTime(f.data.counted_at) : ''})`;
+    if(c === 'BAD_COUNT') return `The owner changed which items are counted at closing, so this count${what} no longer matches the list. Close the shift again: the count list shows the items to count now. Then dismiss this one.`;
+    if(c === 'COUNT_REQUIRED') return `This count${what} left out an item that must be counted at closing. Close the shift again and count every item on the list.`;
+    if(c === 'FORBIDDEN_ROW') return `This count${what} clashes with a record already on the server, so it was not saved. Download the details for the owner, then count again when you close the shift.`;
+    if(c === 'UNKNOWN_INGREDIENT' || c === 'BAD_UNIT') return `An item in this count${what} was changed in the Back Office. Count again when you close the shift.`;
+    return friendlyError({message: f.error}) + what;
+  }
+  if(f && f.type === 'shift_close' && errorCode(f.error) === 'COUNT_REQUIRED'){
+    return 'The shift was not closed on the server because its stock count is missing or was refused. Check the stock count in this list first (retry it, or count again), then retry closing the shift.';
   }
   if(f && f.type === 'waste'){
     const c = errorCode(f.error);
@@ -1447,8 +1469,10 @@ function renderPOSScreen(){
   document.getElementById('topbar-actions').innerHTML = `
     <span class="shift-badge" title="Opened ${fmtDateTime(shift.opened_at)} by ${escapeHtml(shift.cashier_name)}">${escapeHtml(shift.shift_number||'')} · ${shiftDuration(shift)}</span>
     ${held.length? `<button class="btn btn-outline" id="held-orders-btn">${icon('inbox')} Held (${held.length})</button>` : ''}
+    <button class="btn btn-outline" id="barista-btn" title="Log today's barista drink (calibration kit)">${icon('cup')} Barista drink</button>
     <button class="btn btn-outline" id="waste-btn" title="Log waste: spilled, given free, calibration…">${icon('trash')} Log waste</button>`;
   if(held.length) document.getElementById('held-orders-btn').onclick = showHeldOrders;
+  document.getElementById('barista-btn').onclick = ()=> openBaristaDrink();
   document.getElementById('waste-btn').onclick = ()=> openWasteLog();
 
   const content = document.getElementById('content');
@@ -1735,11 +1759,57 @@ function checkAppliedReward(){
   else if(a.reward.type === 'FREE_ITEM' && !freeItemLines().some(l => l.recipe_id === a.recipe_id)) why = 'The free item is no longer in the order, so the stamp reward was taken off.';
   if(why){ posState.reward = null; toast(why, 'warn'); }
 }
-function applyReward(key){
+// Release 1.5 (B16): before a reward goes on the order, the customer's card is asked from the
+// server again when online, and only that answer's ready_rewards are offered. (With 012, a reward
+// of a card that isn't issued yet makes the whole sale fail with CARD_NOT_ISSUED.) Offline, the
+// card saved on this counter is used as before (rewards only from a copy at most 48 hours old).
+// -> true when the reward may be applied now.
+let rewardCheckRunning = false;
+async function recheckRewardOnline(c, key){
+  if(!isOnline() || !c) return true;
+  try{
+    const r = await cloud.rpc('fo_customer_detail', {p_customer_id: c.id, p_staff_token: null}, {timeout: 8000});
+    if(!posState.customer || posState.customer.id !== c.id) return false;      // customer changed meanwhile
+    if(r && r.customer){
+      await saveCustomerCard(r.customer);
+      setCustomerSummary(r.customer, false);
+    } else if(r && r.error === 'NOT_FOUND'){
+      await forgetCustomerCard(c.id);
+      posState.customer.summary = null;
+      renderCartPanel();
+      toast('This customer is no longer on the list (merged or removed), so no reward can be used.', 'warn');
+      return false;
+    } else {
+      toast(friendlyError(r || {}) + ' The reward was not applied.', 'warn');
+      return false;
+    }
+  }catch(e){
+    if(!e.offline){ toast('Could not check the stamp card just now. Try the reward again in a moment.', 'warn'); return false; }
+    return true;                                         // the internet dropped: the saved card rules apply
+  }
+  if(!usableRewards().some(x => rewardKey(x) === key)){
+    renderCartPanel();
+    toast('That reward is not ready on the customer\'s card any more (the stamp card was updated). Choose from the rewards shown.', 'warn');
+    return false;
+  }
+  return true;
+}
+async function applyReward(key){
+  const c0 = posState.customer;
+  if(!c0 || !usableRewards().some(x => rewardKey(x) === key)) return;
+  if(!posState.cart.length){ toast('Add items to the order first, then apply the reward.', 'warn'); return; }
+  if(rewardCheckRunning) return;
+  rewardCheckRunning = true;
+  const chip = document.querySelector(`[data-reward="${CSS.escape(key)}"]`);
+  if(chip){ chip.disabled = true; chip.textContent = 'Checking the card…'; }
+  let okNow = false;
+  try{ okNow = await recheckRewardOnline(c0, key); }
+  finally{ rewardCheckRunning = false; }
+  if(!okNow){ renderCartPanel(); return; }
   const c = posState.customer;
   const r = usableRewards().find(x => rewardKey(x) === key);
-  if(!c || !r) return;
-  if(!posState.cart.length){ toast('Add items to the order first, then apply the reward.', 'warn'); return; }
+  if(!c || !r){ renderCartPanel(); return; }
+  if(!posState.cart.length){ renderCartPanel(); toast('Add items to the order first, then apply the reward.', 'warn'); return; }
   const set = (recipeId)=>{
     posState.reward = {reward: r, customer_id: c.id, recipe_id: recipeId || null, offline: !!c.summaryOffline};
     renderCartPanel();
@@ -2045,7 +2115,23 @@ function openCustomerPicker(opts){
     // Too many look-ups by phone number from this counter (the server limits them so
     // hidden digits can't be guessed): searching by name still works.
     const isLimited = (code)=> /TOO_MANY_ATTEMPTS/.test(String(code||''));
-    let lastQ = '';
+    let lastQ = '', lastList = [], showArchived = false;
+    // Release 1.5 (B6): customers without a phone number are archived. They are left out of the
+    // matches unless staff tap "Show archived" (the data is kept; they can still be used).
+    const isArchived = (c)=> c.archived === true || !c.phone;
+    const showResults = ()=>{
+      const list = lastList;
+      if(!list.length){ results.innerHTML = '<p class="hint">No match. Add them as a new customer below.</p>'; return; }
+      const shown = showArchived ? list : list.filter(c => !isArchived(c));
+      const hidden = list.length - shown.length;
+      // Phone numbers come from the server already masked (e.g. 0917 ••• 4567); shown as received.
+      results.innerHTML = (shown.length ? shown.map(c=>`<button class="cp-row" data-id="${escapeHtml(c.id)}"><b>${escapeHtml(c.nickname)}</b><span class="text-light">${c.phone?escapeHtml(c.phone):'no phone · archived'} · ${visitsText(c.visit_count)}</span></button>`).join('')
+          : '<p class="hint">No match with a phone number.</p>')
+        + (hidden ? `<button class="btn btn-outline btn-sm cp-arch" id="cp-show-arch">Show ${hidden} archived (no phone)</button>` : '');
+      results.querySelectorAll('[data-id]').forEach(b=> b.onclick = ()=> pick(list.find(c=>c.id===b.dataset.id)));
+      const sa = results.querySelector('#cp-show-arch');
+      if(sa) sa.onclick = ()=>{ showArchived = true; showResults(); };
+    };
     const search = debounce(async (q)=>{
       lastQ = q;
       if(q.length<2){ results.innerHTML = `<p class="hint">${SEARCH_HINT}.</p>`; return; }
@@ -2053,10 +2139,8 @@ function openCustomerPicker(opts){
       try{
         const list = await cloud.rpc('search_customers', {p_q: q, p_limit: 15});
         if(q !== lastQ) return;                                 // a newer search is on its way
-        if(!list || !list.length){ results.innerHTML = '<p class="hint">No match. Add them as a new customer below.</p>'; return; }
-        // Phone numbers come from the server already masked (e.g. 0917 ••• 4567); shown as received.
-        results.innerHTML = list.map(c=>`<button class="cp-row" data-id="${escapeHtml(c.id)}"><b>${escapeHtml(c.nickname)}</b><span class="text-light">${c.phone?escapeHtml(c.phone):'no phone'} · ${visitsText(c.visit_count)}</span></button>`).join('');
-        results.querySelectorAll('[data-id]').forEach(b=> b.onclick = ()=> pick(list.find(c=>c.id===b.dataset.id)));
+        lastList = list || [];
+        showResults();
       }catch(e){
         if(q !== lastQ) return;
         const extra = e.offline ? ' Finding customers needs internet — you can still finish the sale without one.'
@@ -3102,7 +3186,7 @@ function renderQrBoard(){
       </div>
       <div class="section-title">Finished in the last few hours</div>
       ${doneToday.length?`<div class="table-wrap"><table><thead><tr><th>Order</th><th>Table</th><th>Customer</th><th>Status</th><th>Total</th><th>Updated</th></tr></thead><tbody>
-        ${doneToday.map(o=>`<tr><td><b>${escapeHtml(o.order_number)}</b></td><td>${escapeHtml(o.table_label||'')}</td><td>${escapeHtml(o.customer_nickname||'')}</td>
+        ${doneToday.map(o=>`<tr><td><b>${escapeHtml(o.order_number)}</b></td><td>${escapeHtml(o.table_label||'')}</td><td>${escapeHtml(qrCustomerWords(o))}</td>
           <td>${qrStatusBadge(o)}</td><td>${fmtMoney(o.total)}</td><td>${fmtTime(o.updated_at)}</td></tr>`).join('')}</tbody></table></div>` : emptyBlock('No finished QR orders yet.')}`;
   }
   wireTools();
@@ -3114,6 +3198,12 @@ function renderQrBoard(){
 function qrStatusBadge(o){
   const map = {PENDING:'badge-yellow', PREPARING:'badge-gray', READY:'badge-green', COMPLETED:'badge-green', REJECTED:'badge-red', CANCELLED:'badge-red'};
   return `<span class="badge ${map[o.status]||'badge-gray'}">${escapeHtml(o.status.charAt(0)+o.status.slice(1).toLowerCase())}</span>`;
+}
+// Who placed a QR order: "Guest" for a phone with no account (release 1.5, is_guest), else the nickname.
+function qrCustomerWords(o){
+  if(!o) return '';
+  if(o.is_guest) return 'Guest';
+  return o.customer_nickname || 'Guest';
 }
 function qrCard(o){
   const paid = !!o.paid_at;
@@ -3139,7 +3229,7 @@ function qrCard(o){
     <div class="qr-card-top"><span class="qr-no">${escapeHtml(o.order_number)}</span>${stateTag}
       ${paid?'<span class="badge badge-green">PAID</span>':'<span class="badge badge-yellow">Unpaid</span>'}
       <span class="qr-total">${fmtMoney(o.total)}</span></div>
-    <div class="qr-meta">${escapeHtml(o.table_label||'')}${o.order_type==='TAKEAWAY'?' · Takeaway':' · Dine in'} · ${icon('user', {size: 14})} ${escapeHtml(o.customer_nickname||'Guest')} · ${escapeHtml(timeAgo(o.created_at))}</div>
+    <div class="qr-meta">${escapeHtml(o.table_label||'')}${o.order_type==='TAKEAWAY'?' · Takeaway':' · Dine in'} · ${icon('user', {size: 14})} ${o.is_guest ? '<span class="tag soft guest-tag">Guest</span>' : escapeHtml(qrCustomerWords(o))} · ${escapeHtml(timeAgo(o.created_at))}</div>
     <ul class="qr-items">${(o.items||[]).map(it=>`<li><b>${Number(it.quantity)} ×</b> ${escapeHtml(it.name)}
       ${(it.modifiers||[]).length?`<span class="text-light">(${it.modifiers.map(m=>escapeHtml(m.label)).join(', ')})</span>`:''}
       ${it.notes?`<div class="qr-note">“${escapeHtml(it.notes)}”</div>`:''}</li>`).join('')}</ul>
@@ -3270,7 +3360,7 @@ function ticketHtml(o, topts){
   const where = [o.table_label||'', type].filter(Boolean).join(' - ');
   const paid = !!(o.paid_at || topts.paid);
   const status = paid ? 'PAID' : (qr ? 'NOT PAID - PAY AT COUNTER' : '');
-  const nick = o.customer_nickname || o.customer_name || topts.customerName || '';
+  const nick = o.is_guest ? 'Guest' : (o.customer_nickname || o.customer_name || topts.customerName || '');
   const when = o.created_at || o.transaction_date;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(no)}</title>
     <style>body{font-family:'Courier New',monospace;width:280px;margin:16px auto;font-size:14px;} h1{font-size:26px;margin:0;text-align:center;} .c{text-align:center;} .big{font-size:16px;font-weight:700;} .status{font-size:20px;font-weight:700;text-align:center;padding:4px 0;border-top:1px dashed #888;border-bottom:1px dashed #888;margin:6px 0;} hr{border:none;border-top:1px dashed #888;} .mod{padding-left:14px;font-size:12.5px;} @media print{body{width:${(typeof Printer!=='undefined' && Printer.settings().paper_width===80)?'72':'48'}mm;margin:0;}}</style></head><body>
@@ -3311,7 +3401,10 @@ function openSoldOutManager(){
    everyone else sees "Managers only" (never zeros). The token is never an approval: viewing
    doesn't use anything up.
    ===================================================================== */
-const custView = {q: '', selected: null, listSeq: 0, detailSeq: 0, list: null, detail: null};
+const custView = {q: '', selected: null, listSeq: 0, detailSeq: 0, list: null, detail: null, archived: false};
+// Release 1.5 (B6): customers without a phone number are "archived": the main list hides them,
+// the "Archived" filter shows only them (fo_customer_list p_archived). Not remembered: the
+// screen always opens on the main list.
 // List order (release 1.3, A17): sorted by the server, remembered on this counter. No polling
 // (the server allows about 120 list calls an hour): the list loads when the screen opens, the
 // search changes or the sort changes.
@@ -3329,10 +3422,10 @@ function customerMoneyToken(){
   if(!me || !hasRole('MANAGER') || shortPinUser() || me.offline) return null;
   return ownLoginToken();
 }
-function manilaDay(d){ try{ return new Date(d).toLocaleDateString('en-CA', {timeZone: 'Asia/Manila'}); }catch(e){ return todayISO(new Date(d)); } }
+// Whole shop days (Manila) between moment d and now (the shared shop-day helper, release 1.5).
 function daysAgo(d){
-  if(!d) return null;
-  const a = new Date(manilaDay(d) + 'T00:00:00Z'), b = new Date(manilaDay(new Date()) + 'T00:00:00Z');
+  if(!d || isNaN(new Date(d))) return null;
+  const a = new Date(shopDayKey(d) + 'T00:00:00Z'), b = new Date(shopDayKey() + 'T00:00:00Z');
   return Math.round((b - a) / 86400000);
 }
 function lastVisitText(d){
@@ -3348,7 +3441,7 @@ function orderWhenText(d){
   if(n === null || isNaN(n)) return '—';
   if(n <= 0) return 'Today ' + fmtTime(d);
   if(n === 1) return 'Yesterday ' + fmtTime(d);
-  if(n < 7){ let wd = ''; try{ wd = new Date(d).toLocaleDateString('en-PH', {weekday: 'short', timeZone: 'Asia/Manila'}); }catch(e){} return wd + ' ' + fmtTime(d); }
+  if(n < 7){ let wd = ''; try{ wd = new Date(d).toLocaleDateString('en-PH', {weekday: 'short', timeZone: shopTimeZone()}); }catch(e){} return wd + ' ' + fmtTime(d); }
   return fmtDate(d);
 }
 function ordinal(n){ const s = ['th','st','nd','rd'], v = n % 100; return n + (s[(v-20)%10] || s[v] || s[0]); }
@@ -3379,7 +3472,10 @@ function renderCustomersScreen(){
   content.innerHTML = `
     <div class="cust-layout">
       <div class="cust-list-col">
-        <label class="cust-search">${icon('search')}<input type="search" id="cust-search" placeholder="Search by nickname" aria-label="Search customers by nickname" autocomplete="off" maxlength="30" value="${escapeHtml(custView.q)}"></label>
+        <label class="cust-search">${icon('search')}<input type="search" id="cust-search" placeholder="Search by nickname or username" aria-label="Search customers by nickname or username" autocomplete="off" maxlength="30" value="${escapeHtml(custView.q)}"></label>
+        <div class="cust-sort"><span class="cust-sort-lbl" id="cust-which-lbl">Show</span><div class="seg" role="group" aria-labelledby="cust-which-lbl" id="cust-which">
+          <button type="button" class="seg-btn ${custView.archived?'':'active'}" data-arch="0" aria-pressed="${!custView.archived}">With a phone</button>
+          <button type="button" class="seg-btn ${custView.archived?'active':''}" data-arch="1" aria-pressed="${custView.archived}">Archived</button></div></div>
         <div class="cust-sort"><span class="cust-sort-lbl" id="cust-sort-lbl">Sort</span><div class="seg" role="group" aria-labelledby="cust-sort-lbl" id="cust-sort">${CUST_SORTS.map(o=>`<button type="button" class="seg-btn ${customerSort()===o.id?'active':''}" data-sort="${o.id}" aria-pressed="${customerSort()===o.id}">${escapeHtml(o.label).replace('–', '&#8288;–&#8288;')}</button>`).join('')}</div></div>
         <div id="cust-list" class="cust-list" aria-live="polite"><p class="hint cust-pad">Loading customers…</p></div>
       </div>
@@ -3387,6 +3483,14 @@ function renderCustomersScreen(){
     </div>`;
   const search = debounce(()=> loadCustomerList(), 300);
   document.getElementById('cust-search').oninput = (e)=>{ custView.q = e.target.value.trim(); search(); };
+  document.getElementById('cust-which').addEventListener('click', (e)=>{
+    const b = e.target.closest('[data-arch]'); if(!b) return;
+    const arch = b.dataset.arch === '1';
+    if(arch === custView.archived) return;
+    custView.archived = arch;
+    document.querySelectorAll('#cust-which [data-arch]').forEach(x=>{ const on = x === b; x.classList.toggle('active', on); x.setAttribute('aria-pressed', String(on)); });
+    loadCustomerList();
+  });
   document.getElementById('cust-sort').addEventListener('click', (e)=>{
     const b = e.target.closest('[data-sort]'); if(!b || b.dataset.sort === customerSort()) return;
     setCustomerSort(b.dataset.sort);
@@ -3404,13 +3508,15 @@ async function loadCustomerList(){
   if(!box) return;
   const seq = ++custView.listSeq;
   try{
-    const r = await cloud.rpc('fo_customer_list', {p_search: custView.q || '', p_limit: 30, p_staff_token: customerMoneyToken(), p_sort: customerSort()}, {timeout: 10000});
+    const r = await cloud.rpc('fo_customer_list', {p_search: custView.q || '', p_limit: 30, p_staff_token: customerMoneyToken(), p_sort: customerSort(), p_archived: !!custView.archived}, {timeout: 10000});
     if(seq !== custView.listSeq || posState.route !== 'customers') return;
     if(r && r.error){ box.innerHTML = `<p class="hint cust-pad">${escapeHtml(friendlyError(r))}</p>`; return; }
     const list = (r && r.customers) || [];
     custView.list = r;
     if(!list.length){
-      box.innerHTML = `<p class="hint cust-pad">${custView.q ? `No customer called “${escapeHtml(custView.q)}”. Search uses nicknames only.` : 'No customers yet. Tap “Add customer” to save one (with their permission).'}</p>`;
+      box.innerHTML = `<p class="hint cust-pad">${custView.archived
+        ? (custView.q ? `No archived customer called “${escapeHtml(custView.q)}”.` : 'No archived customers. Customers saved without a phone number show here.')
+        : (custView.q ? `No customer called “${escapeHtml(custView.q)}” with a phone number. Search uses nicknames and usernames. Customers without a number are under “Archived”.` : 'No customers yet. Tap “Add customer” to save one (with their permission).')}</p>`;
       return;
     }
     box.innerHTML = list.map(c=>`<button class="cust-row ${c.id===custView.selected?'on':''}" data-cust="${escapeHtml(c.id)}" aria-pressed="${c.id===custView.selected}">
@@ -3465,6 +3571,34 @@ function stampCardHtml(view){
   }
   return `<div class="card15" role="img" aria-label="${escapeHtml(view.stamps_on_card + ' of ' + view.card_size + ' stamps')}">${cells.join('')}</div>`;
 }
+/* ---- Release 1.5 (B16): the next card opens only after the full card's last reward is used ----
+   Stamps earned meanwhile are "saved" and land on the next card. Both come from the server
+   (card.saved_stamps, history); the counter only shows them. */
+function savedStampsHtml(view){
+  const n = Number(view.saved_stamps) || 0;
+  if(n <= 0) return '';
+  const last = view.milestones.find(m => m.stamp === view.last_reward_stamp) || view.milestones[view.milestones.length - 1];
+  const lastWords = last ? (last.type === 'FREE_ITEM' ? 'the free item' : 'the ' + last.label) : 'the last reward';
+  return `<div class="notice saved-stamps">${icon('gift', {size: 18})} <span><b>${n} stamp${n === 1 ? '' : 's'} saved for the next card.</b>
+    Card ${view.card_no + 1} starts after ${escapeHtml(lastWords)} on this card is used.</span></div>`;
+}
+function rewardUsedWords(r){
+  const what = r.type === 'FREE_ITEM' ? (r.label || 'Free item') : (r.label || rewardLabel(r));
+  return `${what}${r.used_at ? ' · ' + fmtDate(r.used_at) : ''}`;
+}
+function pastCardsHtml(view){
+  const list = Array.isArray(view.history) ? view.history.slice().sort((a, b) => (Number(b.card_no) || 0) - (Number(a.card_no) || 0)) : [];
+  if(!list.length) return '';
+  return `<details class="past-cards"><summary>Past cards (${list.length})</summary>
+    <div class="past-card-list">${list.map(h => {
+      const rewards = Array.isArray(h.rewards) ? h.rewards : [];
+      return `<div class="past-card">
+        <div class="past-card-head"><b>Card ${Number(h.card_no) || ''}</b>
+          <span class="text-light">${h.filled_at ? 'filled ' + escapeHtml(fmtDate(h.filled_at)) : 'not filled'} · ${h.completed_at ? 'completed ' + escapeHtml(fmtDate(h.completed_at)) : 'not completed'}</span></div>
+        ${rewards.length ? `<ul class="past-card-rw">${rewards.map(r => `<li>${icon('check', {size: 14})} ${escapeHtml(rewardUsedWords(r))}</li>`).join('')}</ul>` : '<div class="text-light">No rewards used on this card.</div>'}
+      </div>`;
+    }).join('')}</div></details>`;
+}
 function customerDetailHtml(r){
   const c = r.customer || {};
   const money = !!r.show_money;
@@ -3479,13 +3613,14 @@ function customerDetailHtml(r){
   return `
     <div class="cust-head card">
       <span class="cust-av big" aria-hidden="true">${escapeHtml(initialOf(c.nickname))}</span>
-      <div class="cust-head-main"><h2>${escapeHtml(c.nickname)}</h2>
+      <div class="cust-head-main"><h2>${escapeHtml(c.nickname)}${c.archived || !c.phone ? ' <span class="badge badge-gray">Archived</span>' : ''}</h2>
+        ${c.username ? `<div class="cust-username">${escapeHtml(c.username)}</div>` : ''}
         <div class="text-light">${c.phone ? escapeHtml(c.phone) : 'No phone'} · ${escapeHtml(lastVisitText(c.last_visit_at))}${c.first_seen_at ? ' · customer since ' + escapeHtml(fmtDate(c.first_seen_at)) : ''}</div></div>
       <button class="btn btn-primary" id="cust-use">${icon('orders')} Use for this order</button>
     </div>
     <div class="cust-kpis">
       <div class="card kpi"><small>Visits</small><b>${Number(c.visits) || 0}</b><span class="kpi-sub">Days with a paid order</span></div>
-      <div class="card kpi"><small>Stamps</small><b>${loyalty ? `${view.stamps_on_card} / ${view.card_size}` : '—'}</b><span class="kpi-sub">${loyalty ? `Card ${view.card_no}` : 'Stamp card off'}</span></div>
+      <div class="card kpi"><small>Stamps</small><b>${loyalty ? `${view.stamps_on_card} / ${view.card_size}` : '—'}</b><span class="kpi-sub">${loyalty ? `Card ${view.card_no}${view.saved_stamps > 0 ? ` · ${view.saved_stamps} saved` : ''}` : 'Stamp card off'}</span></div>
       <div class="card kpi"><small>Reward ready</small><b class="${ready.length && loyalty ? 'ok' : ''}">${loyalty && ready.length ? escapeHtml(ready[0].label) : 'None yet'}</b><span class="kpi-sub">${loyalty && ready.length > 1 ? `+${ready.length - 1} more` : ''}</span></div>
       <div class="card kpi" id="cust-spent"><small>Total spent</small>${money ? `<b>${fmtMoney(c.total_spent)}</b><span class="kpi-sub">After refunds</span>` : `<b class="locked">${icon('lock', {label: 'Hidden'})}</b><span class="lock-note">Managers only</span>${why ? `<span class="lock-why">${escapeHtml(why)}</span>` : ''}`}</div>
     </div>
@@ -3496,7 +3631,9 @@ function customerDetailHtml(r){
           <p class="hint">Card ${view.card_no} · ${view.stamps_on_card} of ${view.card_size}. One stamp for a drink and one for food, each day.</p>
           ${stampCardHtml(view)}
           <div class="rw">${view.milestones.map(m=>`<div><span class="rtag ${m.status==='ready'?'ready':m.status==='redeemed'?'used':'lock'}">${m.status==='ready'?'Ready':m.status==='redeemed'?'Used':`${m.to_go} to go`}</span><span>${escapeHtml(ordinal(m.stamp))} stamp: ${escapeHtml(m.label)}</span></div>`).join('')}</div>
-          ${ready.some(x => x.card_no < view.card_no) ? `<p class="hint">Also ready from earlier cards: ${ready.filter(x => x.card_no < view.card_no).map(x => escapeHtml(x.label)).join(', ')}.</p>` : ''}`
+          ${ready.some(x => x.card_no < view.card_no) ? `<p class="hint">Also ready from earlier cards: ${ready.filter(x => x.card_no < view.card_no).map(x => escapeHtml(x.label)).join(', ')}.</p>` : ''}
+          ${savedStampsHtml(view)}
+          ${pastCardsHtml(view)}`
         : `<p class="hint">The stamp card is switched off. The owner can switch it on in Back Office → Settings.</p>`}
       </div>
       <div class="card">
@@ -3800,6 +3937,111 @@ async function shiftWasteHtml(shift){
     </div>`;
 }
 
+/* =====================================================================
+   BARISTA DRINK (release 1.5, B7)
+   One tap opens today's calibration kit (Back Office → settings.barista_kit, read offline from
+   fo_bootstrap). Staff adjust the amounts and save. It is the existing 'waste' op with reason
+   CALIBRATION: works offline, no manager PIN. The adjusted amounts are kept on this counter
+   (per staff member, per shop day) so a reload loses nothing.
+   ===================================================================== */
+const BARISTA_DRAFT_KEY = 'cccc.fo.baristaDraft';
+function baristaDraft(){
+  const me = posState.currentUser;
+  const kit = baristaKitItems(state.settings);
+  const kitIds = kit.map(l => l.ingredient_id).join(',');
+  let d = null;
+  try{ d = JSON.parse(localStorage.getItem(BARISTA_DRAFT_KEY) || 'null'); }catch(e){ d = null; }
+  if(!d || !me || d.staff_id !== me.id || d.day !== shopDayKey() || d.kit !== kitIds || !Array.isArray(d.items)){
+    d = {staff_id: me ? me.id : null, day: shopDayKey(), kit: kitIds, note: '',
+      items: kit.map(l => { const ing = ingredientById(l.ingredient_id); return {ingredient_id: l.ingredient_id, quantity: String(l.quantity), unit: l.unit || (ing ? ing.base_unit : null)}; })};
+  }
+  return d;
+}
+function saveBaristaDraft(d){ try{ localStorage.setItem(BARISTA_DRAFT_KEY, JSON.stringify(d)); }catch(e){} }
+function clearBaristaDraft(){ try{ localStorage.removeItem(BARISTA_DRAFT_KEY); }catch(e){} }
+function baristaUnits(ing, unit){
+  const list = unitsForIngredient(ing).slice();
+  if(unit && !list.includes(unit)) list.unshift(unit);
+  return list;
+}
+async function openBaristaDrink(){
+  if(!posState.currentUser) return;
+  const d = baristaDraft();
+  if(!d.items.length){
+    openModal({title: 'Barista drink', body: `
+      <div class="notice warn">${icon('info', {size: 18})} <span>Ask the owner to set the barista drink kit in the Back Office.</span></div>
+      <p class="hint">Until then, you can log the calibration drink with <b>Log waste</b> (reason “Calibration / barista drink”).</p>`,
+      foot: `<button class="btn btn-outline" data-close>Close</button><button class="btn btn-primary" id="bd-to-waste">Log waste instead</button>`,
+      onMount: (root) => {
+        root.querySelector('[data-close]').onclick = closeModal;
+        root.querySelector('#bd-to-waste').onclick = () => openWasteLog();
+      }});
+    return;
+  }
+  const today = (await loadWasteLog()).filter(x => x.kit && x.reason === 'CALIBRATION' && shopDayKey(x.logged_at) === shopDayKey());
+  const last = today[today.length - 1];
+  const body = `
+    <p class="hint waste-intro">Today's calibration kit: the coffee, milk, sauces and syrups used to check the drinks. Change any amount that was different, then save. It is logged as waste (Calibration / barista drink).</p>
+    ${last ? `<div class="notice">${icon('check', {size: 18})} <span>Already logged today at ${escapeHtml(fmtTime(last.logged_at))} by ${escapeHtml(last.staff_name || 'staff')}. Save again only for another barista drink.</span></div>` : ''}
+    <div class="waste-lines" id="bd-lines">${d.items.map((it, i) => {
+      const ing = ingredientById(it.ingredient_id);
+      return `<div class="waste-line" data-i="${i}">
+        <div class="waste-line-main"><b>${escapeHtml(ing ? ing.name : 'Item')}</b><small>Set to 0 to leave it out</small></div>
+        <div class="waste-line-qty">
+          <input type="number" step="any" min="0" inputmode="decimal" class="waste-amount" data-bqty="${i}" value="${escapeHtml(it.quantity == null ? '' : String(it.quantity))}" placeholder="Amount" aria-label="Amount of ${escapeHtml(ing ? ing.name : 'item')}">
+          <select data-bunit="${i}" aria-label="Unit for ${escapeHtml(ing ? ing.name : 'item')}">${baristaUnits(ing, it.unit).map(u => `<option value="${escapeHtml(u)}" ${u === it.unit ? 'selected' : ''}>${escapeHtml(unitLabel(u))}</option>`).join('')}</select>
+        </div>
+      </div>`;
+    }).join('')}</div>
+    <div class="form-row" style="margin-top:12px;"><label for="bd-note">Note <span class="text-light">(optional)</span></label>
+      <input id="bd-note" maxlength="${WASTE_NOTE_MAX}" value="${escapeHtml(d.note || '')}" placeholder="e.g. New beans, pulled 3 shots"></div>`;
+  openModal({title: 'Barista drink', wide: true, body,
+    foot: `<button class="btn btn-ghost" id="bd-reset">Use the usual amounts</button><button class="btn btn-outline" data-close>Close</button><button class="btn btn-primary" id="bd-save">Save barista drink</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-close]').onclick = closeModal;
+      root.querySelectorAll('[data-bqty]').forEach(inp => inp.oninput = () => { d.items[+inp.dataset.bqty].quantity = inp.value; saveBaristaDraft(d); });
+      root.querySelectorAll('[data-bunit]').forEach(sel => sel.onchange = () => { d.items[+sel.dataset.bunit].unit = sel.value; saveBaristaDraft(d); });
+      root.querySelector('#bd-note').oninput = (e) => { d.note = e.target.value; saveBaristaDraft(d); };
+      root.querySelector('#bd-reset').onclick = () => { clearBaristaDraft(); openBaristaDrink(); };
+      root.querySelector('#bd-save').onclick = (ev) => submitBaristaDrink(d, root, ev.currentTarget);
+    }});
+}
+async function submitBaristaDrink(d, root, btn){
+  const me = posState.currentUser;
+  if(!me || btn.disabled) return;
+  d.note = (root.querySelector('#bd-note').value || '').trim();
+  saveBaristaDraft(d);
+  const bad = d.items.findIndex(it => String(it.quantity).trim() !== '' && !(Number(it.quantity) >= 0));
+  if(bad >= 0){ toast('Check the amounts: use a number, or 0 to leave an item out.', 'error'); const f = root.querySelector(`[data-bqty="${bad}"]`); if(f) f.focus(); return; }
+  const used = d.items.filter(it => Number(it.quantity) > 0);
+  if(!used.length){ toast('Enter at least one amount above 0.', 'error'); return; }
+  const shift = activeShift();
+  let data;
+  try{
+    data = buildWasteData({reason: 'CALIBRATION', note: d.note, staff_id: me.id, shift_id: shift ? shift.id : null,
+      items: used.map(it => ({ingredient_id: it.ingredient_id, quantity: Number(it.quantity), unit: it.unit || null}))});
+  }catch(e){
+    const code = (e && (e.code || e.message)) || '';
+    toast(code === 'BAD_UNIT' ? 'One of the units doesn\'t fit that item. Pick another unit.'
+      : code === 'UNKNOWN_INGREDIENT' ? 'An item in the kit is no longer on this counter. Ask the owner to update the barista drink kit.'
+      : code === 'BAD_QUANTITY' ? 'One of the amounts is too large. Check the amounts.'
+      : wasteErrorText(e), 'error');
+    return;
+  }
+  btn.disabled = true;
+  const text = data.items.map(it => { const ing = ingredientById(it.ingredient_id); return `${Number(it.quantity)} ${unitLabel(it.unit || (ing ? ing.base_unit : ''))} ${ing ? ing.name : ''}`.trim(); }).join('; ');
+  const cost = wasteCostInfo(data.items);
+  await Sync.queue('waste', data);
+  await rememberWaste({id: data.id, shift_id: data.shift_id, reason: data.reason, logged_at: data.logged_at, kit: true,
+    staff_name: me.name, lines: data.items.length, text: 'Barista drink: ' + text, cost: cost.known ? cost.cost : null});
+  queueAudit('Barista drink logged', `${text}${data.note ? ' (note: ' + data.note + ')' : ''}`, data.id);
+  clearBaristaDraft();
+  closeModal();
+  toast(`Barista drink saved (${data.items.length} item${data.items.length === 1 ? '' : 's'})${isOnline() ? '' : '. It uploads when the internet is back.'}`, 'success');
+  if(posState.route === 'pos') renderProductGrid();
+  if(posState.route === 'shift') renderShiftScreen({local: true});
+}
+
 function renderStartShiftGate(){
   const content = document.getElementById('content');
   content.className = '';
@@ -3853,10 +4095,12 @@ async function renderShiftScreen(opts){
   if(posState.route !== 'shift') return;
   document.getElementById('topbar-actions').innerHTML = `
     <button class="btn btn-outline" id="cash-mgmt-btn">${icon('cash')} Pay in / pay out</button>
+    <button class="btn btn-outline" id="shift-barista-btn">${icon('cup')} Barista drink</button>
     <button class="btn btn-outline" id="shift-waste-btn">${icon('trash')} Log waste</button>
     <button class="btn btn-outline" id="xreport-btn">${icon('printer')} Print X-report</button>
     <button class="btn btn-danger" id="close-shift-btn">Close shift</button>`;
   document.getElementById('cash-mgmt-btn').onclick = openCashManagementModal;
+  document.getElementById('shift-barista-btn').onclick = ()=> openBaristaDrink();
   document.getElementById('shift-waste-btn').onclick = ()=> openWasteLog();
   document.getElementById('xreport-btn').onclick = printXReport;
   document.getElementById('close-shift-btn').onclick = openCloseShiftFlow;
@@ -3935,7 +4179,131 @@ async function openCloseShiftFlow(){
   if(btn){ btn.disabled = false; btn.textContent = 'Close shift'; }
   const shift = activeShift();
   if(!shift) return;
+  // Release 1.5 (B9): with items ticked "Count at closing", staff count them first (blind).
+  if(countAtCloseIngredients().length){
+    openStockCount(shift, (count)=> showCloseShiftDialog(shift, closer, closeApprovalToken, checked, {count}));
+    return;
+  }
   showCloseShiftDialog(shift, closer, closeApprovalToken, checked, {});
+}
+
+/* ---- Count at closing (release 1.5, B9) ----
+   Before Close shift, staff type what they counted for each ticked item. The screen never shows
+   what the stock should be (blind count). Confirming shows ONLY the items that differ (from the
+   shared countDifferences) for a recount, without saying by how much. The count is queued as
+   'stock_count' right before 'shift_close' (the outbox uploads in order), so it works offline.
+   What staff type is kept on this counter until the shift closes (a reload loses nothing). */
+const COUNT_DRAFT_KEY = 'cccc.fo.countDraft';
+function countDraft(shift){
+  let d = null;
+  try{ d = JSON.parse(localStorage.getItem(COUNT_DRAFT_KEY) || 'null'); }catch(e){ d = null; }
+  if(!d || d.shift_id !== shift.id || !d.lines || typeof d.lines !== 'object') d = {shift_id: shift.id, lines: {}, note: '', recounted: []};
+  return d;
+}
+function saveCountDraft(d){ try{ localStorage.setItem(COUNT_DRAFT_KEY, JSON.stringify(d)); }catch(e){} }
+function clearCountDraft(){ try{ localStorage.removeItem(COUNT_DRAFT_KEY); }catch(e){} }
+// Typed lines for the ticked items (blank ones left out: buildStockCountData names them).
+function countLinesFromDraft(d){
+  return countAtCloseIngredients().map(ing => {
+    const e = d.lines[ing.id];
+    if(!e || String(e.quantity == null ? '' : e.quantity).trim() === '') return null;
+    return {ingredient_id: ing.id, quantity: Number(e.quantity), unit: e.unit || ing.base_unit};
+  }).filter(Boolean);
+}
+function countErrorText(e){
+  const code = (e && (e.code || e.message)) || '';
+  if(code === 'COUNT_REQUIRED'){
+    const names = (e.missing || []).map(m => m.name);
+    return names.length ? `Enter a count for ${names.slice(0, 3).join(', ')}${names.length > 3 ? ` and ${names.length - 3} more` : ''}. Type 0 if there is none left.` : friendlyError('COUNT_REQUIRED');
+  }
+  if(code === 'BAD_QUANTITY') return 'Check the amounts: each count must be 0 or more.';
+  if(code === 'BAD_UNIT') return 'One of the units doesn\'t fit that item. Pick another unit.';
+  if(code === 'UNKNOWN_INGREDIENT' || code === 'BAD_COUNT') return 'The list of items to count changed. Close this and tap Close shift again.';
+  return friendlyError(e);
+}
+function countRowHtml(ing, e, attr){
+  const units = unitsForIngredient(ing);
+  const unit = (e && e.unit) || ing.base_unit;
+  if(unit && !units.includes(unit)) units.unshift(unit);
+  return `<div class="waste-line count-line" data-ing="${escapeHtml(ing.id)}">
+      <div class="waste-line-main"><b>${escapeHtml(ing.name)}</b><small>Counted in ${escapeHtml(unitLabel(ing.base_unit))}</small></div>
+      <div class="waste-line-qty">
+        <input type="number" step="any" min="0" inputmode="decimal" class="waste-amount" ${attr}="${escapeHtml(ing.id)}" value="${escapeHtml(e && e.quantity != null ? String(e.quantity) : '')}" placeholder="Count" aria-label="Counted amount of ${escapeHtml(ing.name)}">
+        <select data-cunit="${escapeHtml(ing.id)}" aria-label="Unit for ${escapeHtml(ing.name)}">${units.map(u => `<option value="${escapeHtml(u)}" ${u === unit ? 'selected' : ''}>${escapeHtml(unitLabel(u))}</option>`).join('')}</select>
+      </div>
+    </div>`;
+}
+function wireCountRows(root, d, attr){
+  root.querySelectorAll(`[${attr}]`).forEach(inp => inp.oninput = () => {
+    const id = inp.getAttribute(attr);
+    d.lines[id] = Object.assign({}, d.lines[id] || {}, {quantity: inp.value});
+    saveCountDraft(d);
+  });
+  root.querySelectorAll('[data-cunit]').forEach(sel => sel.onchange = () => {
+    const id = sel.dataset.cunit;
+    d.lines[id] = Object.assign({}, d.lines[id] || {}, {unit: sel.value});
+    saveCountDraft(d);
+  });
+}
+// Step 1: the count list (ticked items only, no expected amounts).
+function openStockCount(shift, onDone){
+  const d = countDraft(shift);
+  const items = countAtCloseIngredients();
+  openModal({title: 'Count before closing', wide: true, body: `
+    <p class="hint waste-intro">Count or weigh each item and type what is there now. Type 0 if there is none. The expected amounts are hidden on purpose.</p>
+    <div class="waste-lines" id="count-lines">${items.map(ing => countRowHtml(ing, d.lines[ing.id], 'data-cqty')).join('')}</div>
+    <div class="form-row" style="margin-top:12px;"><label for="count-note">Note <span class="text-light">(optional)</span></label>
+      <input id="count-note" maxlength="${STOCK_COUNT_NOTE_MAX}" value="${escapeHtml(d.note || '')}" placeholder="e.g. One milk carton opened today"></div>
+    ${!isOnline() ? `<p class="hint">${icon('wifi-off', {size: 16})} Offline: the count is saved on this counter and uploads with the shift close.</p>` : ''}`,
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="count-next">Confirm count</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      wireCountRows(root, d, 'data-cqty');
+      root.querySelector('#count-note').oninput = (e) => { d.note = e.target.value; saveCountDraft(d); };
+      root.querySelector('#count-next').onclick = () => {
+        d.note = (root.querySelector('#count-note').value || '').trim();
+        saveCountDraft(d);
+        try{ buildStockCountData({shift_id: shift.id, staff_id: posState.currentUser.id, note: d.note, lines: countLinesFromDraft(d)}); }
+        catch(e){
+          toast(countErrorText(e), 'error');
+          const first = e && e.missing && e.missing[0] && root.querySelector(`[data-cqty="${CSS.escape(e.missing[0].ingredient_id)}"]`);
+          if(first) first.focus();
+          return;
+        }
+        const diffs = countDifferences(countLinesFromDraft(d));
+        if(!diffs.length){ finishStockCount(shift, d, onDone); return; }
+        openCountDoubleCheck(shift, d, diffs.map(x => x.ingredient_id), onDone);
+      };
+      const firstEmpty = items.find(ing => !(d.lines[ing.id] && String(d.lines[ing.id].quantity || '').trim() !== ''));
+      setTimeout(() => { const f = firstEmpty && root.querySelector(`[data-cqty="${CSS.escape(firstEmpty.id)}"]`); if(f) f.focus(); }, 50);
+    }});
+}
+// Step 2: the double-check. Only the items that differ, without saying by how much or which way.
+function openCountDoubleCheck(shift, d, ids, onDone){
+  const items = countAtCloseIngredients().filter(ing => ids.includes(ing.id) || ids.includes(mergeTarget(ing.id).id));
+  openModal({title: 'Please recount these', wide: true, body: `
+    <div class="notice warn">${icon('alert', {size: 18})} <span>${items.length === 1 ? 'This item doesn\'t' : `These ${items.length} items don't`} match what the shop expects. Count ${items.length === 1 ? 'it' : 'them'} again and fix the number if needed, then confirm.</span></div>
+    <div class="waste-lines" id="recount-lines">${items.map(ing => countRowHtml(ing, d.lines[ing.id], 'data-rqty')).join('')}</div>
+    <p class="hint">If your number is right, just confirm. The owner reviews differences in the Back Office.</p>`,
+    foot: `<button class="btn btn-outline" id="recount-back">Back to the full list</button><button class="btn btn-primary" id="recount-ok">Confirm count</button>`,
+    onMount: (root) => {
+      wireCountRows(root, d, 'data-rqty');
+      root.querySelector('#recount-back').onclick = () => openStockCount(shift, onDone);
+      root.querySelector('#recount-ok').onclick = () => {
+        try{ buildStockCountData({shift_id: shift.id, staff_id: posState.currentUser.id, note: d.note, lines: countLinesFromDraft(d)}); }
+        catch(e){ toast(countErrorText(e), 'error'); return; }
+        d.recounted = items.map(i => i.id);
+        finishStockCount(shift, d, onDone);
+      };
+      setTimeout(() => { const f = root.querySelector('[data-rqty]'); if(f) f.focus(); }, 50);
+    }});
+}
+function finishStockCount(shift, d, onDone){
+  d.counted_at = new Date().toISOString();
+  d.done = true;
+  saveCountDraft(d);
+  closeModal();
+  onDone({draft: d});
 }
 function showCloseShiftDialog(shift, closer, closeApprovalToken, checked, preset){
   const m = shiftMetrics(shift);
@@ -3955,6 +4323,7 @@ function showCloseShiftDialog(shift, closer, closeApprovalToken, checked, preset
       <div class="drow"><span>Pay Outs (${m.payOutCount})</span><b>-${fmtMoney(m.payOuts)}</b></div>
       <div class="drow total"><span><b>Expected Cash</b></span><b>${fmtMoney(m.expectedCash)}</b></div>
     </div>
+    ${preset && preset.count ? `<div class="notice count-done" style="margin-top:12px;">${icon('check', {size: 18})} <span>Stock count done: ${countLinesFromDraft(preset.count.draft).length} item(s)${(preset.count.draft.recounted || []).length ? `, ${preset.count.draft.recounted.length} recounted` : ''}. It is saved with the shift close. <a class="linklike" id="cs-recount" role="button" tabindex="0">Count again</a></span></div>` : ''}
     ${Sync.pending?`<div class="notice warn" style="margin-top:12px;">${Sync.pending} item(s) are still uploading. Closing is fine — they upload in order.</div>`:''}
     <div class="form-row" style="margin-top:14px;"><label>Declared Cash (counted)</label><input type="number" step="any" inputmode="decimal" id="cs-declared" placeholder="0.00"></div>
     <div class="change-display" id="cs-variance-display" style="display:none;"><div class="lbl" id="cs-variance-lbl">Variance</div><div class="val" id="cs-variance-val">₱0.00</div></div>
@@ -3963,6 +4332,11 @@ function showCloseShiftDialog(shift, closer, closeApprovalToken, checked, preset
     foot:`<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-danger" id="cs-confirm">Confirm Close Shift</button>`,
     onMount:(root)=>{
       root.querySelector('[data-cancel]').onclick = closeModal;
+      const recount = root.querySelector('#cs-recount');
+      if(recount){
+        const go = ()=> openStockCount(shift, (count)=> showCloseShiftDialog(shift, closer, closeApprovalToken, checked, Object.assign({}, preset, {count})));
+        recount.onclick = go; recount.onkeydown = (e)=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); go(); } };
+      }
       const disp = root.querySelector('#cs-variance-display'), notesRow = root.querySelector('#cs-notes-row');
       const declaredInput = root.querySelector('#cs-declared');
       declaredInput.oninput = ()=>{
@@ -3994,7 +4368,7 @@ function showCloseShiftDialog(shift, closer, closeApprovalToken, checked, preset
         const m2 = shiftMetrics(current);
         if(Math.abs(m2.expectedCash - m.expectedCash) >= 0.005 || Math.abs(m2.netSales - m.netSales) >= 0.005){
           closeModal();
-          showCloseShiftDialog(current, closer, closeApprovalToken, stillChecked, {declared, note});
+          showCloseShiftDialog(current, closer, closeApprovalToken, stillChecked, {declared, note, count: preset && preset.count});
           toast('The figures changed (for example a refund made in Back Office). They are updated below — check your count and confirm again.', 'warn');
           return;
         }
@@ -4007,6 +4381,26 @@ function showCloseShiftDialog(shift, closer, closeApprovalToken, checked, preset
           notes: (shift.notes||'') + (note ? ' | Variance note: '+note : ''), closed_by: closer.id, closed_by_name: closer.name, updated_at: now,
         };
         if(closeApprovalToken) closeOp.approval_token = closeApprovalToken;
+        // Release 1.5 (B9): the count goes first (the server closes the shift only after a full count).
+        let countData = null;
+        if(countAtCloseIngredients().length){
+          const cd = preset && preset.count ? preset.count.draft : null;
+          try{
+            if(!cd) throw Object.assign(new Error('COUNT_REQUIRED'), {code: 'COUNT_REQUIRED'});
+            countData = buildStockCountData({shift_id: shift.id, staff_id: posState.currentUser.id, counted_at: cd.counted_at, note: cd.note, lines: countLinesFromDraft(cd)});
+          }catch(e){
+            // The list of items to count changed meanwhile (e.g. the owner ticked another one): count again.
+            closeModal();
+            toast('The list of items to count changed. Please count again before closing.', 'warn');
+            openStockCount(shift, (count)=> showCloseShiftDialog(shift, closer, closeApprovalToken, stillChecked, {declared, note, count}));
+            return;
+          }
+        }
+        if(countData){
+          await Sync.queue('stock_count', countData);
+          queueAudit('Stock count at closing', `${shift.shift_number} — ${countData.lines.length} item(s) counted${countData.note ? ' (note: ' + countData.note + ')' : ''}`, countData.id);
+          clearCountDraft();
+        }
         await Sync.queue('shift_close', closeOp);
         queueAudit('Shift closed', `${shift.shift_number} — variance ${fmtMoney(variance)}`, shift.id);
         closeModal();
@@ -4142,8 +4536,9 @@ async function renderSalesScreen(){
     if(!isOnline()){ content.innerHTML = emptyBlock('Needs internet. Showing this shift instead is available offline.'); return; }
     content.innerHTML = emptyBlock('Loading today\'s sales…');
     try{
-      const from = new Date(); from.setHours(0,0,0,0);
-      const to = new Date(from.getTime() + 24*3600*1000);
+      // The shop's day (Manila), never the tablet's own clock zone (release 1.5 time-zone fix).
+      const from = shopMidnight();
+      const to = shopDayRange().to;
       const r = await cloud.rpc('sales_report', {p_from: from.toISOString(), p_to: to.toISOString()});
       posState.todaySales = {sales: r.sales||[], saleItems: r.sale_items||[], payments: r.payments||[], refunds: r.refunds||[], cashMovements: r.cash_movements||[]};
     }catch(e){ content.innerHTML = emptyBlock(escapeHtml(friendlyError(e))); return; }
