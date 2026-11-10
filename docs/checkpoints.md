@@ -41,6 +41,7 @@ Older working versions stay in the table below, so you can go back further if ne
 | 15 | **Release 1.4 live** | 2026-11-09 10:41 | You ran `010_release_1_4.sql` and merged pull request #5. This is now the last working version. |
 | 16 | **Release 1.4.1 ready** | 2026-11-09 | Shareable menu link (view-only page, live menu, highlighted item, Visit us, social preview card), Settings → Menu link; faster QR menu; anon table rights removed. Final test run 68 suites / 4,183 checks, 0 failing; security reviews passed. Waiting for you to publish (`docs/RELEASE_1.4.1.md`). |
 | 17 | **Release 1.4.1 live** | 2026-11-09 | You ran `011_release_1_4_1.sql` and merged pull request #6. This is now the last working version. |
+| 18 | **Release 1.4.2 ready** | 2026-11-10 | QR code for the menu link (Download PNG/SVG, branded "Scan for our menu" print card) and swipeable sub-category tabs on the menu page. No database script. Final test run 70 suites / 4,283 checks, 0 failing. Waiting for you to merge (`docs/RELEASE_1.4.2.md`). |
 
 ## Look at or download a checkpoint
 

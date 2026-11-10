@@ -1,8 +1,8 @@
 ---
 tags: [cccc, pos, session-log]
 project: Cavite City Coffee Club POS
-updated: 2026-11-02
-checkpoint: 16
+updated: 2026-11-10
+checkpoint: 18
 repo: zdboi/coffee-shop-system (branch wip/cccc-online-qr)
 ---
 
@@ -14,7 +14,15 @@ It has three apps on one Supabase database:
 - **Back Office:** the owner's email login only.
 - **QR order page:** customers order from their phones and pay at the counter.
 
-## Where things stand (Nov 9, night): release 1.4.1 ready for me
+## Where things stand (Nov 10): release 1.4.2 ready for me
+- **1.4.1 is live** (Nov 9, menu link): the **last working version** (checkpoint 17).
+- **1.4.2 = menu QR code + swipe tabs** (checkpoint 18). No database script. Steps are in `docs/RELEASE_1.4.2.md`: merge the PR → reload → scan the QR.
+  - Back Office → Settings → Menu link: QR code, Download PNG/SVG, and a "Scan for our menu" print card (A6/A5).
+  - Menu page: sub-categories are tabs; swipe left and right.
+  - 70 suites / 4,283 checks pass.
+- **Added to Wave 3:** partial and multiple production (½×, 1×, 2×, custom, "Max I can make"); producing from TCO, owing either the ingredients or pesos (chosen per batch); a "To return to TCO" list.
+
+## Earlier (Nov 9, night): release 1.4.1 ready for me
 - **1.4 is live** (Nov 9) and is the **last working version** (checkpoint 15).
 - **1.4.1 = shareable menu link** (checkpoint 16, PR #6, script 011). Steps are in `docs/RELEASE_1.4.1.md`: backup → run 011 → merge #6 → reload → Settings → Menu link.
   - **Link:** `zdboi.github.io/coffee-shop-system/menu/`. View-only, so no ordering.
