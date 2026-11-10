@@ -172,7 +172,15 @@ const TXN_SIGN = {
   ADJUSTMENT: 1, // adjustment quantity itself carries the sign
   PRODUCTION: 1, PRODUCTION_USE: -1,
   SALE_USAGE: -1, SALE_REVERSAL: 1,
+  PARTNER_RETURN: -1,   // release 1.5 (012): ingredients given back to a partner branch (TCO); stock goes down
 };
+// Words for the stock line types (release 1.5; screens may keep their own).
+const TXN_TYPE_LABELS = {
+  PURCHASE: 'Purchase', INITIAL_STOCK: 'Starting stock', USAGE: 'Used', WASTE: 'Waste', ADJUSTMENT: 'Adjustment',
+  PRODUCTION: 'Produced', PRODUCTION_USE: 'Used in production', SALE_USAGE: 'Sold', SALE_REVERSAL: 'Refund / void',
+  PARTNER_RETURN: 'Returned to partner',
+};
+function txnTypeLabel(type){ return TXN_TYPE_LABELS[type] || String(type == null ? '' : type).replace(/_/g, ' ').toLowerCase(); }
 function signedQty(t){
   const q = Number(t.quantity)||0;
   return t.transaction_type === 'ADJUSTMENT' ? q : (TXN_SIGN[t.transaction_type]||0) * Math.abs(q);
@@ -808,7 +816,13 @@ const WASTE_REASONS = [
   {id: 'EXPIRED',       label: 'Expired / spoiled'},
   {id: 'OTHER',         label: 'Other', needs_note: true},
 ];
-function wasteReasonLabel(id){ const r = WASTE_REASONS.find(x => x.id === id); return r ? r.label : String(id == null ? '' : id); }
+// Reasons only the SERVER writes (release 1.5): never sent by the counter's waste op.
+const SERVER_WASTE_REASON_LABELS = {RND: 'R&D', COUNT_SHORTAGE: 'Missing at count'};
+function wasteReasonLabel(id){
+  const r = WASTE_REASONS.find(x => x.id === id);
+  if(r) return r.label;
+  return SERVER_WASTE_REASON_LABELS[id] || String(id == null ? '' : id);
+}
 const WASTE_MAX_ITEMS = 30, WASTE_MAX_RECIPE_QTY = 100, WASTE_MAX_BASE_QTY = 1000000, WASTE_NOTE_MAX = 200, WASTE_MAX_OPTIONS = 20;
 function _codeError(code){ const e = new Error(code); e.code = code; return e; }
 // buildWasteData({reason, note, staff_id, shift_id, items, approved_by, approval_token, id?, logged_at?})
@@ -896,6 +910,281 @@ function wasteStockDeltas(dataOrItems){
 function wasteCostPreview(dataOrItems){
   return wasteStockLines(dataOrItems).reduce((s, l) => s + l.quantity * (ingredientCosting(l.ingredient_id).current || 0), 0);
 }
+
+/* ================= Count at closing (release 1.5, B9) =================
+   fo_sync op 'stock_count' (contract B9). The counter sends WHAT staff counted; the server
+   compares it with ITS stock when the op arrives (expected numbers are never sent).
+   Order: queue the count BEFORE that shift's shift_close (the outbox uploads oldest first, and
+   the server refuses the close with COUNT_REQUIRED until a full count of the shift is there). */
+const STOCK_COUNT_MAX_LINES = 300, STOCK_COUNT_MAX_QTY = 10000000, STOCK_COUNT_NOTE_MAX = 200;
+// The server's tolerance for "differs" (_apply_count_effects / _fo_apply_15: 0.000001 of the stock unit).
+const STOCK_COUNT_TOLERANCE = 0.000001;
+function isCountAtClose(ing){ return !!(ing && ing.count_at_close) && isStockIngredient(ing); }
+// The items staff must count before Close shift (server _count_items): ticked "Count at closing",
+// switched on, not merged away, not an operating supply. Sorted by name.
+function countAtCloseIngredients(){
+  return state.ingredients.filter(isCountAtClose).slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+}
+// One typed count line -> {ingredient_id (where the stock lives now), ingredient, quantity (stock unit)}
+// or null when the item is unknown / the unit doesn't convert. Unit empty = the stock unit of the item
+// named (an item merged since: converted to the general item's unit, like the server).
+function countLineBase(line){
+  if(!line || !line.ingredient_id) return null;
+  const ing = ingredientById(line.ingredient_id);
+  if(!ing) return null;
+  const t = mergeTarget(ing.id), fin = t.ingredient || ing;
+  const unit = (line.unit == null || String(line.unit).trim() === '') ? ing.base_unit : String(line.unit).trim();
+  const q = toBaseQty(line.quantity, unit, fin.base_unit, fin.weight_g_per_ml);
+  if(q === null) return null;
+  return {ingredient_id: t.id, ingredient: fin, quantity: _unitRound(q)};
+}
+// Which ticked items a count's lines leave out: {ok, missing: [{ingredient_id, name}]}.
+// (The server closes a shift only after a count with a line for EVERY ticked item.)
+function stockCountCoversTicked(lines){
+  const have = new Set();
+  (lines || []).forEach(l => {
+    if(!l || !l.ingredient_id || !_hasNum(l.quantity)) return;
+    have.add(l.ingredient_id); have.add(mergeTarget(l.ingredient_id).id);
+  });
+  const missing = countAtCloseIngredients().filter(i => !have.has(i.id)).map(i => ({ingredient_id: i.id, name: i.name}));
+  return {ok: !missing.length, missing};
+}
+// buildStockCountData({id?, shift_id, staff_id, counted_at?, note?, lines: [{ingredient_id, quantity, unit?}]}, opts?)
+// -> the op's data, ready for Sync.queue('stock_count', data):
+//    {id, shift_id, staff_id, counted_at, note, lines: [{ingredient_id, quantity, unit}]}
+//    (quantity exactly as typed, unit as typed or null = the item's stock unit). id is made ONCE here:
+//    keep the same data for retries (same id + new op_id -> the server answers 'skipped').
+// opts.requireAll (default true): every ticked item must have a line (else COUNT_REQUIRED, e.missing).
+// Throws an Error whose code friendlyError knows:
+//   BAD_COUNT (no lines / > 300 / an item twice / an item not ticked / nothing ticked),
+//   COUNT_REQUIRED (a ticked item has no amount; e.missing = [{ingredient_id, name}]),
+//   BAD_QUANTITY (missing, < 0, > 10,000,000), BAD_UNIT, UNKNOWN_INGREDIENT (not in this counter's copy).
+function buildStockCountData(input, opts){
+  input = input || {};
+  const requireAll = !(opts && opts.requireAll === false);
+  const ticked = countAtCloseIngredients();
+  if(!ticked.length) throw _codeError('BAD_COUNT');
+  const tickedIds = new Set(ticked.map(i => i.id));
+  const list = Array.isArray(input.lines) ? input.lines : [];
+  if(!list.length && requireAll){ const e = _codeError('COUNT_REQUIRED'); e.missing = ticked.map(i => ({ingredient_id: i.id, name: i.name})); throw e; }
+  if(list.length < 1 || list.length > STOCK_COUNT_MAX_LINES) throw _codeError('BAD_COUNT');
+  const seen = new Set();
+  const lines = list.map(l => {
+    if(!l || typeof l !== 'object' || !l.ingredient_id) throw _codeError('BAD_COUNT');
+    const ing = ingredientById(l.ingredient_id);
+    if(!ing) throw _codeError('UNKNOWN_INGREDIENT');
+    const fin = mergeTarget(ing.id).id;
+    if(seen.has(fin) || !tickedIds.has(fin)) throw _codeError('BAD_COUNT');
+    seen.add(fin);
+    if(!_hasNum(l.quantity)) throw _codeError('BAD_QUANTITY');
+    const q = Number(l.quantity);
+    if(q < 0 || q > STOCK_COUNT_MAX_QTY) throw _codeError('BAD_QUANTITY');
+    const unit = (l.unit == null || String(l.unit).trim() === '') ? null : String(l.unit).trim();
+    if(!countLineBase({ingredient_id: ing.id, quantity: q, unit})) throw _codeError('BAD_UNIT');
+    return {ingredient_id: ing.id, quantity: q, unit};
+  });
+  if(requireAll){
+    const missing = ticked.filter(i => !seen.has(i.id)).map(i => ({ingredient_id: i.id, name: i.name}));
+    if(missing.length){ const e = _codeError('COUNT_REQUIRED'); e.missing = missing; throw e; }
+  }
+  const note = String(input.note == null ? '' : input.note).trim().slice(0, STOCK_COUNT_NOTE_MAX);
+  return {id: input.id || uid(), shift_id: input.shift_id || null, staff_id: input.staff_id || null,
+    counted_at: input.counted_at || new Date().toISOString(), note: note || null, lines};
+}
+// The blind count's double-check: ONLY the lines whose counted amount differs from what is expected.
+//   lines:        typed lines [{ingredient_id, quantity, unit?}] (or the op data's lines)
+//   expectedById: {ingredient_id: stock in its stock unit} (default: this counter's stock copy, state.stock)
+// -> [{ingredient_id, name, unit, counted, expected, difference, kind: 'MISSING'|'EXTRA'}] in the lines' order
+//    (all in the stock unit of the item the stock lives in; difference = counted − expected, minus = missing).
+// A difference of at most 0.000001 counts as equal (the server's rule). Lines that can't be read
+// (unknown item, unit that doesn't convert, no amount) are left out: buildStockCountData reports them.
+// Only for the "please recount" prompt: the server works the real numbers out again on arrival.
+function countDifferences(lines, expectedById){
+  const exp = expectedById || state.stock || {};
+  const out = [];
+  (lines || []).forEach(l => {
+    if(!l || !_hasNum(l.quantity)) return;
+    const b = countLineBase(l);
+    if(!b) return;
+    const expected = _unitRound(Number(exp[b.ingredient_id]) || 0);
+    const difference = _unitRound(b.quantity - expected);
+    if(Math.abs(difference) <= STOCK_COUNT_TOLERANCE) return;
+    out.push({ingredient_id: b.ingredient_id, name: b.ingredient.name || '', unit: b.ingredient.base_unit,
+      counted: b.quantity, expected, difference, kind: difference < 0 ? 'MISSING' : 'EXTRA'});
+  });
+  return out;
+}
+// Stock movements that bring this counter's stock copy to the counted amounts (what the server
+// will do: missing -> WASTE, extra -> ADJUSTMENT up). For applyStockDeltas() when the op is queued.
+//   [{ingredient_id, transaction_type: 'WASTE'|'ADJUSTMENT', quantity}]
+function stockCountDeltas(dataOrLines, expectedById){
+  const lines = Array.isArray(dataOrLines) ? dataOrLines : ((dataOrLines && dataOrLines.lines) || []);
+  return countDifferences(lines, expectedById).map(d => d.difference < 0
+    ? {ingredient_id: d.ingredient_id, transaction_type: 'WASTE', quantity: -d.difference}
+    : {ingredient_id: d.ingredient_id, transaction_type: 'ADJUSTMENT', quantity: d.difference});
+}
+// Why the server flagged a count (stock_counts.review_reason, comma separated) in plain words.
+const COUNT_REVIEW_TEXT = {
+  COUNT_EXTRA: 'More counted than expected (stock was raised to the count)',
+  COUNT_INCOMPLETE: 'Not every ticked item was counted',
+  LARGE_SHORTAGE: 'Missing stock worth more than the review limit',
+  STAFF_MISMATCH: 'Counted by someone other than who was signed in',
+  FUTURE_DATE: 'Dated in the future', OLD_DATE: 'Dated more than 7 days back',
+  BEFORE_START_FRESH: 'Dated before the shop started fresh', SHIFT_CLOSED: 'Counted after the shift was closed',
+};
+function countReviewText(reasonString){
+  const parts = String(reasonString == null ? '' : reasonString).split(/\s*,\s*/).map(s => s.trim()).filter(Boolean);
+  if(!parts.length) return '';
+  return parts.map(c => COUNT_REVIEW_TEXT[c] || c.replace(/_/g, ' ').toLowerCase()).join('; ');
+}
+
+/* ================= Production batch size + partner branch (release 1.5, B15) =================
+   One rule for every production screen (and the same rule the server's _partner_batch_plan uses):
+   a batch of `scale` × the recipe takes, per ingredient, the recipe's lines (stock units, > 0) moved to
+   where the ingredient's stock lives now (merged items -> their general item, × factor), operating
+   supplies left out, lines of one ingredient added together, × scale, rounded to 6 decimals, only > 0. */
+const PRODUCTION_SCALES = [0.5, 1, 2];          // the form's ½×, 1×, 2× buttons
+const PRODUCTION_MAX_SCALE = 100;               // the server's limit (BAD_SCALE)
+const PRODUCTION_SCALE_STEP = 0.05;             // "Max I can make" rounds DOWN to a multiple of 0.05×
+function _recipeOf(recipeOrId){
+  if(recipeOrId && typeof recipeOrId === 'object') return recipeOrId;
+  return state.recipes.find(r => r.id === recipeOrId) || null;
+}
+// A usable batch size: a number above 0 and at most 100 (rounded to 6 decimals like the server), else null.
+function cleanProductionScale(scale){
+  if(!_hasNum(scale)) return null;
+  const s = _unitRound(Number(scale));
+  return (s > 0 && s <= PRODUCTION_MAX_SCALE) ? s : null;
+}
+// Expected yield of a batch (recipe's yield unit) and the other way round.
+function productionYield(recipe, scale){
+  recipe = _recipeOf(recipe); const s = cleanProductionScale(scale);
+  return (recipe && s !== null) ? _unitRound((Number(recipe.expected_yield) || 0) * s) : 0;
+}
+function productionScaleFromYield(recipe, expectedYield){
+  recipe = _recipeOf(recipe);
+  const y = Number(recipe && recipe.expected_yield) || 0;
+  return (y > 0 && _hasNum(expectedYield)) ? cleanProductionScale(Number(expectedYield) / y) : null;
+}
+// scaleProduction(recipe | recipeId, scale) -> [{ingredient_id, name, unit, quantity}] (stock units, sorted by name).
+// Bad scale (not > 0 and <= 100) or unknown recipe -> [].
+function scaleProduction(recipe, scale){
+  recipe = _recipeOf(recipe);
+  const s = cleanProductionScale(scale);
+  if(!recipe || s === null) return [];
+  const order = [], by = {};
+  state.recipeIngredients.forEach(ri => {
+    if(ri.recipe_id !== recipe.id) return;
+    const q = recipeLineQty(ri);
+    if(!(q > 0)) return;
+    const t = mergeTarget(ri.ingredient_id);
+    if(isExpenseIngredient(t.id)) return;
+    if(!by[t.id]){ by[t.id] = 0; order.push(t.id); }
+    by[t.id] += q * t.factor;
+  });
+  return order.map(id => {
+    const ing = ingredientById(id) || {};
+    return {ingredient_id: id, name: ing.name || '', unit: ing.base_unit || '', quantity: _unitRound(by[id] * s)};
+  }).filter(l => l.quantity > 0).sort((a, b) => String(a.name).localeCompare(String(b.name)) || String(a.ingredient_id).localeCompare(String(b.ingredient_id)));
+}
+// "Max I can make": the biggest batch the stock allows.
+//   stockById: {ingredient_id: stock} (default: state.stock)
+// -> {scale, limiting_ingredient_id, exact}
+//    exact = the lowest stock ÷ amount per 1× over the recipe's lines (6 decimals);
+//    scale = exact rounded DOWN to a multiple of 0.05× (a 0.001-unit stock tolerance, like the stock
+//            check at payment), at most 100×; 0 when an ingredient has no stock;
+//    limiting_ingredient_id = the ingredient with the lowest ratio (first by name on a tie).
+//    A recipe with no stock lines (nothing tracked) -> {scale: null, limiting_ingredient_id: null, exact: null}.
+// Why 0.05×: fine enough for real batches (5 % of a recipe) and never suggests a size the stock can't cover.
+function maxBatchFromStock(recipe, stockById){
+  const stock = stockById || state.stock || {};
+  const lines = scaleProduction(recipe, 1);
+  if(!lines.length) return {scale: null, limiting_ingredient_id: null, exact: null};
+  let low = Infinity, lowTol = Infinity, limiting = null;
+  lines.forEach(l => {
+    const have = Number(stock[l.ingredient_id]) || 0;
+    const ratio = have / l.quantity, ratioTol = (have + STOCK_EPSILON) / l.quantity;
+    if(ratio < low){ low = ratio; lowTol = ratioTol; limiting = l.ingredient_id; }
+  });
+  const steps = Math.floor(lowTol / PRODUCTION_SCALE_STEP + 1e-9);
+  const scale = Math.min(PRODUCTION_MAX_SCALE, Math.max(0, Math.round(steps * PRODUCTION_SCALE_STEP * 100) / 100));
+  return {scale, limiting_ingredient_id: limiting, exact: _unitRound(Math.max(0, low))};
+}
+// What one stock unit of an ingredient cost as of a day: the SERVER's _ingredient_unit_cost (010), used by
+// partner debts, waste and the monthly report (no "brand in use" price: reports cost the same every time).
+//   bought: costing method over purchases up to that day ('latest' = last price, else money ÷ units,
+//           else the last price), then standard_cost, else 0;
+//   house-made: its production recipe's cost ÷ expected yield (5 levels deep at most), else the batches'
+//           average up to that day, else 0.
+function ingredientUnitCostAsOf(ingredientId, asOf, depth){
+  depth = depth || 0;
+  const day = String(asOf || todayISO()).slice(0, 10);
+  const ing = ingredientById(ingredientId);
+  if(!ing) return 0;
+  const dayOf = (v) => String(v == null ? '' : v).slice(0, 10);
+  if(isProducedItem(ing)){
+    if(depth < 5){
+      const cands = state.recipes.filter(r => Number(r.expected_yield) > 0
+        && (r.id === ing.source_recipe_id || (r.produced_ingredient_id === ing.id && r.is_production_recipe)));
+      const rec = cands.find(r => r.id === ing.source_recipe_id) || cands[0];
+      if(rec){
+        let sum = 0;
+        state.recipeIngredients.forEach(ri => {
+          if(ri.recipe_id !== rec.id) return;
+          const q = recipeLineQty(ri);
+          if(q > 0) sum += q * ingredientUnitCostAsOf(ri.ingredient_id, day, depth + 1);
+        });
+        return sum / Number(rec.expected_yield);
+      }
+    }
+    let cost = 0, yld = 0;
+    (state.productionBatches || []).forEach(b => {
+      if(b.produced_ingredient_id !== ing.id || (b.production_date && dayOf(b.production_date) > day)) return;
+      cost += Number(b.raw_cost_total) || 0; yld += Number(b.actual_yield) || 0;
+    });
+    return yld ? cost / yld : 0;
+  }
+  const list = purchasesFor(ing.id).filter(p => dayOf(p.purchase_date) <= day)
+    .sort((a, b) => dayOf(b.purchase_date).localeCompare(dayOf(a.purchase_date)) || String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  let c = null;
+  if(costingMethod() === 'latest'){
+    const hit = list.find(p => _hasNum(p.price_per_base_unit));
+    if(hit) c = Number(hit.price_per_base_unit);
+  } else if(list.length){
+    const qty = list.reduce((s, p) => s + (Number(p.base_quantity) || 0), 0);
+    const spend = list.reduce((s, p) => s + (Number(p.total_price) || 0), 0);
+    if(qty) c = spend / qty;
+    else if(_hasNum(list[0].price_per_base_unit)) c = Number(list[0].price_per_base_unit);
+  }
+  if(c === null && _hasNum(ing.standard_cost)) c = Number(ing.standard_cost);
+  return c === null ? 0 : c;
+}
+// What we owe a partner for a batch it made, as ingredients: the batch's ingredient lines
+// (scaleProduction; same as partner_batch_preview's lines without the money).
+function partnerDebtLines(recipe, scale){ return scaleProduction(recipe, scale); }
+function _costLookup(costs, asOf){
+  if(typeof costs === 'function') return costs;
+  if(costs && typeof costs === 'object') return (id) => Number(costs[id]) || 0;
+  const day = asOf || todayISO();
+  return (id) => ingredientUnitCostAsOf(id, day);
+}
+// partnerDebtPlan(lines, costs?, asOf?) -> {lines: [{...line, unit_cost, value}], value}
+//   costs: {ingredient_id: cost per stock unit} or a function id -> cost; missing -> ingredientUnitCostAsOf(id, asOf || today).
+//   Same rounding as the server: unit_cost 6 decimals, line value centavos, total = round(Σ quantity × cost, 2)
+//   (the total is NOT the sum of the rounded line values).
+function partnerDebtPlan(lines, costs, asOf){
+  const costOf = _costLookup(costs, asOf);
+  let total = 0;
+  const out = (lines || []).map(l => {
+    const q = Number(l && l.quantity) || 0;
+    const c = Number(costOf(l.ingredient_id)) || 0;
+    total += q * c;
+    return Object.assign({}, l, {unit_cost: _unitRound(c), value: roundMoney(q * c)});
+  });
+  return {lines: out, value: roundMoney(total)};
+}
+// partnerDebtValue(lines, costs?, asOf?) -> ₱ (centavos): the batch's value = its cost = what we owe in pesos.
+function partnerDebtValue(lines, costs, asOf){ return partnerDebtPlan(lines, costs, asOf).value; }
 
 /* ================= Expenses (release 1.4, A11; Back Office, owner only) ================= */
 const EXPENSE_CATEGORIES = [

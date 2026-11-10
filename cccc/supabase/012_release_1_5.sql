@@ -306,7 +306,8 @@ language sql immutable as $$
   select '{"table_open_orders": 4, "table_guests": 1, "shop_orders_10min": 60, "shop_signups_hour": 40}'::jsonb
 $$;
 
--- A4. What the phone sees of its customer: as 008, plus the username.
+-- A4. What the phone sees of its customer: as 008, plus the username and
+-- (B16) the card history (the card itself also has saved_stamps, see Part A2).
 create or replace function public._qr_customer_json(p_c public.customers) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare v jsonb;
@@ -318,7 +319,7 @@ begin
     'phone_hint', case when p_c.phone is null then null else '•••• ' || right(p_c.phone, 3) end,
     'visit_count', v->'visits', 'stamps', v->'total_stamps',
     'total_stamps', v->'total_stamps', 'drink_stamps_earned', v->'drink_stamps_earned', 'food_stamps_earned', v->'food_stamps_earned',
-    'card', v->'card', 'ready_rewards', v->'ready_rewards',
+    'card', v->'card', 'ready_rewards', v->'ready_rewards', 'history', v->'history',
     'loyalty_rewards', public._loyalty_config(p_c.business_id),
     'first_seen_at', p_c.first_seen_at);
 end $$;
@@ -765,7 +766,8 @@ language sql immutable as $$
                                              'archived', p_c.phone is null) end
 $$;
 
--- The counter's Customers tab card: as 008, plus username and archived.
+-- The counter's Customers tab card: as 008, plus username, archived and
+-- (B16) the card history.
 create or replace function public._counter_customer_json(p_c public.customers, p_money boolean) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare l jsonb := public._loyalty_summary(p_c.business_id, p_c.id); v jsonb;
@@ -775,7 +777,7 @@ begin
     'phone', public._mask_phone(p_c.phone), 'phone_masked', p_c.phone is not null, 'archived', p_c.phone is null,
     'visits', l->'visits', 'last_visit_at', l->'last_visit_at', 'first_seen_at', p_c.first_seen_at,
     'total_stamps', l->'total_stamps', 'drink_stamps_earned', l->'drink_stamps_earned', 'food_stamps_earned', l->'food_stamps_earned',
-    'card', l->'card', 'ready_rewards', l->'ready_rewards');
+    'card', l->'card', 'ready_rewards', l->'ready_rewards', 'history', l->'history');
   if p_money then
     v := v || jsonb_build_object('total_spent', (
       select round(coalesce(sum(greatest(coalesce(s.grand_total, 0)
@@ -933,6 +935,222 @@ begin
       from public.recipes r
       where r.id = any(v_ids)), '[]'::jsonb) end
   );
+end $$;
+
+-- =============================================================================
+-- PART A2. B16 NEXT STAMP CARD ONLY AFTER THE LAST REWARD + CARD HISTORY
+-- =============================================================================
+-- Owner decisions 2026-11-10. Nothing new is stored: everything is worked out
+-- from the stamps (the sales, as since 008) and the used rewards
+-- (loyalty_redemptions), so voids, refunds and merges always give the same
+-- answer for every app. With S = card size (15), T = total stamps and
+-- L = the LAST reward = the highest stamp in the reward list (15):
+--   * card 1 is always issued. Card k+1 is issued only when the last reward
+--     of card k has been used (a used reward = a redemption not released by a
+--     void / full refund, and not a merge duplicate).
+--     current card n = the first card whose last reward is NOT used yet.
+--   * stamps still sit in fixed places: card c holds stamps (c-1)S+1 .. cS.
+--     The current card shows min(T - (n-1)S, S) stamps; anything above nS is
+--     SAVED (saved_stamps) and appears on card n+1 the moment it is issued,
+--     with every reward those stamps reach ready at once. Several cards' worth
+--     can be saved: each new card waits for its own last reward again.
+--   * rewards of cards not issued yet can't be used (the counter gets
+--     CARD_NOT_ISSUED); rewards of earlier cards still unused (e.g. the stamp-5
+--     reward of card 1) stay usable, as before.
+--   * a completed card (1 .. n-1) goes in the card history with
+--       filled_at    = when its S-th stamp was earned (null only when the last
+--                      reward is set below the card size and was used before
+--                      the card was full)
+--       completed_at = when its last reward was used (that sale's time)
+--       rewards      = the rewards used on it.
+--   * voiding / fully refunding the sale that used card n's last reward gives
+--     that reward back (1.2): card n+1 closes again, its stamps show as saved
+--     again, rewards already used on it stay used (and show as used when it
+--     opens again). The free drink is ready again on card n.
+
+-- L: the highest stamp in the shop's reward list.
+create or replace function public._loyalty_last_stamp(p_cfg jsonb) returns integer
+language sql immutable as $$
+  select max((r->>'stamp')::int) from jsonb_array_elements(p_cfg->'rewards') r
+$$;
+
+-- n: the card in use (see above).
+create or replace function public._loyalty_current_card(p_biz uuid, p_customer uuid) returns integer
+language sql stable security definer set search_path = public as $$
+  with u as (
+    select x.card_no from public.loyalty_redemptions x
+    where x.business_id = p_biz and x.customer_id = p_customer
+      and x.milestone = public._loyalty_last_stamp(public._loyalty_config(p_biz))
+      and x.released_at is null and x.merged_from is null
+  )
+  select min(k)::int from generate_series(1, 1 + (select count(*) from u)::int) k
+  where not exists (select 1 from u where u.card_no = k)
+$$;
+
+-- When each stamp was earned, in order (stamp 1, 2, ...). Exactly the same
+-- reading of the sales as _customer_loyalty (008): one drink stamp and one
+-- food stamp per shop day, at the time of the first such sale that day.
+create or replace function public._customer_stamp_times(p_biz uuid, p_customer uuid)
+returns table(n integer, at timestamptz)
+language sql stable security definer set search_path = public as $$
+  with tz as (
+    select coalesce((select nullif(btrim(timezone), '') from public.settings where business_id = p_biz), 'Asia/Manila') as zone
+  ),
+  s0 as (
+    select x.id, coalesce(x.transaction_date, x.received_at, x.created_at) as t, x.received_at
+    from public.sales x
+    where x.business_id = p_biz and x.customer_id = p_customer and x.status in ('COMPLETED', 'PARTIALLY_REFUNDED')
+      and coalesce(x.grand_total, 0) > 0
+      and not (coalesce(x.needs_review, false) and coalesce(x.review_reason, '') ~ '(PRICE_BELOW_MENU|NOT_ON_MENU|PAYMENT_MISMATCH)')
+  ),
+  s as (
+    select s0.id, b.at, (b.at at time zone (select zone from tz))::date as day
+    from s0, lateral (select case when s0.received_at is null then s0.t
+                                  else least(greatest(s0.t, s0.received_at - interval '7 days'), s0.received_at) end as at) b
+  ),
+  stamps as (
+    select s.day, case when r.recipe_type = 'DRINKS' then 'D' else 'F' end as kind, min(s.at) as at
+    from s
+    join public.sale_items si on si.sale_id = s.id and si.business_id = p_biz
+    join public.recipes r on r.id = si.recipe_id and r.business_id = p_biz
+    where r.recipe_type in ('DRINKS', 'PASTRY', 'FOOD')
+      and coalesce(si.unit_price, 0) > 0 and coalesce(si.quantity, 0) >= 1
+      and coalesce(si.quantity, 0) - public._sale_item_refunded_qty(s.id, si.id) > 0.0001
+    group by 1, 2
+  )
+  select (row_number() over (order by at, day, kind))::int, at from stamps
+$$;
+
+-- Everything about one customer's stamps, as JSON (as 008, plus marked 012):
+--   {visits, last_visit_at, total_stamps, drink_stamps_earned, food_stamps_earned,
+--    card: {card_size, card_no (= n), stamps_on_card (0..S),
+--           saved_stamps (012: stamps waiting for card n+1), last_reward_stamp (012: L),
+--           milestones: [{stamp, type, amount, label, status}]},   status = locked | ready | redeemed
+--    ready_rewards: [{card_no, stamp, type, amount, label}]   every reward reached and not used,
+--                                                             on card n and earlier cards only
+--    history (012): [{card_no, filled_at, completed_at,
+--                     rewards: [{stamp, type, label, amount, used_at}]}]   completed cards, oldest first}
+create or replace function public._loyalty_summary(p_biz uuid, p_customer uuid) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare l record; v_cfg jsonb := public._loyalty_config(p_biz); v_size integer; v_total integer; v_card integer;
+  v_last integer; v_hist jsonb := '[]'::jsonb;
+begin
+  select * into l from public._customer_loyalty(p_biz, p_customer);
+  v_size := (v_cfg->>'card_size')::int;
+  v_last := public._loyalty_last_stamp(v_cfg);
+  v_total := coalesce(l.drink_stamps, 0) + coalesce(l.food_stamps, 0);
+  v_card := coalesce(public._loyalty_current_card(p_biz, p_customer), 1);
+  if v_card > 1 then
+    with st as (select * from public._customer_stamp_times(p_biz, p_customer))
+    select coalesce(jsonb_agg(jsonb_build_object(
+             'card_no', c,
+             'filled_at', (select st.at from st where st.n = c * v_size),
+             'completed_at', (select min(coalesce(sa.transaction_date, x.created_at)) from public.loyalty_redemptions x
+                              left join public.sales sa on sa.id = x.sale_id
+                              where x.business_id = p_biz and x.customer_id = p_customer and x.card_no = c and x.milestone = v_last
+                                and x.released_at is null and x.merged_from is null),
+             'rewards', (select coalesce(jsonb_agg(jsonb_build_object('stamp', x.milestone,
+                                   'type', (select r->>'type' from jsonb_array_elements(v_cfg->'rewards') r where (r->>'stamp')::int = x.milestone limit 1),
+                                   'label', (select r->>'label' from jsonb_array_elements(v_cfg->'rewards') r where (r->>'stamp')::int = x.milestone limit 1),
+                                   'amount', x.amount, 'used_at', coalesce(sa.transaction_date, x.created_at)) order by x.milestone), '[]'::jsonb)
+                         from public.loyalty_redemptions x left join public.sales sa on sa.id = x.sale_id
+                         where x.business_id = p_biz and x.customer_id = p_customer and x.card_no = c
+                           and x.released_at is null and x.merged_from is null)
+           ) order by c), '[]'::jsonb)
+      into v_hist
+      from generate_series(1, v_card - 1) c;
+  end if;
+  return jsonb_build_object(
+    'visits', coalesce(l.visits, 0), 'last_visit_at', l.last_visit_at,
+    'total_stamps', v_total, 'drink_stamps_earned', coalesce(l.drink_stamps, 0), 'food_stamps_earned', coalesce(l.food_stamps, 0),
+    'card', jsonb_build_object('card_size', v_size, 'card_no', v_card,
+      'stamps_on_card', least(greatest(v_total - (v_card - 1) * v_size, 0), v_size),
+      'saved_stamps', greatest(v_total - v_card * v_size, 0),
+      'last_reward_stamp', v_last,
+      'milestones', (select coalesce(jsonb_agg(jsonb_build_object('stamp', (r->>'stamp')::int, 'type', r->>'type',
+                         'amount', r->'amount', 'label', r->>'label',
+                         'status', case when exists (select 1 from public.loyalty_redemptions x
+                                                     where x.business_id = p_biz and x.customer_id = p_customer and x.card_no = v_card
+                                                       and x.milestone = (r->>'stamp')::int
+                                                       and x.released_at is null and x.merged_from is null) then 'redeemed'
+                                        when v_total >= (v_card - 1) * v_size + (r->>'stamp')::int then 'ready'
+                                        else 'locked' end) order by (r->>'stamp')::int), '[]'::jsonb)
+                     from jsonb_array_elements(v_cfg->'rewards') r)),
+    'ready_rewards', (select coalesce(jsonb_agg(jsonb_build_object('card_no', c, 'stamp', (r->>'stamp')::int, 'type', r->>'type',
+                          'amount', r->'amount', 'label', r->>'label') order by c, (r->>'stamp')::int), '[]'::jsonb)
+                      from generate_series(1, v_card) c, jsonb_array_elements(v_cfg->'rewards') r
+                      where v_total >= (c - 1) * v_size + (r->>'stamp')::int
+                        and not exists (select 1 from public.loyalty_redemptions x
+                                        where x.business_id = p_biz and x.customer_id = p_customer and x.card_no = c and x.milestone = (r->>'stamp')::int
+                                          and x.released_at is null and x.merged_from is null)),
+    'history', v_hist);
+end $$;
+
+-- How much a reward takes off a counter sale: exactly as 008, plus (012)
+-- CARD_NOT_ISSUED when the reward is on a card that is not issued yet (the
+-- last reward of the card before it is not used). The amounts and every other
+-- check (REWARD_NOT_AVAILABLE) are unchanged.
+create or replace function public._loyalty_reward_amount(p_biz uuid, p_sale_id uuid, p_sale jsonb, p_items jsonb, p_rw jsonb)
+returns numeric language plpgsql volatile security definer set search_path = public as $$
+declare
+  v_cust uuid := public._to_uuid(p_rw->>'customer_id'); v_card integer; v_ms integer; v_cfg jsonb; v_size integer;
+  v_r jsonb; v_total integer; v_amt numeric; v_rid uuid; v_rec public.recipes%rowtype; v_s public.settings%rowtype;
+begin
+  select * into v_s from public.settings where business_id = p_biz;
+  if not coalesce(v_s.loyalty_enabled, false) then raise exception 'REWARD_NOT_AVAILABLE'; end if;
+  if v_cust is null or v_cust is distinct from public._to_uuid(p_sale->>'customer_id') then raise exception 'REWARD_NOT_AVAILABLE'; end if;
+  perform 1 from public.customers where id = v_cust and business_id = p_biz and merged_into is null for update;
+  if not found then raise exception 'REWARD_NOT_AVAILABLE'; end if;
+  v_card := case when (p_rw->>'card_no') ~ '^\d{1,6}$' then (p_rw->>'card_no')::int end;
+  v_ms := case when (p_rw->>'milestone') ~ '^\d{1,3}$' then (p_rw->>'milestone')::int end;
+  if v_card is null or v_card < 1 or v_ms is null then raise exception 'REWARD_NOT_AVAILABLE'; end if;
+  v_cfg := public._loyalty_config(p_biz);
+  v_size := (v_cfg->>'card_size')::int;
+  select r into v_r from jsonb_array_elements(v_cfg->'rewards') r where (r->>'stamp')::int = v_ms limit 1;
+  if v_r is null then raise exception 'REWARD_NOT_AVAILABLE'; end if;
+  -- 012 (B16): only cards already issued
+  if v_card > coalesce(public._loyalty_current_card(p_biz, v_cust), 1) then raise exception 'CARD_NOT_ISSUED'; end if;
+  select coalesce(drink_stamps, 0) + coalesce(food_stamps, 0) into v_total from public._customer_loyalty(p_biz, v_cust, p_sale_id);
+  if v_total < (v_card - 1) * v_size + v_ms then raise exception 'REWARD_NOT_AVAILABLE'; end if;
+  if exists (select 1 from public.loyalty_redemptions x
+             where x.business_id = p_biz
+               and (x.customer_id = v_cust and x.card_no = v_card and x.milestone = v_ms or x.sale_id = p_sale_id)
+               and x.released_at is null and x.merged_from is null) then
+    raise exception 'REWARD_NOT_AVAILABLE';
+  end if;
+  if v_r->>'type' = 'AMOUNT_OFF' then
+    v_amt := (v_r->>'amount')::numeric;
+  else
+    v_rid := public._to_uuid(p_rw->>'recipe_id');
+    select * into v_rec from public.recipes where id = v_rid and business_id = p_biz and recipe_type in ('DRINKS', 'PASTRY', 'FOOD');
+    if not found then raise exception 'REWARD_NOT_AVAILABLE'; end if;
+    select max(least(public._menu_unit_price(v_rec.selling_price, v_rec.modifier_groups, it->'modifiers'),
+                     greatest(coalesce(public._to_num(it->>'unit_price'), 0), 0),
+                     greatest(coalesce(public._to_num(it->>'line_total'), 0), 0)))
+      into v_amt
+      from jsonb_array_elements(case when jsonb_typeof(p_items) = 'array' then p_items else '[]'::jsonb end) it
+      where it->>'recipe_id' = v_rid::text
+        and public._to_num(it->>'quantity') >= 1
+        and public._to_num(it->>'quantity') = trunc(public._to_num(it->>'quantity'));
+    if v_amt is null then raise exception 'REWARD_NOT_AVAILABLE'; end if;
+  end if;
+  return round(least(greatest(v_amt, 0),
+                     greatest(coalesce(public._to_num(p_sale->>'subtotal'), 0) - coalesce(public._to_num(p_sale->>'discount_amount'), 0), 0)), 2);
+end $$;
+
+-- Back Office (owner only): the same stamp card answer for a list of
+-- customers (Customers list and detail), so the Back Office shows exactly
+-- what the counter and the QR page show. p_customer_ids: 1..500 ids of this
+-- shop (others are left out). Returns {"<customer id>": <summary>, ...}.
+-- Errors: NOT_A_MEMBER, NOT_ALLOWED, BAD_REQUEST (no list / more than 500).
+create or replace function public.bo_customer_loyalty(p_customer_ids uuid[]) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare v_biz uuid := public._require_owner();
+begin
+  if p_customer_ids is null or cardinality(p_customer_ids) not between 1 and 500 then raise exception 'BAD_REQUEST'; end if;
+  return coalesce((select jsonb_object_agg(c.id::text, public._loyalty_summary(v_biz, c.id))
+                   from public.customers c
+                   where c.business_id = v_biz and c.id = any(p_customer_ids) and c.merged_into is null), '{}'::jsonb);
 end $$;
 
 -- =============================================================================
@@ -1473,6 +1691,8 @@ end $$;
 --                   and this shift has no count yet (upload the count first)
 --   BAD_COUNT       the count is not readable (no id, no lines, > 300 lines,
 --                   an item twice, an operating supply)
+--   CARD_NOT_ISSUED a sale uses a stamp reward of a card the customer hasn't
+--                   got yet (B16: the last reward of the card before isn't used)
 create or replace function public._fo_error_code(p_msg text) returns text
 language sql immutable as $$
   select case when c = any(array['DEVICE_MISMATCH','SHIFT_NOT_FOUND','UNKNOWN_STAFF','ROLE_TOO_LOW','APPROVAL_REQUIRED',
@@ -1481,7 +1701,7 @@ language sql immutable as $$
       'REFUND_TOO_LARGE','RETURN_TOO_LARGE','SALE_LOCKED','UNKNOWN_OP','BAD_OP','PIN_UPDATE_NEEDED',
       'AMOUNT_NOT_POSITIVE','REWARD_NOT_AVAILABLE','REWARD_AMOUNT_MISMATCH',
       'BAD_WASTE','BAD_WASTE_REASON','NOTE_REQUIRED','BAD_QUANTITY','BAD_UNIT',
-      'COUNT_REQUIRED','BAD_COUNT'])
+      'COUNT_REQUIRED','BAD_COUNT','CARD_NOT_ISSUED'])
     then c else 'SERVER_ERROR' end
   from (select substring(coalesce(p_msg, '') from '^[A-Z][A-Z_]+') as c) x
 $$;
@@ -2318,14 +2538,15 @@ do $$
 declare f record;
   mine text[] := array['_shop_day','_stock_of','_owner_staff','_username_letters','_username_key','_username_reserved',
     '_clean_username','_username_base','_new_username',
-    '_customer_username_check','_qr_limits','_qr_customer_json','qr_session','qr_set_username','_relink_subject','qr_relink',
+    '_customer_username_check','_loyalty_last_stamp','_loyalty_current_card','_customer_stamp_times','_loyalty_summary',
+    '_loyalty_reward_amount','bo_customer_loyalty','_qr_limits','_qr_customer_json','qr_session','qr_set_username','_relink_subject','qr_relink',
     'qr_switch_account','qr_forget_device','qr_place_order','_customer_for_staff','_counter_customer_json',
     'fo_customer_list','_qr_menu_groups','get_qr_menu','_barista_kit_problem','_settings_check',
     '_rnd_project_check','_rnd_project_delete_check','_stock_ref_taken','_waste_item','log_rnd_usage','delete_rnd_usage','_count_items','_apply_count_effects',
     'revise_stock_count','_fo_error_code','_fo_apply_15','fo_sync','_partner_delete_check','_partner_batch_plan',
     'partner_batch_preview','produce_partner_batch','partner_return','partner_pay','waste_report','net_income_report',
     '_writable_tables'];
-  member_fns text[] := array['fo_sync','fo_customer_list','log_rnd_usage','delete_rnd_usage','revise_stock_count',
+  member_fns text[] := array['fo_sync','fo_customer_list','bo_customer_loyalty','log_rnd_usage','delete_rnd_usage','revise_stock_count',
     'partner_batch_preview','produce_partner_batch','partner_return','partner_pay','waste_report','net_income_report'];
   public_fns text[] := array['get_qr_menu','qr_session','qr_relink','qr_forget_device','qr_place_order'];
   signed_in_fns text[] := array['qr_set_username','qr_switch_account'];

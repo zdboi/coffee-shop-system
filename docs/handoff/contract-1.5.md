@@ -78,6 +78,31 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 - `fo_customer_detail` unchanged (cards add `username`, `archived`). `search_customers` rows add `archived` (and `username` via the row).
 - Back Office reads `customers` directly: main list = `phone` not null and `merged_into` null; "Archived" filter = `phone` null.
 
+### A6. Next stamp card only after the last reward + card history (B16)
+**The rule (one rule, worked out by the database; apps only display it).** S = card size (15), L = the **last reward** = the highest stamp in the reward list (15), T = all stamps.
+- Card 1 is always issued. **Card N+1 is issued only when card N's last reward has been used** (used = a redemption not given back by a void / full refund).
+- Stamps are never lost. Card c holds stamps (c−1)·S+1 … c·S. While card N is full and its last reward is not used, the card shows **N at S/S** and the stamps above N·S are **saved** (`saved_stamps`). The moment the last reward is used, card N+1 shows those saved stamps, and every reward they reach is **ready at once**. With several cards' worth saved, each new card waits for its own last reward.
+- Rewards of a card not issued yet are never ready and never usable: the counter's sale upload is refused with **`CARD_NOT_ISSUED`** ("This reward is on the next stamp card. The customer gets that card after using the free drink."). Rewards of earlier cards still unused (e.g. card 1's ₱10 at stamp 5) stay usable, as before.
+- Nothing new is stored: card state comes from the stamps (sales) and the used rewards, so voids, refunds and merges always agree everywhere.
+
+**Answer** (`_loyalty_summary`, in `qr_session` / `qr_register` / … `customer`, the counter's `fo_customer_list` / `fo_customer_detail` cards, and the new Back Office read below). Same as 1.2, plus:
+- `card.saved_stamps` (integer ≥ 0) and `card.last_reward_stamp` (L). `card.card_no` = the card in use; `card.stamps_on_card` 0…S; `card.milestones` statuses for that card.
+- `ready_rewards`: only cards 1 … `card_no`.
+- **`history`**: completed cards, oldest first: `[{card_no, filled_at, completed_at, rewards: [{stamp, type, label, amount, used_at}]}]`
+  - `filled_at` = when the card's S-th stamp was earned (the time of the first sale of that stamp's shop day). Null only if the last reward is set below the card size and was used before the card was full.
+  - `completed_at` = when its last reward was used (the time of that sale).
+  - `rewards` = the rewards used on that card (`amount` = pesos taken off; free item = the item's price).
+- Display: "Card 1 · 15/15 · 5 stamps saved for your next card. Use your free drink to start card 2." Old cards: "Card 1 · filled 16 Sep 2026 · completed 26 Sep 2026".
+
+**Back Office read (new): `bo_customer_loyalty(p_customer_ids uuid[])`** (owner only) → `{"<customer id>": <summary>, …}` for 1…500 ids of this shop (others left out; `BAD_REQUEST` for none / > 500; `NOT_ALLOWED` for anyone else). The Back Office must use this instead of working the card out from `customers.stamps` (bo-sales.js does that today).
+
+**Edge cases (decided):**
+- **Void / full refund of the sale that used card N's last reward**: the reward is given back (1.2 rule), so **card N+1 closes again**: the customer is back on card N at S/S, the free drink is ready again, the stamps of card N+1 show as saved again, card N leaves the history. Rewards already used on card N+1 **stay used** (they were real sales) and show as used when card N+1 opens again; until then card N+1 rewards are refused (`CARD_NOT_ISSUED`). Voids keep working; nobody gets a reward twice.
+- **Customer merges** (1.2 rules unchanged): the merged record's sales and used rewards move to the kept record (a reward both had used stays history only, `merged_from`), and the card is simply worked out again from the combined stamps and rewards.
+- **Delete customer data**: the used rewards are deleted with the record (as 1.2); the sales stay unlinked. No card or history is left.
+- **Guests**: no customer record, so no card and no history.
+- **Existing customers already past stamp 15 with the free drink unused** (live data): the same rule applies from the moment 012 is installed. They show card 1 at 15/15 with their later stamps saved; card 2 rewards that the 1.4 apps showed as ready are no longer ready until they use the free drink (nothing is lost: the moment they use it, card 2 opens with all saved stamps and its reached rewards ready). Rewards already used on card 2 under the old rule stay used.
+
 ---
 ## Part B. Counter & stock
 
@@ -148,7 +173,7 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 - Errors: `NOT_ALLOWED`, `COUNT_NOT_FOUND`, `BAD_COUNT`, `BAD_QUANTITY`, `BAD_UNIT`, `NOTE_REQUIRED` (an amount changes without a note).
 - Back Office "Needs review": `stock_counts` where `needs_review`.
 
-New counter error codes: `COUNT_REQUIRED` "Count the ticked items before closing the shift", `BAD_COUNT`.
+New counter error codes: `COUNT_REQUIRED` "Count the ticked items before closing the shift", `BAD_COUNT`, `CARD_NOT_ISSUED` (B16, sale upload).
 
 ### B15. Production: batch size, partner branch (TCO)
 **Columns:**
@@ -196,11 +221,12 @@ INGREDIENTS rows: one per ingredient still owed, amounts in stock units. PESOS r
 ---
 ## Rights (summary)
 - New QR functions `qr_set_username`, `qr_switch_account`: **authenticated only** (a QR customer is always anonymously signed in). Re-made QR functions keep their 004 rights (anon + authenticated).
-- New owner functions (`log_rnd_usage`, `delete_rnd_usage`, `revise_stock_count`, `partner_batch_preview`, `produce_partner_batch`, `partner_return`, `partner_pay`): authenticated, owner checked inside.
+- New owner functions (`log_rnd_usage`, `delete_rnd_usage`, `revise_stock_count`, `partner_batch_preview`, `produce_partner_batch`, `partner_return`, `partner_pay`, `bo_customer_loyalty`): authenticated, owner checked inside.
 - New tables: RLS on; `anon` nothing; counters read none of them; no API writes except `rnd_projects` (owner). `apply_changes` adds only `rnd_projects`.
 - Internal tables with **no API access at all** (not even the owner): `stock_line_owners` (M1), `qr_signout_notices` (L3).
 - New internal helpers (no API access): `_username_letters`, `_username_key`, `_username_reserved`, `_relink_subject`, `_stock_ref_taken`. `delete_customer_data` re-made with its 004 rights (owner checked inside).
-- QA's F10 allow-list (suite 33) must add: `qr_set_username, qr_switch_account, log_rnd_usage, delete_rnd_usage, revise_stock_count, partner_batch_preview, produce_partner_batch, partner_return, partner_pay`.
+- QA's F10 allow-list (suite 33) must add: `qr_set_username, qr_switch_account, log_rnd_usage, delete_rnd_usage, revise_stock_count, partner_batch_preview, produce_partner_batch, partner_return, partner_pay, bo_customer_loyalty`.
+- Re-made internal (no API access, as 008): `_loyalty_summary`, `_loyalty_reward_amount`; new internal: `_loyalty_last_stamp`, `_loyalty_current_card`, `_customer_stamp_times`.
 
 ## Decisions (owner, 2026-11-10)
 - **D1** "Takeaway / Counter" QR code is exempt from the per-table limits (4 open tickets, 1 guest). Per-phone and per-shop limits still apply. Real tables keep both (A2).
@@ -208,6 +234,7 @@ INGREDIENTS rows: one per ingredient still owed, amounts in stock units. PESOS r
 - **D3** Signing in on a new phone (`qr_relink`) signs the old phone out (one phone per account).
 - **D4** No undo for a partner batch with a debt (`PARTNER_BATCH_HAS_DEBT`; settle it with returns / payments).
 - **D5** Stock counts and partner debts can't be restored by a backup import (they are written only by their own functions, never by `apply_changes`).
+- **D6 (B16)** Next stamp card only after the last reward is used; stamps meanwhile saved; card history with both dates (A6).
 
 ## Security gate fixes (2026-11-10, lead decisions)
 - **M1** Ids can't be shared between a count, a waste / R&D entry and other stock lines; counts and R&D remove only the stock lines they made (B8, B9).
@@ -222,12 +249,15 @@ INGREDIENTS rows: one per ingredient still owed, amounts in stock units. PESOS r
 - QR 1.4 page: works; never sends `p_guest`, so unregistered phones still get `REGISTER_FIRST`. "Not you?" with unpaid orders now gets `UNPAID_ORDERS` (the old page ignores it; the phone stays signed in). The table limit is now 4 unpaid tickets on real tables (`TABLE_FULL`, shown as a generic error); none at "Takeaway / Counter".
 - Counter 1.4: works until an item is ticked "Count at closing" (then Close shift → `COUNT_REQUIRED`).
 - QR 1.4 page: ignores `signed_out_elsewhere` (the phone just shows as signed out, as before).
+- B16 with the 1.4 apps: the QR page and the counter show the server's card (now the new rule; they ignore `saved_stamps` / `history`). A 1.4 counter that sends a card-2 reward too early gets `CARD_NOT_ISSUED` (a generic error on 1.4). The 1.4 Back Office still works the card out itself from `customers.stamps` (old rule) until the 1.5 screens use `bo_customer_loyalty`.
 - Back Office 1.4: works; customers lists still show archived customers until the 1.5 screens.
 
 ## Expected changes to QA's existing suites (no regressions otherwise; all other suites pass on 004–012)
 - 33 F10: new functions above. 33 F5: table limit is 4 unpaid tickets (`TABLE_FULL`), accepted tickets still count.
 - 39 / 40: they use phone c1 as Zed after suite 11 re-linked Zed on phone c2; with "one phone per account" c1 is a guest by then. Re-link c1 first (both suites then pass fully).
 - 41 HIGH1: `get_qr_menu` now adds `highlight` and options' `available`; compare with those removed (equal).
+- 38 (B16): exactly one check, **"R: card 1 all redeemed"** (customer Stampy has 15 stamps and has used all three card-1 rewards, incl. stamp 15): it expects `card_no` 1 with all milestones `redeemed`; under B16 card 1 is complete, so the answer is `card_no` 2, 0/15, all milestones `locked`, `ready_rewards` empty, and card 1 in `history`. Every other 1.2 loyalty check passes unchanged.
 
 ## Owner steps (Supabase)
 None besides running `012_release_1_5.sql` (SQL Editor → New query → paste the whole file → Run; "Success"). It is safe to run twice. Then: tick "Count at closing" only after the 1.5 counter is live; mark TCO as "Partner branch" in Suppliers.
+- **Stamp cards (B16), for the owner to know:** customers who already have more than 15 stamps but haven't used their free drink will see card 1 full, with their extra stamps "saved for the next card", instead of card 2. As soon as they use the free drink, card 2 opens with all their saved stamps (nobody loses a stamp). Staff can tell them: "Use your free drink and your next card starts with your saved stamps." 
