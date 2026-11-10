@@ -121,11 +121,11 @@ $$;
 -- PART A. QR ACCOUNTS (Q1–Q5, A6, B6)
 -- =============================================================================
 -- A1. New columns
--- customers.username: unique per shop, ignoring upper / lower case. Merged-away
--- records lose theirs (so the name is free again).
+-- customers.username: unique per shop, compared on its "look-alike key"
+-- (A2, _username_key: upper / lower case, accents, punctuation and look-alike
+-- digits ignored). Merged-away records lose theirs (so the name is free again).
+-- The unique index itself is made right after _username_key (A2).
 alter table public.customers add column if not exists username text;
-create unique index if not exists customers_business_username_key on public.customers(business_id, lower(username))
-  where username is not null;
 -- qr_orders.is_guest: placed by a guest (a phone with no customer account).
 -- Kept separately from customer_id (which is also cleared when a customer's
 -- data is deleted on request).
@@ -133,34 +133,93 @@ alter table public.qr_orders add column if not exists is_guest boolean not null 
 create index if not exists qr_orders_table_open_idx on public.qr_orders(table_id) where paid_at is null and status in ('PENDING','PREPARING','READY');
 
 -- A2. Usernames
+-- Allowed letters: Latin letters only, with or without accents (a-z, A-Z,
+-- é, ñ, ü, ...). Greek, Cyrillic and other scripts are refused, so nobody
+-- can make a name that only LOOKS like someone else's ("Сora" with a Cyrillic
+-- С). Written as Unicode ranges: Basic Latin letters, Latin-1 letters (minus
+-- × and ÷), Latin Extended-A and -B, Latin Extended Additional.
+create or replace function public._username_letters() returns text
+language sql immutable as $$
+  select 'A-Za-zÀ-ÖØ-öø-ɏḀ-ỿ'::text
+$$;
+
+-- The "look-alike key" of a username, used to decide whether two names are
+-- the same: names whose keys are equal count as the same name.
+--   * NFKD + accents removed (é -> e), then lower case (Mika = mika = Míka);
+--   * a few letters with no accent form mapped (ø->o, đ->d, ł->l, ı->i,
+--     ß->ss, æ->ae, œ->oe);
+--   * . ' - _ count as spaces, runs of spaces as one (Mika_the-Bean = Mika the Bean);
+--   * look-alike digits / letters: 0 = o, 1 = l, "rn" = m.
+create or replace function public._username_key(p text) returns text
+language sql immutable as $$
+  select btrim(regexp_replace(
+           replace(translate(
+             replace(replace(replace(
+               translate(lower(regexp_replace(normalize(coalesce(p, ''), NFKD), '[̀-ͯ]', '', 'g')), 'øđłı', 'odli'),
+               'ß', 'ss'), 'æ', 'ae'), 'œ', 'oe'),
+             '._''-01', '    ol'), 'rn', 'm'),
+           '\s+', ' ', 'g'))
+$$;
+-- Usernames are unique per shop on that key. The key is kept in its own
+-- column, customers.username_key, filled ONLY by the username trigger below
+-- (whatever a writer sends for it is replaced), so the unique rule works for
+-- every writer without giving anyone rights on the helper.
+-- (Replaces the 1st version's "ignoring upper / lower case" index and the
+-- 2nd version's expression index, if a test copy has them.)
+alter table public.customers add column if not exists username_key text;
+drop index if exists public.customers_business_username_key;
+drop index if exists public.customers_business_username_skel_key;
+create unique index if not exists customers_business_username_key2
+  on public.customers(business_id, username_key) where username_key is not null;
+
+-- Words a customer's username may not contain (as a whole word, any case,
+-- accents / look-alikes ignored): they would make a customer look like the
+-- shop's staff or the shop itself.
+create or replace function public._username_reserved(p text) returns boolean
+language sql immutable as $$
+  select public._username_key(p) ~ '(^| )(staff|manager|admin|owner|cashier|barista|cccc|official)( |$)'
+      or public._username_key(p) ~ '(^| )cavite city coffee( |$)'
+$$;
+
 -- A username as a customer typed it, cleaned, or null when it isn't allowed:
+--   * first made "standard" (Unicode NFKC: full-width ０９ -> 09, Ｃｏｒａ ->
+--     Cora, special spaces -> normal spaces), so the rules below can't be
+--     dodged with look-alike characters;
 --   * spaces at the ends removed, runs of spaces made one;
---   * 3..50 characters; letters (any language), digits, spaces and . ' - _ only;
---   * at least 2 letters; at most 4 digits in total (so no phone numbers);
+--   * 3..50 characters; Latin letters (see above), digits 0-9, spaces and
+--     . ' - _ only (no emoji, no invisible characters, no other scripts);
+--   * at least 2 letters; at most 4 digits (0-9) in total (no phone numbers);
 --   * a "." only before a space or at the end (so no web addresses like x.com);
---   * no "http" / "www" word (no links).
+--   * no "http" / "www" word (no links);
+--   * no staff / shop word (see _username_reserved).
 create or replace function public._clean_username(p text) returns text
 language plpgsql immutable set search_path = public as $$
-declare v text := btrim(regexp_replace(regexp_replace(coalesce(p, ''), '[[:cntrl:]]', '', 'g'), '\s+', ' ', 'g'));
+declare v text; L text := public._username_letters();
 begin
+  v := normalize(coalesce(p, ''), NFKC);
+  v := btrim(regexp_replace(regexp_replace(v, '[[:cntrl:]]', '', 'g'), '\s+', ' ', 'g'));
   if length(v) < 3 or length(v) > 50 then return null; end if;
-  if v !~ '^[[:alpha:][:digit:] .''_-]+$' then return null; end if;
-  if length(regexp_replace(v, '[^[:alpha:]]', '', 'g')) < 2 then return null; end if;
+  if v !~ ('^[' || L || '0-9 .''_-]+$') then return null; end if;
+  if length(regexp_replace(v, '[^' || L || ']', '', 'g')) < 2 then return null; end if;
   if length(regexp_replace(v, '[^0-9]', '', 'g')) > 4 then return null; end if;
   if v ~ '\.[^ ]' then return null; end if;
-  if v ~* '(^|[^[:alpha:]])(https?|www)([^[:alpha:]]|$)' then return null; end if;
+  if v ~* ('(^|[^' || L || '])(https?|www)([^' || L || ']|$)') then return null; end if;
+  if public._username_reserved(v) then return null; end if;
   return v;
 end $$;
 
--- The first word of the nickname, letters only, capital first (e.g. "mika"
--- -> "Mika"); "Kape" when nothing usable is left.
+-- The first word of the nickname, Latin letters only, capital first (e.g.
+-- "mika" -> "Mika"); "Kape" when nothing usable is left or when that word is
+-- a staff / shop word ("Admin", "Manager", ...).
 create or replace function public._username_base(p_nickname text) returns text
 language plpgsql immutable set search_path = public as $$
-declare v text := split_part(btrim(regexp_replace(regexp_replace(coalesce(p_nickname, ''), '[^[:alpha:] ''-]', '', 'g'), '\s+', ' ', 'g')), ' ', 1);
+declare v text;
 begin
+  v := regexp_replace(normalize(coalesce(p_nickname, ''), NFKC), '[^' || public._username_letters() || ' ''-]', '', 'g');
+  v := split_part(btrim(regexp_replace(v, '\s+', ' ', 'g')), ' ', 1);
   v := left(btrim(v, ' ''-'), 12);
   v := btrim(v, ' ''-');
-  if length(v) < 2 then return 'Kape'; end if;
+  if length(v) < 2 or public._username_reserved(v) then return 'Kape'; end if;
   return upper(left(v, 1)) || substr(v, 2);
 end $$;
 
@@ -180,12 +239,14 @@ begin
   for i in 1..60 loop
     v := v_base || ' the ' || a[1 + floor(random() * array_length(a, 1))::int] || ' ' || n[1 + floor(random() * array_length(n, 1))::int];
     if i > 20 then v := v || ' ' || (2 + floor(random() * 998))::int; end if;
-    if not exists (select 1 from public.customers c
-                   where c.business_id = p_biz and lower(c.username) = lower(v) and c.id is distinct from p_self) then
+    -- a made-up name must pass the same rules as a typed one, and be free
+    if public._clean_username(v) is not distinct from v and not exists (select 1 from public.customers c
+                   where c.business_id = p_biz and c.username_key = public._username_key(v) and c.id is distinct from p_self) then
       return v;
     end if;
   end loop;
-  return v_base || ' the Coffee Lover ' || (1000 + floor(random() * 8999))::int;
+  -- (practically never reached; "Kape the Coffee Lover NNNN" always passes the rules)
+  return 'Kape the Coffee Lover ' || (1000 + floor(random() * 8999))::int;
 end $$;
 
 -- Every save of a customer (any way: QR page, counter, Back Office, backup):
@@ -193,14 +254,14 @@ end $$;
 --   * no username yet -> one is made (this is also how existing customers get
 --     theirs, see the fill below);
 --   * a changed username is cleaned and checked: BAD_USERNAME (rules above) or
---     USERNAME_TAKEN (another customer of the shop has it, any upper / lower case).
+--     USERNAME_TAKEN (another customer of the shop has the same look-alike key).
 -- Two saves of the same new name at the same moment: the second waits, then
 -- gets USERNAME_TAKEN (not a raw "duplicate key" error).
 create or replace function public._customer_username_check() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare v_gen boolean := false; v_clean text; i integer;
 begin
-  if new.merged_into is not null then new.username := null; return new; end if;
+  if new.merged_into is not null then new.username := null; new.username_key := null; return new; end if;
   if new.username is null or btrim(new.username) = '' then
     new.username := public._new_username(new.business_id, new.nickname, new.id);
     v_gen := true;
@@ -209,19 +270,21 @@ begin
     if v_clean is null then raise exception 'BAD_USERNAME'; end if;
     new.username := v_clean;
   else
-    return new;                                   -- unchanged
+    new.username_key := public._username_key(new.username);   -- unchanged (key kept right)
+    return new;
   end if;
   for i in 1..5 loop
     -- (the one-time fill of made-up names takes no lock: one per customer
     -- would be too many locks in one go; the unique index still guards it)
     if not (tg_op = 'UPDATE' and v_gen) then
-      perform pg_advisory_xact_lock(hashtext('cccc.username:' || new.business_id::text || ':' || lower(new.username)));
+      perform pg_advisory_xact_lock(hashtext('cccc.username:' || new.business_id::text || ':' || public._username_key(new.username)));
     end if;
     exit when not exists (select 1 from public.customers c
-                          where c.business_id = new.business_id and lower(c.username) = lower(new.username) and c.id <> new.id);
+                          where c.business_id = new.business_id and c.username_key = public._username_key(new.username) and c.id <> new.id);
     if not v_gen then raise exception 'USERNAME_TAKEN'; end if;
     new.username := public._new_username(new.business_id, new.nickname, new.id);
   end loop;
+  new.username_key := public._username_key(new.username);
   return new;
 end $$;
 drop trigger if exists customers_username on public.customers;
@@ -260,9 +323,24 @@ begin
     'first_seen_at', p_c.first_seen_at);
 end $$;
 
+-- A4b. "Your account was opened on another phone" (L3). When qr_relink moves
+-- an account to a new phone, the old phone gets one note here; its next
+-- qr_session shows it once and removes it. Only the functions read / write it.
+create table if not exists public.qr_signout_notices (
+  auth_user_id uuid not null,
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  at timestamptz not null default now(),
+  primary key (auth_user_id, business_id)
+);
+alter table public.qr_signout_notices enable row level security;
+revoke all on public.qr_signout_notices from public, anon, authenticated;
+
 -- A5. Who am I at this shop? Same as 004, plus state:
 --   'GUEST'      this phone has no account (customer = null)
 --   'REGISTERED' this phone is signed in to an account (customer = {...})
+--   + signed_out_elsewhere: true (GUEST only, ONCE) when this phone was signed
+--     out because the account was opened on another phone (qr_relink); the
+--     page says "Your account was opened on another phone".
 create or replace function public.qr_session(p_token text) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare v_uid uuid := auth.uid(); v_t public.dining_tables; v_c public.customers%rowtype; i integer;
@@ -272,7 +350,13 @@ begin
   if v_uid is null then return jsonb_build_object('customer', null, 'state', 'GUEST'); end if;
   select c.* into v_c from public.customer_devices cd join public.customers c on c.id = cd.customer_id
     where cd.auth_user_id = v_uid and cd.business_id = v_t.business_id;
-  if not found then return jsonb_build_object('customer', null, 'state', 'GUEST'); end if;
+  if not found then
+    delete from public.qr_signout_notices where auth_user_id = v_uid and business_id = v_t.business_id;
+    if found then
+      return jsonb_build_object('customer', null, 'state', 'GUEST', 'signed_out_elsewhere', true);
+    end if;
+    return jsonb_build_object('customer', null, 'state', 'GUEST');
+  end if;
   for i in 1..5 loop
     exit when v_c.merged_into is null;
     select * into v_c from public.customers where id = v_c.merged_into;
@@ -280,6 +364,8 @@ begin
   update public.customer_devices set customer_id = v_c.id, last_seen_at = now()
     where auth_user_id = v_uid and business_id = v_t.business_id;
   update public.customers set last_seen_at = now() where id = v_c.id;
+  -- signed in again (e.g. registered anew): an old note no longer applies
+  delete from public.qr_signout_notices where auth_user_id = v_uid and business_id = v_t.business_id;
   return jsonb_build_object('customer', public._qr_customer_json(v_c), 'state', 'REGISTERED');
 end $$;
 
@@ -329,11 +415,26 @@ end $$;
 --     only after a "Yes"): waiting, being made or ready, they all stay and
 --     are paid at the counter as usual (usually it is the same person who
 --     simply moved to a new phone).
--- Everything else as 004 (5 wrong tries per 15 minutes, shared with
--- qr_register / qr_set_phone; NO_MATCH never says which part was wrong).
+--   * the old phone's next qr_session says signed_out_elsewhere (once).
+--   * L3: besides the 5 wrong tries per 15 minutes per phone (004, shared
+--     with qr_register / qr_set_phone), every NUMBER may have at most 5 wrong
+--     tries in 24 hours, counted over ALL phones. After that, linking that
+--     number answers TOO_MANY_ATTEMPTS (the same answer as the per-phone
+--     limit) for the rest of the 24 hours, even with the right nickname.
+--     It is counted per typed number, whether or not a customer has it, so
+--     the answer never tells whether a number is registered (decision 7).
+--     The customer can still be served at the counter (staff find them and
+--     add the sale to their card as usual); the lock ends by itself.
+--     (Stored as a fingerprint of shop + number, never the number itself.)
+-- NO_MATCH never says which part was wrong (004).
+create or replace function public._relink_subject(p_biz uuid, p_phone text) returns uuid
+language sql immutable as $$
+  select md5('cccc.relink:' || p_biz::text || ':' || p_phone)::uuid
+$$;
 create or replace function public.qr_relink(p_token text, p_phone text, p_nickname text) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare v_uid uuid := auth.uid(); v_t public.dining_tables; v_phone text := public._norm_phone(p_phone); v_c public.customers%rowtype;
+  v_target uuid;
 begin
   v_t := public._qr_table(p_token);
   if v_t.id is null then return jsonb_build_object('error', 'TABLE_NOT_FOUND'); end if;
@@ -343,17 +444,27 @@ begin
   end if;
   if public._too_many_attempts(v_uid, 'RELINK', 5, interval '15 minutes') then return jsonb_build_object('error', 'TOO_MANY_ATTEMPTS'); end if;
   if v_phone is null then return jsonb_build_object('error', 'BAD_PHONE'); end if;
+  v_target := public._relink_subject(v_t.business_id, v_phone);
+  if public._too_many_attempts(v_target, 'RELINK_NUMBER', 5, interval '24 hours') then
+    return jsonb_build_object('error', 'TOO_MANY_ATTEMPTS');
+  end if;
   select * into v_c from public.customers
     where business_id = v_t.business_id and phone = v_phone and merged_into is null
       and lower(nickname) = lower(coalesce(public._clean_name(p_nickname), ''));
   if not found then
-    insert into public.auth_attempts(subject, kind, success) values (v_uid, 'RELINK', false);
+    insert into public.auth_attempts(subject, kind, success) values (v_uid, 'RELINK', false), (v_target, 'RELINK_NUMBER', false);
     return jsonb_build_object('error', 'NO_MATCH');
   end if;
+  -- the other phone(s) of this account: signed out, told once (A4b)
+  insert into public.qr_signout_notices(auth_user_id, business_id)
+    select cd.auth_user_id, v_t.business_id from public.customer_devices cd
+     where cd.business_id = v_t.business_id and cd.customer_id = v_c.id and cd.auth_user_id <> v_uid
+    on conflict (auth_user_id, business_id) do update set at = now();
   delete from public.customer_devices
     where business_id = v_t.business_id and customer_id = v_c.id and auth_user_id <> v_uid;
   insert into public.customer_devices(auth_user_id, business_id, customer_id) values (v_uid, v_t.business_id, v_c.id)
     on conflict (auth_user_id, business_id) do update set customer_id = excluded.customer_id, last_seen_at = now();
+  delete from public.qr_signout_notices where auth_user_id = v_uid and business_id = v_t.business_id;
   update public.customers set last_seen_at = now() where id = v_c.id;
   return jsonb_build_object('customer', public._qr_customer_json(v_c), 'relinked', true);
 end $$;
@@ -403,6 +514,7 @@ begin
     get diagnostics v_wait = row_count;
   end if;
   delete from public.customer_devices where auth_user_id = v_uid and business_id = v_t.business_id;
+  delete from public.qr_signout_notices where auth_user_id = v_uid and business_id = v_t.business_id;
   return jsonb_build_object('ok', true, 'cancelled', v_wait, 'kept', v_n - v_wait);
 end $$;
 
@@ -453,14 +565,16 @@ begin
     select * into v_c from public.customers where id = v_cid;
   end if;
 
+  -- All limits are checked while holding the shop's order lock: orders of one
+  -- shop are placed one at a time, so two orders at the same moment (from two
+  -- phones, or two tabs of one phone) can't both slip past a limit.
+  perform pg_advisory_xact_lock(hashtext('cccc.qr_order:' || v_t.business_id::text));
+  -- per phone: 3 open unpaid orders, 10 orders per hour
   select count(*) into v_count from public.qr_orders
     where auth_user_id = v_uid and business_id = v_t.business_id and status in ('PENDING','PREPARING','READY') and paid_at is null;
   if v_count >= 3 then return jsonb_build_object('error', 'TOO_MANY_OPEN_ORDERS'); end if;
   select count(*) into v_count from public.qr_orders where auth_user_id = v_uid and created_at > now() - interval '1 hour';
   if v_count >= 10 then return jsonb_build_object('error', 'TOO_MANY_ORDERS'); end if;
-  -- Table and shop limits. Orders of one shop are placed one at a time
-  -- (advisory lock), so two phones at the same moment can't both slip past a limit.
-  perform pg_advisory_xact_lock(hashtext('cccc.qr_order:' || v_t.business_id::text));
   -- 012 (Q3): open, unpaid tickets at this table (real tables only, not
   -- the "Takeaway / Counter" code)
   if coalesce(v_t.kind, 'DINE_IN') <> 'TAKEAWAY' then
@@ -551,6 +665,91 @@ begin
     returning * into v_order;
   if not v_guest then update public.customers set last_seen_at = now() where id = v_c.id; end if;
   return jsonb_build_object('order', public._qr_order_public(v_order));
+end $$;
+
+-- A9b. "Delete customer data" (004), re-made (L5): exactly as 004, but the
+-- customer's USERNAME is blanked in free text too, the same way as the
+-- nickname (whole words / the whole name, any upper / lower case, replaced by
+-- '[deleted customer]'). The username itself goes with the deleted record.
+-- Rights unchanged (the owner's login only, checked inside, as 004).
+create or replace function public.delete_customer_data(p_customer_id uuid) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  v_biz uuid := public.current_business_id();
+  v_ids uuid[]; v_names text[]; v_rx text; v_n integer; v_orders integer; v_sales integer; v_audit integer;
+  v_sale_ids uuid[];
+  c_repl constant text := '[deleted customer]';
+begin
+  if v_biz is null or public.app_rank() < 3 then raise exception 'ADMIN_ONLY'; end if;
+  if not exists (select 1 from public.customers where id = p_customer_id and business_id = v_biz) then
+    raise exception 'UNKNOWN_CUSTOMER';
+  end if;
+  -- 1) the whole merge chain (records merged into this one, and into those, ...)
+  with recursive chain(id, depth) as (
+    select p_customer_id, 0
+    union
+    select c.id, ch.depth + 1 from public.customers c join chain ch on c.merged_into = ch.id
+    where c.business_id = v_biz and ch.depth < 50
+  )
+  select array_agg(id) into v_ids from (select id, max(depth) d from chain group by id) x;
+  -- 2) nicknames AND usernames (012) to blank out in free text (2+
+  --    characters), longest first; whole words only, any upper/lower case
+  --    (like the Back Office used to do)
+  select array_agg(n order by length(n) desc) into v_names
+  from (select distinct btrim(nickname) n from public.customers where id = any(v_ids) and length(btrim(nickname)) >= 2
+        union
+        select distinct btrim(username) from public.customers where id = any(v_ids) and length(btrim(coalesce(username, ''))) >= 2) x;
+  if v_names is not null then
+    v_rx := '(^|[^[:alnum:]])(' || (select string_agg(regexp_replace(n, '([.*+?^${}()|\[\]\\])', '\\\1', 'g'), '|') from unnest(v_names) n)
+            || ')(?=$|[^[:alnum:]])';
+  end if;
+  -- 3) QR orders: unlink + blank the name in notes / item notes
+  update public.qr_orders o set
+      customer_id = null, customer_nickname = null,
+      customer_note = case when v_rx is null then o.customer_note else regexp_replace(o.customer_note, v_rx, '\1' || c_repl, 'gi') end,
+      items = case when v_rx is null or jsonb_typeof(o.items) <> 'array' then o.items else (
+        select coalesce(jsonb_agg(case when jsonb_typeof(it) = 'object' and it ? 'notes' and jsonb_typeof(it->'notes') = 'string'
+                                       then jsonb_set(it, '{notes}', to_jsonb(regexp_replace(it->>'notes', v_rx, '\1' || c_repl, 'gi')))
+                                       else it end order by ord), '[]'::jsonb)
+        from jsonb_array_elements(o.items) with ordinality t(it, ord)) end
+    where o.business_id = v_biz and o.customer_id = any(v_ids);
+  get diagnostics v_orders = row_count;
+  -- 4) sales: blank the name in their item notes (the counter copies QR item
+  --    notes there) and in their refunds' reason / notes; then unlink the sales
+  --    (+ blank the name in their own notes)
+  select coalesce(array_agg(id), '{}') into v_sale_ids from public.sales
+    where business_id = v_biz and customer_id = any(v_ids);
+  if v_rx is not null and cardinality(v_sale_ids) > 0 then
+    update public.sale_items si set notes = regexp_replace(si.notes, v_rx, '\1' || c_repl, 'gi')
+      where si.business_id = v_biz and si.sale_id = any(v_sale_ids) and si.notes ~* v_rx;
+    update public.refunds r set
+        reason = case when r.reason ~* v_rx then regexp_replace(r.reason, v_rx, '\1' || c_repl, 'gi') else r.reason end,
+        notes  = case when r.notes  ~* v_rx then regexp_replace(r.notes,  v_rx, '\1' || c_repl, 'gi') else r.notes end
+      where r.business_id = v_biz and r.sale_id = any(v_sale_ids) and (r.reason ~* v_rx or r.notes ~* v_rx);
+  end if;
+  update public.sales s set customer_id = null,
+      notes = case when v_rx is null then s.notes else regexp_replace(s.notes, v_rx, '\1' || c_repl, 'gi') end
+    where s.business_id = v_biz and s.customer_id = any(v_ids);
+  get diagnostics v_sales = row_count;
+  -- 5) audit log: blank the name in existing entries of this shop
+  if v_rx is not null then
+    update public.audit_log a set details = regexp_replace(a.details, v_rx, '\1' || c_repl, 'gi')
+      where a.business_id = v_biz and a.details ~* v_rx;
+    get diagnostics v_audit = row_count;
+  end if;
+  -- 6) phone links, then the records (merge links cleared first)
+  delete from public.customer_devices where business_id = v_biz and customer_id = any(v_ids);
+  update public.customers set merged_into = null where business_id = v_biz and id = any(v_ids);
+  delete from public.customers where business_id = v_biz and id = any(v_ids);
+  get diagnostics v_n = row_count;
+  -- 7) one closing entry, no names
+  insert into public.audit_log(business_id, action, actor_name, details, at)
+    values (v_biz, 'Customer data deleted on request',
+            coalesce((select name from public.profiles where id = auth.uid()), 'Owner'),
+            format('%s customer record(s); %s QR order(s) and %s sale(s) unlinked; %s audit entr%s cleaned',
+                   v_n, v_orders, v_sales, coalesce(v_audit, 0), case when coalesce(v_audit, 0) = 1 then 'y' else 'ies' end),
+            now());
+  return jsonb_build_object('deleted', v_n);
 end $$;
 
 -- A10. B6: customers without a phone number are "archived".
@@ -908,6 +1107,23 @@ begin
   end if;
 end $$;
 
+-- Which stock lines were made by an R&D entry or a stock count (M1). Those
+-- functions remove ONLY the lines listed here when they redo / undo their
+-- effect, never "every line with this reference" (a reference id can be
+-- reused by other records, e.g. a counter upload). Filled and read only by
+-- the functions; nobody reads or writes it through the API.
+--   owner_kind  RND (an R&D usage entry, owner_id = its waste_logs id) or
+--               COUNT (a stock count, owner_id = stock_counts id)
+create table if not exists public.stock_line_owners (
+  txn_id uuid primary key references public.inventory_transactions(id) on delete cascade,
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  owner_kind text not null check (owner_kind in ('RND','COUNT')),
+  owner_id uuid not null
+);
+create index if not exists stock_line_owners_owner_idx on public.stock_line_owners(owner_kind, owner_id);
+alter table public.stock_line_owners enable row level security;
+revoke all on public.stock_line_owners from public, anon, authenticated;
+
 -- A project that has logged usage can't be deleted (its cost stays in the
 -- reports): PROJECT_HAS_USAGE. Mark it DONE or DROPPED instead.
 create or replace function public._rnd_project_delete_check() returns trigger
@@ -976,7 +1192,7 @@ end $$;
 create or replace function public.log_rnd_usage(p jsonb) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare v_biz uuid := public._require_owner(); v_id uuid; v_pr public.rnd_projects%rowtype; v_day date;
-  v_me public.staff; v_item jsonb; v_w jsonb; v_total numeric := 0; v_out jsonb := '[]'::jsonb; l jsonb;
+  v_me public.staff; v_item jsonb; v_w jsonb; v_total numeric := 0; v_out jsonb := '[]'::jsonb; l jsonb; v_txn uuid;
 begin
   if jsonb_typeof(p) is distinct from 'object' then raise exception 'BAD_RND'; end if;
   v_id := public._to_uuid(p->>'id');
@@ -985,6 +1201,8 @@ begin
     return jsonb_build_object('id', v_id, 'duplicate', true);
   end if;
   if exists (select 1 from public.waste_logs where id = v_id) then raise exception 'FORBIDDEN_ROW'; end if;
+  -- an id already used by a stock count or by any stock line: refused (M1)
+  if public._stock_ref_taken(v_id) then raise exception 'FORBIDDEN_ROW'; end if;
   select * into v_pr from public.rnd_projects where id = public._to_uuid(p->>'project_id') and business_id = v_biz;
   if not found then raise exception 'UNKNOWN_PROJECT'; end if;
   if v_pr.status <> 'ACTIVE' then raise exception 'PROJECT_CLOSED'; end if;
@@ -1006,7 +1224,9 @@ begin
     for l in select value from jsonb_array_elements(v_w->'stock_lines') loop
       insert into public.inventory_transactions(business_id, ingredient_id, transaction_type, quantity, reference_id, transaction_date, notes)
         values (v_biz, public._to_uuid(l->>'ingredient_id'), 'WASTE', abs(public._to_num(l->>'quantity')), v_id::text, v_day,
-                left('R&D: ' || v_pr.name, 200));
+                left('R&D: ' || v_pr.name, 200))
+        returning id into v_txn;
+      insert into public.stock_line_owners(txn_id, business_id, owner_kind, owner_id) values (v_txn, v_biz, 'RND', v_id);
     end loop;
     v_total := v_total + (v_w->>'cost')::numeric;
     v_out := v_out || jsonb_build_array(jsonb_build_object('name', v_w->>'name', 'quantity', v_w->'quantity', 'unit', v_w->'unit',
@@ -1024,7 +1244,9 @@ declare v_biz uuid := public._require_owner(); v_w public.waste_logs%rowtype; v_
 begin
   select * into v_w from public.waste_logs where id = p_id and business_id = v_biz and reason = 'RND' for update;
   if not found then return jsonb_build_object('deleted', false); end if;
-  delete from public.inventory_transactions where business_id = v_biz and reference_id = v_w.id::text and transaction_type = 'WASTE';
+  -- only the stock lines this entry made (M1)
+  delete from public.inventory_transactions t using public.stock_line_owners o
+    where o.txn_id = t.id and o.owner_kind = 'RND' and o.owner_id = v_w.id and t.business_id = v_biz;
   delete from public.waste_logs where id = v_w.id;
   v_me := public._owner_staff(v_biz);
   insert into public.audit_log(business_id, action, actor_id, actor_name, details, reference_id, at)
@@ -1112,6 +1334,17 @@ begin
   end if;
 end $$;
 
+-- Is this id already used by another record that has (or could have) stock
+-- lines? (a waste entry, a stock count, or the reference of any stock line).
+-- Used so a new count / R&D entry / counter waste can never share an id with
+-- another record (M1).
+create or replace function public._stock_ref_taken(p_id uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.waste_logs where id = p_id)
+      or exists (select 1 from public.stock_counts where id = p_id)
+      or exists (select 1 from public.inventory_transactions where reference_id = p_id::text)
+$$;
+
 -- The ingredients the counter must count at closing: ticked, switched on, not
 -- merged away, not an operating supply.
 create or replace function public._count_items(p_biz uuid) returns uuid[]
@@ -1122,7 +1355,8 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- Puts a count's effect on stock (again) from its lines: removes the count's
--- own earlier stock lines and waste entry, then
+-- own earlier stock lines (only those it made: stock_line_owners) and its
+-- own "Missing at count" waste entry, then
 --   missing (difference < 0) -> one waste entry, reason COUNT_SHORTAGE
 --                               ("Missing at count"), WASTE stock lines;
 --   extra   (difference > 0) -> an ADJUSTMENT raising stock to the count.
@@ -1131,13 +1365,13 @@ $$;
 create or replace function public._apply_count_effects(p_count_id uuid) returns void
 language plpgsql volatile security definer set search_path = public as $$
 declare c public.stock_counts%rowtype; l public.stock_count_lines%rowtype; v_wid uuid; v_cost numeric; v_total numeric := 0;
-  c_tol constant numeric := 0.000001;
+  c_tol constant numeric := 0.000001; v_txn uuid;
 begin
   select * into c from public.stock_counts where id = p_count_id;
   if not found then return; end if;
-  delete from public.inventory_transactions
-    where business_id = c.business_id and reference_id = c.id::text and transaction_type in ('WASTE', 'ADJUSTMENT');
-  delete from public.waste_logs where business_id = c.business_id and stock_count_id = c.id;
+  delete from public.inventory_transactions t using public.stock_line_owners o
+    where o.txn_id = t.id and o.owner_kind = 'COUNT' and o.owner_id = c.id and t.business_id = c.business_id;
+  delete from public.waste_logs where business_id = c.business_id and stock_count_id = c.id and reason = 'COUNT_SHORTAGE';
   for l in select * from public.stock_count_lines where count_id = c.id order by name, id loop
     v_cost := 0;
     if l.difference < -c_tol then
@@ -1153,10 +1387,14 @@ begin
         values (c.business_id, v_wid, l.ingredient_id, l.name, round(-l.difference, 6), l.unit,
                 jsonb_build_array(jsonb_build_object('ingredient_id', l.ingredient_id, 'quantity', round(-l.difference, 6))), v_cost);
       insert into public.inventory_transactions(business_id, ingredient_id, transaction_type, quantity, reference_id, transaction_date, notes)
-        values (c.business_id, l.ingredient_id, 'WASTE', round(-l.difference, 6), c.id::text, c.count_date, 'Missing at count');
+        values (c.business_id, l.ingredient_id, 'WASTE', round(-l.difference, 6), c.id::text, c.count_date, 'Missing at count')
+        returning id into v_txn;
+      insert into public.stock_line_owners(txn_id, business_id, owner_kind, owner_id) values (v_txn, c.business_id, 'COUNT', c.id);
     elsif l.difference > c_tol then
       insert into public.inventory_transactions(business_id, ingredient_id, transaction_type, quantity, reference_id, transaction_date, notes)
-        values (c.business_id, l.ingredient_id, 'ADJUSTMENT', round(l.difference, 6), c.id::text, c.count_date, 'Extra at count (needs review)');
+        values (c.business_id, l.ingredient_id, 'ADJUSTMENT', round(l.difference, 6), c.id::text, c.count_date, 'Extra at count (needs review)')
+        returning id into v_txn;
+      insert into public.stock_line_owners(txn_id, business_id, owner_kind, owner_id) values (v_txn, c.business_id, 'COUNT', c.id);
     end if;
     update public.stock_count_lines set cost = v_cost where id = l.id;
     v_total := v_total + v_cost;
@@ -1257,8 +1495,17 @@ $$;
 --     * expected = the server's stock for that item when the count arrives
 --       (the counter's own numbers are never used); then see _apply_count_effects
 --     * saved but flagged (needs_review) like waste: see stock_counts above
+--     * only ticked items ("Count at closing") may be counted; any other item,
+--       or a count while nothing is ticked -> BAD_COUNT (L4)
+--     * an id already used by a waste entry or as the reference of any stock
+--       line -> FORBIDDEN_ROW (M1)
+--     * LARGE_SHORTAGE when this count's missing stock, OR all counts of the
+--       shift together, are worth more than the pay-out review limit (L4)
 --   shift_close  refused with COUNT_REQUIRED while ticked items exist and the
---                shift has no count; otherwise exactly as before.
+--                shift has no count that covers EVERY ticked item (L4);
+--                otherwise exactly as before.
+--   waste        an id already used by a stock count -> FORBIDDEN_ROW (M1);
+--                otherwise exactly as before (010).
 create or replace function public._fo_apply_15(p_biz uuid, p_dev public.devices, p_type text, p_d jsonb) returns text
 language plpgsql volatile security definer set search_path = public as $$
 declare
@@ -1268,11 +1515,20 @@ declare
 begin
   if p_dev.auth_user_id is distinct from auth.uid() then raise exception 'DEVICE_MISMATCH'; end if;
   if p_type = 'shift_close' then
+    v_ticked := public._count_items(p_biz);
     select * into v_shift from public.shifts where id = public._to_uuid(p_d->>'id') and business_id = p_biz;
-    if found and v_shift.status <> 'CLOSED' and cardinality(public._count_items(p_biz)) > 0
-       and not exists (select 1 from public.stock_counts where business_id = p_biz and shift_id = v_shift.id) then
+    -- needs ONE count of this shift that has a line for every ticked item
+    if found and v_shift.status <> 'CLOSED' and cardinality(v_ticked) > 0
+       and not exists (select 1 from public.stock_counts sc where sc.business_id = p_biz and sc.shift_id = v_shift.id
+                         and not exists (select 1 from unnest(v_ticked) t(id)
+                                         where not exists (select 1 from public.stock_count_lines scl
+                                                           where scl.count_id = sc.id and scl.ingredient_id = t.id))) then
       raise exception 'COUNT_REQUIRED';
     end if;
+    return public._fo_apply(p_biz, p_dev, p_type, p_d);
+  elsif p_type = 'waste' then
+    -- a counter waste may not reuse a stock count's id (M1)
+    if exists (select 1 from public.stock_counts where id = public._to_uuid(p_d->>'id')) then raise exception 'FORBIDDEN_ROW'; end if;
     return public._fo_apply(p_biz, p_dev, p_type, p_d);
   elsif p_type is distinct from 'stock_count' then
     return public._fo_apply(p_biz, p_dev, p_type, p_d);
@@ -1283,6 +1539,8 @@ begin
   if v_cid is null then raise exception 'BAD_COUNT'; end if;
   if exists (select 1 from public.stock_counts where id = v_cid and business_id = p_biz) then return 'skipped'; end if;
   if exists (select 1 from public.stock_counts where id = v_cid) then raise exception 'FORBIDDEN_ROW'; end if;
+  -- the id of a waste entry or the reference of any stock line: refused (M1)
+  if public._stock_ref_taken(v_cid) then raise exception 'FORBIDDEN_ROW'; end if;
   v_fresh := public._fresh_start_before(p_biz);
   v_at := coalesce(public._to_ts(p_d->>'counted_at'), now());
   select * into v_shift from public.shifts where id = public._to_uuid(p_d->>'shift_id') and business_id = p_biz;
@@ -1296,6 +1554,8 @@ begin
   if jsonb_typeof(p_d->'lines') is distinct from 'array' or jsonb_array_length(p_d->'lines') not between 1 and 300 then
     raise exception 'BAD_COUNT';
   end if;
+  v_ticked := public._count_items(p_biz);
+  if cardinality(v_ticked) = 0 then raise exception 'BAD_COUNT'; end if;      -- nothing to count (L4)
   v_day := public._shop_day(p_biz, v_at);
   v_signed := public._signed_in_staff(p_dev.auth_user_id);
   insert into public.stock_counts(id, business_id, shift_id, device_id, staff_id, staff_name, signed_in_staff_id,
@@ -1307,6 +1567,7 @@ begin
     v_ing := public._ingredient_final(p_biz, public._to_uuid(l->>'ingredient_id'));
     if v_ing.id is null then raise exception 'UNKNOWN_INGREDIENT'; end if;
     if v_ing.id = any(v_seen) or public._is_expense_item(p_biz, v_ing.id) then raise exception 'BAD_COUNT'; end if;
+    if not (v_ing.id = any(v_ticked)) then raise exception 'BAD_COUNT'; end if;   -- only ticked items (L4)
     v_seen := v_seen || v_ing.id;
     v_typed := public._to_num(l->>'quantity');
     if v_typed is null or v_typed < 0 or v_typed > 10000000 then raise exception 'BAD_QUANTITY'; end if;
@@ -1322,7 +1583,6 @@ begin
       values (p_biz, v_cid, v_ing.id, v_ing.name, v_ing.base_unit, v_typed, nullif(btrim(l->>'unit'), ''),
               v_q, v_exp, round(v_q - v_exp, 6));
   end loop;
-  v_ticked := public._count_items(p_biz);
   v_reason := nullif(concat_ws(', ',
     case when v_extra then 'COUNT_EXTRA' end,
     case when exists (select 1 from unnest(v_ticked) t where not (t = any(v_seen))) then 'COUNT_INCOMPLETE' end,
@@ -1334,11 +1594,16 @@ begin
   update public.stock_counts set needs_review = v_reason is not null, review_reason = v_reason where id = v_cid;
   perform public._apply_count_effects(v_cid);
   -- a large amount missing (more than the shop's pay-out review limit, ₱1000
-  -- by default) is flagged too, so a big write-off never goes unnoticed
+  -- by default) is flagged too, so a big write-off never goes unnoticed:
+  -- this count alone, or all counts of this shift together (so splitting a
+  -- write-off into several small counts doesn't hide it)
   update public.stock_counts
      set needs_review = true, review_reason = concat_ws(', ', review_reason, 'LARGE_SHORTAGE')
    where id = v_cid
-     and shortage_cost > coalesce((select payout_review_limit from public.settings where business_id = p_biz), 1000);
+     and greatest(shortage_cost,
+                  (select coalesce(sum(x.shortage_cost), 0) from public.stock_counts x
+                    where x.business_id = p_biz and x.shift_id is not distinct from v_shift.id))
+         > coalesce((select payout_review_limit from public.settings where business_id = p_biz), 1000);
   return 'ok';
 end $$;
 
@@ -2030,6 +2295,8 @@ grant select on public.v_partner_to_return to authenticated;
 -- Every customer without a username gets one (the trigger above makes it).
 -- Running the script again changes nothing (they all have one by then).
 update public.customers set username = null where username is null and merged_into is null;
+-- (a test copy that ran an earlier draft of this script: fill the key column)
+update public.customers set username_key = null where username is not null and username_key is null;
 
 -- =============================================================================
 -- Who may call the new / re-made functions
@@ -2049,11 +2316,12 @@ update public.customers set username = null where username is null and merged_in
 drop function if exists public._tmp_widen_check(text, text, text, text[]);
 do $$
 declare f record;
-  mine text[] := array['_shop_day','_stock_of','_owner_staff','_clean_username','_username_base','_new_username',
-    '_customer_username_check','_qr_limits','_qr_customer_json','qr_session','qr_set_username','qr_relink',
+  mine text[] := array['_shop_day','_stock_of','_owner_staff','_username_letters','_username_key','_username_reserved',
+    '_clean_username','_username_base','_new_username',
+    '_customer_username_check','_qr_limits','_qr_customer_json','qr_session','qr_set_username','_relink_subject','qr_relink',
     'qr_switch_account','qr_forget_device','qr_place_order','_customer_for_staff','_counter_customer_json',
     'fo_customer_list','_qr_menu_groups','get_qr_menu','_barista_kit_problem','_settings_check',
-    '_rnd_project_check','_rnd_project_delete_check','_waste_item','log_rnd_usage','delete_rnd_usage','_count_items','_apply_count_effects',
+    '_rnd_project_check','_rnd_project_delete_check','_stock_ref_taken','_waste_item','log_rnd_usage','delete_rnd_usage','_count_items','_apply_count_effects',
     'revise_stock_count','_fo_error_code','_fo_apply_15','fo_sync','_partner_delete_check','_partner_batch_plan',
     'partner_batch_preview','produce_partner_batch','partner_return','partner_pay','waste_report','net_income_report',
     '_writable_tables'];

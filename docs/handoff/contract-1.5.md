@@ -18,6 +18,7 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 ### A1. Guest vs registered (Q1/A6)
 - A **guest** = a phone (anonymous sign-in) with **no customer record**. Guests never get a customer row, so they can't get stamps, and they never appear in customer lists.
 - `qr_session(p_token)` → `{customer: {...} | null, state: 'GUEST' | 'REGISTERED'}` (+ `{error:'TABLE_NOT_FOUND'}`).
+  - **L3:** a phone that was signed out because its account was opened on another phone (`qr_relink`) gets **`signed_out_elsewhere: true`** with `state:'GUEST'`, **once** (the next call no longer has it). Show "Your account was opened on another phone". The note is also dropped when the phone signs in again or signs out itself.
 - `customer` (from `qr_session`, `qr_register`, `qr_relink`, `qr_set_phone`, `qr_set_username`) adds **`username`**.
 - Registering later on the same phone: `qr_register` exactly as today (nickname, optional phone, consent). Orders placed **before** registering stay guest orders (no stamps); orders after it are the customer's.
 
@@ -26,7 +27,7 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 - Phone **without** an account: `p_guest:false` → `REGISTER_FIRST` (as before); `p_guest:true` → guest order.
 - Phone **with** an account: always orders as that customer (`p_guest` ignored).
 - Answer unchanged (`{order}` through `_qr_order_public`), order adds **`is_guest`** (boolean). Guest order: `customer_id` null, `customer_nickname` null.
-- Checks, in this order (all inside the shop lock):
+- Checks, in this order (all inside the shop's order lock, **including the per-phone ones** (L2), so two tabs of one phone can't both slip past a limit):
   1. per phone: 3 open unpaid → `TOO_MANY_OPEN_ORDERS`; 10 per hour → `TOO_MANY_ORDERS` (unchanged);
   2. **Q3** table (real tables only, not "Takeaway / Counter"): open unpaid tickets (`PENDING`/`PREPARING`/`READY`, `paid_at` null) at this table ≥ **4** → **`TABLE_FULL`** (was: 10 waiting → `TOO_MANY_ORDERS`). Accepted-but-unpaid tickets count; a paid one frees a place.
   3. **Q4** guests only, real tables only: another phone already has an open unpaid **guest** ticket at this table → **`GUEST_TABLE_BUSY`** ("Register, or wait until that order is paid"). Registered customers are not limited by this.
@@ -35,12 +36,20 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 - `qr_orders.is_guest` is readable by counters (table read + `fo_bootstrap.qr_orders`). Counter shows "Guest" when `is_guest`.
 
 ### A3. Usernames (Q2)
-- Column `customers.username` (text). Unique per shop **ignoring case**; merged-away records have none.
-- Made automatically for every customer without one (backfill at install, then on every new customer from QR, counter or Back Office): `"<first word of nickname> the <coffee word> <title>"`, e.g. `Mika the Coffee Devourer`; a number is added after 20 taken tries (`Mika the Mocha Lover 42`). Nickname letters only, max 12 chars; `Kape` when nothing usable.
-- Rules for a chosen username (checked by the database for **every** writer, incl. `apply_changes`): spaces trimmed / collapsed; **3–50** chars; letters (any language), digits, space, `.` `'` `-` `_` only; ≥ 2 letters; **≤ 4 digits** in total (no phone numbers); a `.` only before a space or at the end (no `x.com`); no `http`/`https`/`www` word. Else `BAD_USERNAME`; taken → `USERNAME_TAKEN`.
+- Column `customers.username` (text). Merged-away records have none.
+- **Unique per shop on a look-alike key** (L1), kept in `customers.username_key` (set only by the database; anything an app sends for it is replaced; apps never need to read or send it). Two names are "the same" when they match after: accents removed and lower case (`Míka` = `mika`); `ø đ ł ı ß æ œ` → `o d l i ss ae oe`; `.` `'` `-` `_` and runs of spaces = one space; `0` = `o`, `1` = `l`, `rn` = `m`. Taken → `USERNAME_TAKEN`.
+- Made automatically for every customer without one (backfill at install, then on every new customer from QR, counter or Back Office): `"<first word of nickname> the <coffee word> <title>"`, e.g. `Mika the Coffee Devourer`; a number is added after 20 taken tries (`Mika the Mocha Lover 42`). Name part = first word of the nickname, Latin letters only, max 12 chars; `Kape` when nothing usable or when that word is a staff / shop word (nickname "Admin" → `Kape the …`). Every made-up name passes the rules below.
+- Rules for a chosen username (checked by the database for **every** writer, incl. `apply_changes`):
+  - first made **standard (Unicode NFKC)**, so full-width `０９１７` = `0917`, `Ｃｏｒａ` = `Cora`, special spaces = spaces (M2);
+  - spaces trimmed / collapsed; **3–50** chars;
+  - **Latin letters only** (a–z, with accents such as é ñ ü; Greek, Cyrillic, other scripts refused, L1), digits **0–9 only** (other digit systems refused, M2), space, `.` `'` `-` `_`; no emoji / invisible characters;
+  - ≥ 2 letters; **≤ 4 digits** (0–9) in total (no phone numbers);
+  - a `.` only before a space or at the end (no `x.com`); no `http`/`https`/`www` word;
+  - **no staff / shop word** as a whole word, any case, accents / look-alikes ignored (L1): `staff`, `manager`, `admin`, `owner`, `cashier`, `barista`, `cccc`, `official`, and the phrase `cavite city coffee` (`Staffy Mika` is fine, `Mika the 0wner` is not).
+  - Else `BAD_USERNAME`.
 - **`qr_set_username(p_token text, p_username text)`** (signed-in QR customers only) → `{customer}` or `{error}`: `TABLE_NOT_FOUND`, `NOT_SIGNED_IN`, `REGISTER_FIRST`, `BAD_USERNAME`, `USERNAME_TAKEN`, `TOO_MANY_ATTEMPTS` (10 refused tries / 15 min per phone).
 - Back Office edits `username` with `Ops.update('customers', {id, username})`; map `BAD_USERNAME` / `USERNAME_TAKEN`.
-- Apps must not copy usernames into free text (notes, audit details): "delete customer data" only blanks nicknames in free text.
+- **"Delete customer data" (`delete_customer_data`, L5)**: now blanks the customer's **username** in free text too, exactly like the nickname (whole name / whole words, any case → `[deleted customer]`: QR order notes and item notes, their sales' notes and item notes, refund reason / notes, audit details). Same signature, rights and answer as 004.
 
 ### A4. One phone per account + switching (Q5)
 **Order status words used here** (`qr_orders.status`, unpaid = `paid_at` null):
@@ -57,7 +66,9 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
   - no unpaid orders → `{ok:true, cancelled:0, kept:0}` straight away.
   - a phone with no account (guest) → `{ok:true, cancelled:0, kept:0}`; its guest orders are not touched.
 - **`qr_forget_device(p_token)`** ("Not you?") = `qr_switch_account(p_token, false)` (same rule); the 1.5 page should call `qr_switch_account` directly.
-- **`qr_relink`** changes: a phone that is already signed in → **`SIGN_OUT_FIRST`** (sign out with `qr_switch_account` first; answered before any number is looked at). On success the account's link on any **other** phone is removed (one phone per account, decision D3; that phone becomes a guest). **None of that phone's orders are cancelled** (nobody there said "Yes"; usually it is the same person on a new phone): waiting, being made or ready, they stay and are paid at the counter. Answer unchanged (`{customer, relinked:true}`); rate limit / `NO_MATCH` unchanged.
+- **`qr_relink`** changes: a phone that is already signed in → **`SIGN_OUT_FIRST`** (sign out with `qr_switch_account` first; answered before any number is looked at). On success the account's link on any **other** phone is removed (one phone per account, decision D3; that phone becomes a guest and its next `qr_session` says `signed_out_elsewhere`, see A1). **None of that phone's orders are cancelled** (nobody there said "Yes"; usually it is the same person on a new phone): waiting, being made or ready, they stay and are paid at the counter. Answer unchanged (`{customer, relinked:true}`).
+  - Limits: 5 wrong tries per phone per 15 min (unchanged) **and (L3) 5 wrong tries per typed number per 24 hours, counted over all phones**. After that, that number answers **`TOO_MANY_ATTEMPTS`** (the same answer as the per-phone limit) for the rest of the 24 hours, even with the right nickname. It is counted per number whether or not anyone has it, so the answer never tells whether a number is registered (decision 7). The lock ends by itself; meanwhile staff serve the customer at the counter as usual (find them in Customers and add the sale to their card). The database stores a fingerprint of shop + number for this, never the number.
+  - Page copy for `TOO_MANY_ATTEMPTS` (both limits): "Too many tries. Please ask our staff at the counter, or try again later." 
 - Counter: orders cancelled this way arrive as `CANCELLED` through the normal `updated_at` polling (only ever ones that were `PENDING`, so nothing the barista already started).
 - Honest limit (unchanged): clearing browser data / private browsing = a new phone (a new guest).
 
@@ -83,8 +94,8 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
   - `p = {id (uuid from the app), project_id, used_on (date, default shop today; ≤ today+1, ≥ today−400), note (≤ 200), items: 1..30 of {ingredient_id, quantity, unit} | {recipe_id, quantity (≤ 100), modifiers}}`
   - Same `id` again → `{id, duplicate:true}` (nothing new).
   - The server works out stock + cost (same rules as the counter waste op). Saved as `waste_logs` (`reason 'RND'`, `rnd_project_id`, `device_id` null, staff = the owner's staff row) + `waste_log_items` + `WASTE` stock lines (`reference_id` = id).
-  - Errors: `NOT_ALLOWED`, `BAD_RND`, `UNKNOWN_PROJECT`, `PROJECT_CLOSED` (status not ACTIVE), `BAD_DATE`, `FORBIDDEN_ROW`, `BAD_WASTE`, `BAD_QUANTITY`, `BAD_UNIT`, `UNKNOWN_RECIPE`, `UNKNOWN_INGREDIENT`.
-- **`delete_rnd_usage(p_id uuid)`** → `{deleted: true|false}`: removes an R&D entry and its stock lines (stock comes back); audit "R&D usage removed".
+  - Errors: `NOT_ALLOWED`, `BAD_RND`, `UNKNOWN_PROJECT`, `PROJECT_CLOSED` (status not ACTIVE), `BAD_DATE`, `FORBIDDEN_ROW` (the id belongs to another shop's record, **or (M1) is already used by a stock count or as the reference of any stock line**), `BAD_WASTE`, `BAD_QUANTITY`, `BAD_UNIT`, `UNKNOWN_RECIPE`, `UNKNOWN_INGREDIENT`. Apps always make a new `Cloud.uuid()` per entry, so they never hit this.
+- **`delete_rnd_usage(p_id uuid)`** → `{deleted: true|false}`: removes an R&D entry and **only the stock lines it made** (M1; stock comes back); audit "R&D usage removed".
 - New `waste_logs` columns: `rnd_project_id`, `stock_count_id`.
 
 ### B8/B9 reports
@@ -106,20 +117,25 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
   lines: [{ingredient_id, quantity (≥ 0, as typed), unit (optional; default the item's stock unit)}]   // 1..300
 }}
 ```
-- Same `op_id` → `duplicate`; same `data.id` with a new op_id → `skipped`; another shop's id → `FORBIDDEN_ROW`.
+- Same `op_id` → `duplicate`; same `data.id` with a new op_id → `skipped`; another shop's id → `FORBIDDEN_ROW`; **(M1) an id already used by a waste entry or as the reference of any stock line → `FORBIDDEN_ROW`** (a fresh `Cloud.uuid()` per count never hits this).
+- **(L4) Only ticked items may be counted:** a line for an item that is not ticked (or not switched on / merged away / an operating supply) → `BAD_COUNT`; a count while **nothing** is ticked → `BAD_COUNT`. The count screen lists exactly the ticked items from `fo_bootstrap().ingredients` (`count_at_close`).
 - **Expected = the server's stock for that item when the op arrives**; the counter sends no expected numbers (anything extra is ignored). Per line: `difference = counted − expected` (stock units).
   - missing → one `waste_logs` entry `reason:'COUNT_SHORTAGE'` (costed, `stock_count_id` set) + `WASTE` lines;
   - extra → `ADJUSTMENT` up to the count, count flagged `COUNT_EXTRA`. Never negative waste.
   - Stock lines: `reference_id` = count id, dated the shop day of `counted_at`.
-- Saved but flagged (`needs_review`, `review_reason`, comma separated): `COUNT_EXTRA`, `COUNT_INCOMPLETE` (a ticked item not in the lines), `LARGE_SHORTAGE` (missing stock worth more than `settings.payout_review_limit`, ₱1000 default), `STAFF_MISMATCH`, `FUTURE_DATE` (> 1 h ahead), `OLD_DATE` (> 7 days back), `BEFORE_START_FRESH`, `SHIFT_CLOSED` (shift already closed).
-- Errors: `BAD_COUNT` (no id / no lines / > 300 / item twice / operating supply), `SHIFT_NOT_FOUND`, `UNKNOWN_STAFF`, `ROLE_TOO_LOW`, `UNKNOWN_INGREDIENT`, `BAD_QUANTITY` (missing, < 0, > 10,000,000), `BAD_UNIT`.
+- Saved but flagged (`needs_review`, `review_reason`, comma separated): `COUNT_EXTRA`, `COUNT_INCOMPLETE` (a ticked item not in the lines), `LARGE_SHORTAGE` (missing stock worth more than `settings.payout_review_limit`, ₱1000 default, **in this count or in all counts of the shift together**, L4), `STAFF_MISMATCH`, `FUTURE_DATE` (> 1 h ahead), `OLD_DATE` (> 7 days back), `BEFORE_START_FRESH`, `SHIFT_CLOSED` (shift already closed).
+- Errors: `BAD_COUNT` (no id / no lines / > 300 / item twice / operating supply / item not ticked / nothing ticked), `FORBIDDEN_ROW`, `SHIFT_NOT_FOUND`, `UNKNOWN_STAFF`, `ROLE_TOO_LOW`, `UNKNOWN_INGREDIENT`, `BAD_QUANTITY` (missing, < 0, > 10,000,000), `BAD_UNIT`.
 - Several counts for one shift are allowed; each is measured against the stock at its arrival (the latest count wins in effect).
 - **Order matters:** the outbox must upload `stock_count` **before** that shift's `shift_close` (normal FIFO). A counter that names a merged ingredient still works (moved to the general one).
 - Limit (inherent to offline): a sale made **before** the count on **another** counter that uploads **after** the count lowers stock again. One-counter shops are not affected; the owner can revise.
 
-**`shift_close` change:** refused with **`COUNT_REQUIRED`** when ticked items exist and the shift has **no** count. Otherwise unchanged. ⚠ Old 1.4 counters can't send counts: the owner must not tick items until the 1.5 counter is live.
+**`shift_close` change:** refused with **`COUNT_REQUIRED`** when ticked items exist and the shift has **no count that has a line for every ticked item** (L4: a count of only some items doesn't count; if the owner ticks another item during the shift, a new full count is needed). Otherwise unchanged.
+
+**Counter `waste` op change (M1):** an id already used by a stock count → `FORBIDDEN_ROW`. Otherwise unchanged (010). ⚠ Old 1.4 counters can't send counts: the owner must not tick items until the 1.5 counter is live.
 
 **Blind count:** a UI rule. Counters can technically still read stock (`fo_bootstrap.stock`, `v_ingredient_stock`, needed for "can make"); the count screen must not show it.
+
+**Stock lines of counts and R&D (M1):** the database lists the stock lines each count / R&D entry made in its own table (`stock_line_owners`, nobody reads or writes it through the API) and only ever removes those when a count is revised or an R&D entry deleted, never "every line with this reference".
 
 **Tables (office data, read by the owner's login; nobody writes them through the API):**
 - `stock_counts`: `id, business_id, shift_id, device_id, staff_id, staff_name, signed_in_staff_id, counted_at, count_date, note, status ('SUBMITTED'|'REVISED'), shortage_cost, needs_review, review_reason, received_at, revised_at, revised_by_name, revision_note, reviewed_at`
@@ -182,6 +198,8 @@ INGREDIENTS rows: one per ingredient still owed, amounts in stock units. PESOS r
 - New QR functions `qr_set_username`, `qr_switch_account`: **authenticated only** (a QR customer is always anonymously signed in). Re-made QR functions keep their 004 rights (anon + authenticated).
 - New owner functions (`log_rnd_usage`, `delete_rnd_usage`, `revise_stock_count`, `partner_batch_preview`, `produce_partner_batch`, `partner_return`, `partner_pay`): authenticated, owner checked inside.
 - New tables: RLS on; `anon` nothing; counters read none of them; no API writes except `rnd_projects` (owner). `apply_changes` adds only `rnd_projects`.
+- Internal tables with **no API access at all** (not even the owner): `stock_line_owners` (M1), `qr_signout_notices` (L3).
+- New internal helpers (no API access): `_username_letters`, `_username_key`, `_username_reserved`, `_relink_subject`, `_stock_ref_taken`. `delete_customer_data` re-made with its 004 rights (owner checked inside).
 - QA's F10 allow-list (suite 33) must add: `qr_set_username, qr_switch_account, log_rnd_usage, delete_rnd_usage, revise_stock_count, partner_batch_preview, produce_partner_batch, partner_return, partner_pay`.
 
 ## Decisions (owner, 2026-11-10)
@@ -191,9 +209,19 @@ INGREDIENTS rows: one per ingredient still owed, amounts in stock units. PESOS r
 - **D4** No undo for a partner batch with a debt (`PARTNER_BATCH_HAS_DEBT`; settle it with returns / payments).
 - **D5** Stock counts and partner debts can't be restored by a backup import (they are written only by their own functions, never by `apply_changes`).
 
+## Security gate fixes (2026-11-10, lead decisions)
+- **M1** Ids can't be shared between a count, a waste / R&D entry and other stock lines; counts and R&D remove only the stock lines they made (B8, B9).
+- **M2** Usernames: NFKC first, digits 0–9 only, counted the same way (A3).
+- **L1** Latin letters only; uniqueness on the look-alike key; no staff / shop words; made-up names always pass (A3).
+- **L2** Per-phone order limits checked inside the shop's order lock (A2).
+- **L3** Relink: 5 wrong tries per number per 24 h over all phones → `TOO_MANY_ATTEMPTS`; old phone told `signed_out_elsewhere` once (A1, A4).
+- **L4** Counts: ticked items only; nothing ticked → `BAD_COUNT`; closing needs a count of every ticked item; `LARGE_SHORTAGE` also on the shift total (B9).
+- **L5** "Delete customer data" also blanks the username in free text (A3).
+
 ## Old apps (1.4) against 012
 - QR 1.4 page: works; never sends `p_guest`, so unregistered phones still get `REGISTER_FIRST`. "Not you?" with unpaid orders now gets `UNPAID_ORDERS` (the old page ignores it; the phone stays signed in). The table limit is now 4 unpaid tickets on real tables (`TABLE_FULL`, shown as a generic error); none at "Takeaway / Counter".
 - Counter 1.4: works until an item is ticked "Count at closing" (then Close shift → `COUNT_REQUIRED`).
+- QR 1.4 page: ignores `signed_out_elsewhere` (the phone just shows as signed out, as before).
 - Back Office 1.4: works; customers lists still show archived customers until the 1.5 screens.
 
 ## Expected changes to QA's existing suites (no regressions otherwise; all other suites pass on 004–012)
