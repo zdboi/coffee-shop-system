@@ -279,6 +279,8 @@ function setSettingsFromServer(row){
   s.subcategory_colors = cleanSubcategoryColors(row && row.subcategory_colors);
   // Release 1.3 (009): the arranged sub-category list, same rule ([] when the column isn't there).
   s.subcategory_order = cleanSubcategoryOrder(row && row.subcategory_order);
+  // Release 1.5 (012, B7): the barista calibration kit ([] when the column isn't there yet).
+  s.barista_kit = cleanBaristaKit(row && row.barista_kit);
   // Optional receipt lines (only when the database has these columns): kept out of
   // DEFAULT_SETTINGS for the same reason. Missing -> '' (nothing printed).
   RECEIPT_EXTRA_KEYS.forEach(k => { s[k] = (row && typeof row[k] === 'string') ? row[k] : ''; });
@@ -295,6 +297,8 @@ function serverSettingsRow(){
     row.subcategory_colors = Object.assign({}, state.settings.subcategory_colors);
   if(Array.isArray(state.settings.subcategory_order) && state.settings.subcategory_order.length)
     row.subcategory_order = state.settings.subcategory_order.slice();
+  if(Array.isArray(state.settings.barista_kit) && state.settings.barista_kit.length)
+    row.barista_kit = state.settings.barista_kit.map(l => Object.assign({}, l));
   RECEIPT_EXTRA_KEYS.forEach(k => { if(state.settings[k]) row[k] = state.settings[k]; });
   row.updated_at = new Date().toISOString();
   return row;
@@ -909,6 +913,32 @@ function wasteStockDeltas(dataOrItems){
 // Cost of a waste entry at today's costs (preview only; the server's report uses its own costing).
 function wasteCostPreview(dataOrItems){
   return wasteStockLines(dataOrItems).reduce((s, l) => s + l.quantity * (ingredientCosting(l.ingredient_id).current || 0), 0);
+}
+
+/* ================= Barista calibration kit (release 1.5, B7) =================
+   settings.barista_kit = [{ingredient_id, quantity, unit}] (<= 20 lines), set in the Back Office.
+   The counter saves it as the existing 'waste' op, reason CALIBRATION (buildWasteData). */
+const BARISTA_KIT_MAX = 20;
+// A tidy copy (only the 3 keys; lines without an item or an amount above 0 dropped; at most 20; each item once).
+function cleanBaristaKit(list){
+  if(typeof list === 'string'){ try{ list = JSON.parse(list); }catch(e){ list = null; } }
+  if(!Array.isArray(list)) return [];
+  const seen = new Set(), out = [];
+  list.forEach(l => {
+    if(!l || typeof l !== 'object' || !l.ingredient_id || seen.has(l.ingredient_id) || out.length >= BARISTA_KIT_MAX) return;
+    const q = Number(l.quantity);
+    if(!_hasNum(l.quantity) || !(q > 0) || q > 100000) return;
+    seen.add(l.ingredient_id);
+    out.push({ingredient_id: String(l.ingredient_id), quantity: q, unit: (l.unit == null || String(l.unit).trim() === '') ? null : String(l.unit).trim()});
+  });
+  return out;
+}
+// The kit as waste items for the counter's form (items this counter knows that are still stock items;
+// merged items stay as they are: the server moves them to the general item):
+//   [{ingredient_id, quantity, unit}] -> adjust, then buildWasteData({reason:'CALIBRATION', items, ...}).
+function baristaKitItems(settings){
+  const kit = cleanBaristaKit((settings || state.settings || {}).barista_kit);
+  return kit.filter(l => { const t = mergeTarget(l.ingredient_id); return !!ingredientById(l.ingredient_id) && isStockIngredient(t.ingredient); });
 }
 
 /* ================= Count at closing (release 1.5, B9) =================
@@ -1528,7 +1558,9 @@ function readyRewards(summary){
 //   {card_size, card_no, stamps_on_card, total_stamps,
 //    milestones: [{stamp, type, amount, label, status: 'locked'|'ready'|'redeemed', to_go}],
 //    next: {stamp, type, amount, label, to_go} | null   (the next locked reward on this card),
-//    ready: readyRewards(summary), ready_count}
+//    ready: readyRewards(summary), ready_count,
+//    saved_stamps, last_reward_stamp, history}   (release 1.5, B16: passed through from the server's
+//    card / summary; history = [{card_no, filled_at, completed_at, rewards: [{stamp, type, label, amount, used_at}]}])
 // to_go = stamps still needed for that reward (0 when reached).
 function loyaltyCardView(summary, rewardsConfig){
   summary = summary || {};
@@ -1536,8 +1568,11 @@ function loyaltyCardView(summary, rewardsConfig){
   const card = summary.card && typeof summary.card === 'object' ? summary.card : null;
   const total = Math.max(0, Number(summary.total_stamps) || 0);
   const size = Math.max(1, Number(card && card.card_size) || cfg.card_size);
-  const cardNo = Math.max(1, Number(card && card.card_no) || Math.max(Math.ceil(total / size), 1));
-  const onCard = (card && card.stamps_on_card != null) ? Math.max(0, Number(card.stamps_on_card) || 0) : Math.max(0, total - (cardNo - 1) * size);
+  // Release 1.5 (B16): with a server card, card_no is the SERVER's (the next card opens only after the
+  // last reward is used); it is worked out from the stamps only for an old answer without a card.
+  const cardNo = card ? Math.max(1, Number(card.card_no) || 1) : Math.max(Math.ceil(total / size), 1);
+  const onCard = (card && card.stamps_on_card != null) ? Math.max(0, Number(card.stamps_on_card) || 0)
+    : Math.min(size, Math.max(0, total - (cardNo - 1) * size));
   const source = (card && Array.isArray(card.milestones) && card.milestones.length) ? card.milestones : cfg.rewards;
   const milestones = source.map(m => {
     const stamp = Number(m.stamp);
@@ -1549,9 +1584,14 @@ function loyaltyCardView(summary, rewardsConfig){
   }).sort((a, b) => a.stamp - b.stamp);
   const next = milestones.find(m => m.status === 'locked') || null;
   const ready = readyRewards(summary);
+  // B16 fields, straight from the server (old answers: 0 saved, last reward = the config's highest stamp, no history).
+  const lastCfg = milestones.length ? milestones[milestones.length - 1].stamp : size;
   return {card_size: size, card_no: cardNo, stamps_on_card: onCard, total_stamps: total, milestones,
     next: next ? {stamp: next.stamp, type: next.type, amount: next.amount, label: next.label, to_go: next.to_go} : null,
-    ready, ready_count: ready.length};
+    ready, ready_count: ready.length,
+    saved_stamps: (card && card.saved_stamps != null) ? Math.max(0, Number(card.saved_stamps) || 0) : 0,
+    last_reward_stamp: (card && card.last_reward_stamp != null) ? Number(card.last_reward_stamp) : lastCfg,
+    history: Array.isArray(summary.history) ? JSON.parse(JSON.stringify(summary.history)) : []};
 }
 // A line a FREE_ITEM reward can use: a whole quantity of at least 1 (server rule, 008 M3).
 function _wholeQtyLine(l){ const q = Number(l && l.quantity); return isFinite(q) && q >= 1 && Math.floor(q) === q; }

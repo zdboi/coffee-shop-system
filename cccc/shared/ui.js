@@ -222,7 +222,7 @@ const ERROR_TEXT = {
   TOO_MANY_OPEN_ORDERS: 'You already have 3 orders waiting to be paid. Please pay at the counter first.',
   TABLE_NOT_FOUND: 'This QR code isn\'t active anymore. Please ask our staff for help.',
   // Release 1.5: next stamp card only after the last reward is taken (B16)
-  CARD_NOT_ISSUED: 'This reward is on the next stamp card. The customer gets that card after using the last reward of this card (for example the free drink). Remove the reward and choose another.',
+  CARD_NOT_ISSUED: 'This reward\'s stamp card isn\'t open yet: the customer must use the last reward on the full card first (for example the free drink). Remove the reward and choose another.',
   // Release 1.5: barista calibration kit (B7)
   BAD_BARISTA_KIT: 'The barista drink kit could not be saved. Use at most 20 items, each once, with an amount above 0 in one of the item\'s units (switched-on stock items only).',
   // Release 1.5: count at closing (B9)
