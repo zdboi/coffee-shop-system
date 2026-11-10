@@ -134,5 +134,19 @@ function openShopForQr(){
 // ... and closes it again (to see the "closed" page).
 function closeShopForQr(){ sql(`update public.shifts set status = 'CLOSED', closed_at = now() where id = '${QR_SHIFT_ID}'`); }
 
-module.exports = {openShopForQr, closeShopForQr, QR_SHIFT_ID, PORT, DB, BASE, SHOTS, PLAYWRIGHT, sql, rows, one, num, ok, failures, summary, abort, sleep, until, must,
+// Day-boundary guard (QA 2026-11-10). Suites that make sales and then read "today" (dashboard, Transactions,
+// calendar day, Start fresh's default date) fail if Manila midnight passes in between: the app then correctly
+// shows the new day without the sales. Not an app bug (checked with a faked clock, see tests/README.md), so
+// such suites wait until they are at least `minutes` clear of Manila midnight before they start.
+function manilaMinutesToMidnight(){ const t = new Date(Date.now() + 8 * 3600e3); return 24 * 60 - (t.getUTCHours() * 60 + t.getUTCMinutes()); }
+function waitClearOfManilaMidnightSync(minutes){
+  const sab = new Int32Array(new SharedArrayBuffer(4));
+  while(manilaMinutesToMidnight() <= minutes){
+    console.log(`     (waiting for Manila midnight to pass: this suite needs ${minutes} min on one day)`);
+    Atomics.wait(sab, 0, 0, 60000);
+  }
+}
+async function waitClearOfManilaMidnight(minutes){ while(manilaMinutesToMidnight() <= minutes){ console.log(`     (waiting for Manila midnight to pass: this suite needs ${minutes} min on one day)`); await sleep(60000); } }
+
+module.exports = {waitClearOfManilaMidnight, waitClearOfManilaMidnightSync, manilaMinutesToMidnight, openShopForQr, closeShopForQr, QR_SHIFT_ID, PORT, DB, BASE, SHOTS, PLAYWRIGHT, sql, rows, one, num, ok, failures, summary, abort, sleep, until, must,
   attach, typePin, money, r2, shot, pairCounter, startShift, boLogin, focusSettled};

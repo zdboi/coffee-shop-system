@@ -25,14 +25,16 @@ a{color:var(--cc-terracotta-deep);}
 .mtitle{margin:0;font-size:52px;line-height:1;color:var(--cc-paper);}
 .mhead-note{font-size:13px;font-weight:500;color:var(--cc-butter);}
 
-/* ---------- chip row (sticks to the top while scrolling) ---------- */
-.chips{position:sticky;top:0;z-index:10;background:var(--cc-paper);border-bottom:1px solid var(--cc-line);}
-.chips-in{display:flex;gap:8px;padding-top:12px;padding-bottom:12px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;}
+/* ---------- sub-category tabs (stick to the top while scrolling; 1.4.2) ---------- */
+.chips{position:sticky;top:0;z-index:10;margin:0 -20px -14px;background:var(--cc-paper);border-bottom:1px solid var(--cc-line);}
+.chips-in{display:flex;gap:8px;padding:12px 20px;overflow-x:auto;scroll-padding:0 20px;scrollbar-width:none;-webkit-overflow-scrolling:touch;}
 .chips-in::-webkit-scrollbar{display:none;}
 .chip{flex:none;display:inline-flex;align-items:center;min-height:44px;padding:0 16px;border-radius:999px;background:var(--cc-butter);color:var(--cc-ink);
-  font-size:14px;font-weight:600;text-decoration:none;white-space:nowrap;max-width:70vw;overflow:hidden;text-overflow:ellipsis;
+  border:0;margin:0;font-family:inherit;font-size:14px;font-weight:600;line-height:1.2;cursor:pointer;-webkit-tap-highlight-color:transparent;
+  text-decoration:none;white-space:nowrap;max-width:70vw;overflow:hidden;text-overflow:ellipsis;
   transition:background var(--cc-fast) var(--cc-ease),color var(--cc-fast) var(--cc-ease);}
-.chip.on{background:var(--cc-ink);color:var(--cc-paper);}
+.chip.on{background:var(--cc-ink);color:var(--cc-paper);box-shadow:inset 0 -3px 0 var(--cc-terracotta);}
+.chip:focus-visible{box-shadow:var(--cc-focus);}
 
 /* ---------- main column ---------- */
 .main{padding-top:8px;padding-bottom:32px;display:flex;flex-direction:column;gap:26px;}
@@ -40,27 +42,44 @@ a{color:var(--cc-terracotta-deep);}
 .loading{margin:40px 0;text-align:center;color:var(--cc-muted);}
 
 /* highlight card */
-.hl{margin-top:16px;display:flex;flex-direction:column;background:var(--cc-card);border:1px solid var(--cc-line);border-radius:20px;overflow:hidden;
+.hl{margin-top:14px;display:flex;flex-direction:column;background:var(--cc-card);border:1px solid var(--cc-line);border-radius:20px;overflow:hidden;
   color:var(--cc-ink);text-decoration:none;box-shadow:var(--cc-shadow);}
 a.hl{transition:transform var(--cc-fast) var(--cc-ease),box-shadow var(--cc-fast) var(--cc-ease);}
 a.hl:active{transform:scale(.99);}
-.hl-photo{display:block;aspect-ratio:16/10;background:var(--cc-sand);}
-.hl-photo img{width:100%;height:100%;object-fit:cover;}
-.hl-body{display:flex;flex-direction:column;gap:8px;padding:16px 16px 18px;}
+.hl-photo{position:relative;display:block;aspect-ratio:2/1;overflow:hidden;background:var(--cc-sand);}
+.hl-photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+.hl-photo.nophoto{display:flex;}
+.hl-body{display:flex;flex-direction:column;gap:6px;padding:14px 16px 16px;}
 .hl-label{align-self:flex-start;padding:5px 12px;border-radius:999px;background:var(--cc-terracotta);color:var(--cc-paper);font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;}
 .hl-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;}
-.hl-name{font-size:34px;line-height:1;overflow-wrap:anywhere;}
+.hl-name{font-size:30px;line-height:1;overflow-wrap:anywhere;}
 .hl-price{flex:none;font-size:20px;font-weight:700;color:var(--cc-terracotta-deep);}
-.hl-blurb{font-size:15px;line-height:1.5;color:var(--cc-ink-2);}
+.hl-blurb{font-size:14px;line-height:1.45;color:var(--cc-ink-2);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
 .hl.off{background:#F4EEE2;box-shadow:none;}
 .hl.off .hl-photo img{filter:grayscale(1);opacity:.55;}
 .hl.off .hl-name,.hl.off .hl-price,.hl.off .hl-blurb{color:var(--cc-muted);}
 .hl.off .hl-label{background:var(--cc-muted);}
 
-/* sections */
+/* swipe track: one panel per sub-category, full column width (1.4.2).
+   The track's height is set (by menu.js) to the active panel's height, so the
+   page does the vertical scrolling; the panels never scroll on their own. */
+.track{position:relative;display:flex;align-items:flex-start;margin:0 -20px;overflow-x:auto;overflow-y:hidden;
+  scroll-snap-type:x mandatory;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
+.track::-webkit-scrollbar{display:none;}
+.track.single{display:block;overflow:visible;}
+.panel{position:relative;flex:0 0 100%;width:100%;min-width:0;padding:4px 20px 8px;scroll-snap-align:start;scroll-snap-stop:always;}
+.panel:focus{outline:none;}
+.panel:focus-visible{box-shadow:inset 0 0 0 3px var(--cc-terracotta);border-radius:16px;}
 .sec{display:flex;flex-direction:column;gap:12px;}
-.sec-h{margin:18px 0 0;display:flex;align-items:center;gap:10px;font-size:32px;line-height:1;overflow-wrap:anywhere;}
-.sec + .sec .sec-h{margin-top:0;}
+.sec-h{margin:6px 0 0;display:flex;align-items:center;gap:10px;font-size:30px;line-height:1;overflow-wrap:anywhere;}
+/* previous / next sub-category, at the end of each panel (one-handed) */
+.pnav{display:flex;justify-content:space-between;gap:10px;margin-top:6px;}
+.pbtn{display:inline-flex;align-items:center;gap:6px;min-height:44px;max-width:calc(50% - 5px);padding:0 14px;border-radius:999px;border:1px solid var(--cc-line);
+  background:var(--cc-card);color:var(--cc-ink);font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.pbtn > span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.pbtn.next{margin-left:auto;}
+.pbtn:hover{border-color:var(--cc-ink-2);}
+.pbtn:focus-visible{box-shadow:var(--cc-focus);}
 .sq{flex:none;width:14px;height:14px;border-radius:3px;background:var(--sq,var(--cc-olive));}
 .sq-light{box-shadow:inset 0 0 0 1px var(--tile-border-light);}
 .list{display:flex;flex-direction:column;gap:12px;}
@@ -95,7 +114,7 @@ a.hl:active{transform:scale(.99);}
 .gcard.off .sold-badge{margin-top:auto;}
 
 /* jumped-to item: a short glow (none with reduced motion) */
-.card:focus,.gcard:focus,.sec:focus{outline:none;}
+.card:focus,.gcard:focus{outline:none;}
 .card:focus-visible,.gcard:focus-visible{box-shadow:var(--cc-focus);}
 .flash{animation:flash 1.2s var(--cc-ease);}
 @keyframes flash{0%,30%{box-shadow:0 0 0 3px var(--cc-terracotta);}100%{box-shadow:0 0 0 3px transparent;}}
@@ -135,18 +154,22 @@ a.hl:active{transform:scale(.99);}
   .grid{grid-template-columns:repeat(3,minmax(0,1fr));}
   .gphoto{height:128px;}
   .hl{flex-direction:row;}
-  .hl-photo{flex:0 0 52%;aspect-ratio:auto;min-height:240px;}
-  .hl-body{justify-content:center;padding:22px;}
+  .hl-photo{flex:0 0 46%;aspect-ratio:auto;min-height:200px;}
+  .hl-body{justify-content:center;padding:20px 22px;}
+  .hl-name{font-size:34px;}
   .visit{padding:24px 28px;}
 }
 @media (max-width:360px){
   .col{padding-left:16px;padding-right:16px;}
+  .track,.chips{margin-left:-16px;margin-right:-16px;}
+  .chips-in{padding-left:16px;padding-right:16px;}
+  .panel{padding-left:16px;padding-right:16px;}
   .mtitle{font-size:46px;}
   .brand-wordmark{height:52px;}
   .brand-logo img{width:52px;height:52px;}
 }
 @media (prefers-reduced-motion:reduce){
-  html{scroll-behavior:auto;}
+  html,.track,.chips-in{scroll-behavior:auto;}
   .flash{animation:none;}
   a.hl:active{transform:none;}
 }
