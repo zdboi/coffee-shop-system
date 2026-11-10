@@ -271,6 +271,12 @@ function wasteReasonText(entry){
 }
 function wasteWhereText(x){ return x.source === 'COUNTER' ? 'Counter' : (x.reason === 'RND' ? 'R&D' : 'Back Office'); }
 async function renderWasteReport(){
+  // 1.5 (B7, B8): the barista drink kit and the R&D log live next to the waste report
+  if(BO.has15){
+    const bar = setTopbarActions(`<button class="btn btn-outline" id="btn-barista-kit">Barista drink kit</button> <button class="btn btn-outline" id="btn-wr-rnd">R&amp;D log</button>`);
+    bar.querySelector('#btn-barista-kit').onclick = openBaristaKitForm;
+    bar.querySelector('#btn-wr-rnd').onclick = () => navigate('rnd');
+  }
   const content = document.getElementById('content');
   content.innerHTML = `
     <div class="toolbar">

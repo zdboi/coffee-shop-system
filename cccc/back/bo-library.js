@@ -473,6 +473,7 @@ function openSuppliedItemForm(recipeId, opts){
         </div>
         <div class="hint">Shrunk to about 600 pixels before uploading.</div></div>
     </div>
+    ${countTickFieldHtml('si-count-close', ing && ing.count_at_close)}
     <details class="card soft-card si-restock" id="si-restock" style="margin-top:12px;" ${opts.restock || !r ? 'open' : ''}>
       <summary><b>${r ? 'Restock now (optional)' : 'Starting stock (optional)'}</b> <span class="hint">records a purchase of pieces</span></summary>
       <div class="form-grid" style="margin-top:8px;">
@@ -542,6 +543,15 @@ function openSuppliedItemForm(recipeId, opts){
         applyChanges([Ops.audit(r ? 'Supplied item updated' : 'Supplied item added',
           `${name} — sells ${fmtMoney(item.selling_price)}, paid ${fmtMoney(res && res.cost_per_piece)} a piece${item.restock ? `, restocked ${item.restock.quantity} pcs` : ''}`, res && res.recipe_id)]).catch(() => {});
         try{ await boLoad(); }catch(e){ console.warn(e); }
+        // 1.5 (B9): "Count at closing" on the item's stock row (save_supplied_item doesn't take it): a second
+        // small save right after, only when the tick changed. If it fails, the item itself is still saved.
+        const tick = q('#si-count-close');
+        const rec = state.recipes.find(x => x.id === ((res && res.recipe_id) || (r && r.id)));
+        const sIng = rec && ingredientById(rec.supplied_ingredient_id);
+        if(tick && sIng && !!sIng.count_at_close !== tick.checked){
+          try{ await applyChanges([Ops.update('ingredients', {id: sIng.id, count_at_close: tick.checked, updated_at: nowISO()}), Ops.audit('Count at closing changed', `${tick.checked ? 'Ticked' : 'Unticked'}: ${name}`, sIng.id)]); await boLoad(); }
+          catch(e){ toast('Saved, but "Count at closing" could not be changed: ' + friendlyError(e), 'error'); }
+        }
         boGuardLateClose(seq);
         toast(`${name} saved — margin ${fmtMoney(res && res.margin)}${res && res.margin_pct != null ? ' (' + fmtNum(res.margin_pct, 1) + '%)' : ''}`);
         closeModal();

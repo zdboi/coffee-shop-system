@@ -3472,7 +3472,7 @@ function renderCustomersScreen(){
   content.innerHTML = `
     <div class="cust-layout">
       <div class="cust-list-col">
-        <label class="cust-search">${icon('search')}<input type="search" id="cust-search" placeholder="Search by nickname or username" aria-label="Search customers by nickname or username" autocomplete="off" maxlength="30" value="${escapeHtml(custView.q)}"></label>
+        <label class="cust-search">${icon('search')}<input type="search" id="cust-search" placeholder="Nickname or username" aria-label="Search customers by nickname or username" autocomplete="off" maxlength="30" value="${escapeHtml(custView.q)}"></label>
         <div class="cust-sort"><span class="cust-sort-lbl" id="cust-which-lbl">Show</span><div class="seg" role="group" aria-labelledby="cust-which-lbl" id="cust-which">
           <button type="button" class="seg-btn ${custView.archived?'':'active'}" data-arch="0" aria-pressed="${!custView.archived}">With a phone</button>
           <button type="button" class="seg-btn ${custView.archived?'active':''}" data-arch="1" aria-pressed="${custView.archived}">Archived</button></div></div>

@@ -15,22 +15,30 @@
 const BACKUP_TABLES = ['categories', 'suppliers', 'ingredients', 'ingredient_brands', 'recipes', 'recipe_ingredients', 'purchases', 'production_batches', 'waste',
   'inventory_transactions', 'staff', 'dining_tables', 'floor_shapes', 'devices', 'stores', 'customers', 'shifts', 'sales', 'sale_items', 'payments',
   'refunds', 'loyalty_redemptions', 'cash_movements', 'qr_orders', 'audit_log',
-  'option_groups', 'option_group_recipes', 'expenses', 'waste_logs', 'waste_log_items', 'ingredient_costs'];
+  'option_groups', 'option_group_recipes', 'expenses', 'waste_logs', 'waste_log_items', 'ingredient_costs',
+  // release 1.5 (012): R&D projects (brought back by an import), and stock counts + partner (TCO) debts, which are
+  // in the file for your records only: an import never restores them (owner decision D5; only their own
+  // functions write them). Their stock lines are ordinary stock movements and do come back.
+  'rnd_projects', 'stock_counts', 'stock_count_lines', 'partner_debts', 'partner_debt_lines', 'partner_settlements'];
+// In a backup, never imported (D5).
+const BACKUP_ONLY_TABLES = ['stock_counts', 'stock_count_lines', 'partner_debts', 'partner_debt_lines', 'partner_settlements'];
 // Tables added by 008 (release 1.2) and 010 (release 1.4): a database without them gives an empty list instead of failing the backup.
-const BACKUP_TABLES_1_2 = ['ingredient_brands', 'floor_shapes', 'loyalty_redemptions', 'option_groups', 'option_group_recipes', 'expenses', 'waste_logs', 'waste_log_items', 'ingredient_costs'];
+const BACKUP_TABLES_1_2 = ['ingredient_brands', 'floor_shapes', 'loyalty_redemptions', 'option_groups', 'option_group_recipes', 'expenses', 'waste_logs', 'waste_log_items', 'ingredient_costs',
+  'rnd_projects', 'stock_counts', 'stock_count_lines', 'partner_debts', 'partner_debt_lines', 'partner_settlements'];
 // insert order (parents first). devices / stores are never imported (they belong to real counters / this shop).
 // Brands come after ingredients and before purchases / stock lines (they point at a brand);
 // rewards used come after customers and sales (they point at both).
 // 1.4: option groups after recipes, the per-item ticks after both; expenses after ingredients / suppliers;
 // counter waste logs after shifts, their items after the logs (and before the stock lines that name them).
 const IMPORT_ORDER = ['categories', 'suppliers', 'ingredients', 'ingredient_costs', 'ingredient_brands', 'recipes', 'recipe_ingredients', 'option_groups', 'option_group_recipes', 'purchases', 'production_batches', 'waste',
-  'expenses', 'staff', 'dining_tables', 'floor_shapes', 'customers', 'shifts', 'waste_logs', 'waste_log_items', 'sales', 'sale_items', 'payments', 'refunds', 'loyalty_redemptions', 'cash_movements', 'inventory_transactions',
+  'expenses', 'staff', 'dining_tables', 'floor_shapes', 'customers', 'shifts', 'rnd_projects', 'waste_logs', 'waste_log_items', 'sales', 'sale_items', 'payments', 'refunds', 'loyalty_redemptions', 'cash_movements', 'inventory_transactions',
   'qr_orders', 'audit_log'];
 const TABLE_LABEL = {categories: 'categories', suppliers: 'suppliers', ingredients: 'ingredients', recipes: 'recipes', recipe_ingredients: 'recipe ingredient lines',
   purchases: 'purchases', production_batches: 'production batches', waste: 'waste records', inventory_transactions: 'stock movements', staff: 'staff',
   dining_tables: 'tables', floor_shapes: 'floor plan shapes', ingredient_brands: 'ingredient brands', loyalty_redemptions: 'stamp card rewards used', customers: 'customers', shifts: 'shifts', sales: 'sales', sale_items: 'sale lines', payments: 'payments', refunds: 'refunds / voids',
   cash_movements: 'cash pay-ins / pay-outs', qr_orders: 'QR orders', audit_log: 'audit log entries',
-  option_groups: 'shared option groups', option_group_recipes: 'shared option ticks', expenses: 'expenses', waste_logs: 'counter waste entries', waste_log_items: 'counter waste lines', ingredient_costs: 'typed costs per piece'};
+  option_groups: 'shared option groups', option_group_recipes: 'shared option ticks', expenses: 'expenses', waste_logs: 'counter waste entries', waste_log_items: 'counter waste lines', ingredient_costs: 'typed costs per piece',
+  rnd_projects: 'R&D projects'};
 // old app store -> new table
 const OLD_STORES = {categories: 'categories', suppliers: 'suppliers', ingredients: 'ingredients', recipes: 'recipes', recipeIngredients: 'recipe_ingredients',
   purchases: 'purchases', productionBatches: 'production_batches', waste: 'waste', inventoryTransactions: 'inventory_transactions', users: 'staff',
@@ -49,7 +57,7 @@ async function buildCloudBackup(onProgress){
   data.devices = (data.devices || []).map(d => { const x = Object.assign({}, d); delete x.device_key; delete x.auth_user_id; return x; });
   const srow = await cloud.select('settings', {limit: 1});
   data.settings = (srow && srow[0]) || null;
-  return {app: 'CCCC Back Office', format: 'cccc-backup', version: 7, exported_at: nowISO(),   // 6 = release 1.2 (brands, floor plan shapes, rewards used); 7 = 1.4 (option library, expenses, counter waste)
+  return {app: 'CCCC Back Office', format: 'cccc-backup', version: 7, exported_at: nowISO(),   // 6 = release 1.2 (brands, floor plan shapes, rewards used); 7 = 1.4 (option library, expenses, counter waste); 1.5 adds R&D, counts, partner debts to the same format (new tables only)
     business: state.business ? {id: state.business.id, name: state.business.name} : null, data};
 }
 async function exportBackup(silent, tag){
@@ -403,7 +411,7 @@ const CCCC_LINKS = {
   recipe_ingredients: [['recipe_id', 'recipes', true], ['ingredient_id', 'ingredients', true]],
   ingredient_brands: [['ingredient_id', 'ingredients', true]],
   purchases: [['ingredient_id', 'ingredients', true], ['supplier_id', 'suppliers'], ['brand_id', 'ingredient_brands']],
-  production_batches: [['recipe_id', 'recipes'], ['produced_ingredient_id', 'ingredients']],
+  production_batches: [['recipe_id', 'recipes'], ['produced_ingredient_id', 'ingredients'], ['partner_supplier_id', 'suppliers']],
   waste: [['ingredient_id', 'ingredients', true]],
   inventory_transactions: [['ingredient_id', 'ingredients', true], ['brand_id', 'ingredient_brands']],
   loyalty_redemptions: [['customer_id', 'customers', true], ['sale_id', 'sales', true], ['recipe_id', 'recipes']],
@@ -418,7 +426,7 @@ const CCCC_LINKS = {
   option_group_recipes: [['group_id', 'option_groups', true], ['recipe_id', 'recipes', true]],
   expenses: [['ingredient_id', 'ingredients'], ['supplier_id', 'suppliers']],
   ingredient_costs: [['ingredient_id', 'ingredients', true]],
-  waste_logs: [['shift_id', 'shifts']],
+  waste_logs: [['shift_id', 'shifts'], ['rnd_project_id', 'rnd_projects']],
   waste_log_items: [['waste_log_id', 'waste_logs', true], ['recipe_id', 'recipes'], ['ingredient_id', 'ingredients']],
 };
 function ccccTablesNeeded(payload){
@@ -459,12 +467,15 @@ function convertCcccPayload(payload, existingIds, notes){
       if(t === 'expenses' && r.created_by && r.created_by !== cloud.userId()) r.created_by = null;
       if(t === 'staff' && r.profile_id && r.profile_id !== cloud.userId()) r.profile_id = null;
       if(t === 'dining_tables' && !sameShop) r.qr_token = randomToken();
+      // 1.5 (D5): stock counts are never restored, so a "missing at count" waste entry comes back without its link
+      if(t === 'waste_logs' && r.stock_count_id) r.stock_count_id = null;
       if(t === 'customers' && r.phone && !r.merged_into){ if(phones.has(r.phone)){ r.phone = null; skippedPhones++; } else phones.add(r.phone); }
       out[t].push(r);
     });
   });
   if(skippedPhones) notes.push(`${plural(skippedPhones, 'customer')} came in without a mobile number because another customer already has it (merge them in Customers if they are the same person).`);
   if(!sameShop && payload.business) notes.push('This backup is from another shop account: its table QR codes got new codes.');
+  if(BACKUP_ONLY_TABLES.some(t => (src[t] || []).length)) notes.push('Stock counts and what is owed to partner branches (TCO) are kept in the backup file for your records, but an import never brings them back. Their stock movements and the batches themselves do come back.');
   // 1.4.1: the menu link's "Visit us" details and highlight label / text come along (bo-menulink.js);
   // the on/off switch, the shop code and the highlighted item stay as they are in this shop.
   return {tables: out, legacyPins: [], unlinked, broken, already, leftOut: [], dropped: new Set(),

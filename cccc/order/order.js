@@ -732,7 +732,7 @@
           : r.type === 'FREE_ITEM' ? `Free drink or food${Number(r.amount) > 0 ? ` (${peso0(r.amount)} value)` : ''}`
           : (r.label || 'Reward');
         const used = dayText(r.used_at);
-        return `<li><span>${esc(name)}</span>${used ? `<span class="pc-when">used ${esc(used)}</span>` : ''}</li>`;
+        return `<li><span class="pc-name">${esc(name)}</span>${used ? ` <span class="pc-when">· used ${esc(used)}</span>` : ''}</li>`;
       }).join('');
       return `<li class="pc"><p class="pc-head"><b>Card ${esc(Number(h.card_no))}</b>${when ? `<span> · ${esc(when)}</span>` : ''}</p>
         ${rewards ? `<ul class="pc-rewards" aria-label="Rewards used on card ${esc(Number(h.card_no))}">${rewards}</ul>` : ''}</li>`;
@@ -787,8 +787,9 @@
       </div>`;
     const note = S.welcomeNote ? `<div class="notice note-info" role="status">${ico('info', {size: 20})}<p>${esc(S.welcomeNote)}</p></div>` : '';
     $('#main').innerHTML = `
-      ${closed ? closedHeroHtml() + openOrdersHtml() : openOrdersHtml()}
+      ${closed ? closedHeroHtml() : ''}
       ${note}
+      ${openOrdersHtml()}
       ${choice}
       ${joinCardHtml()}
       <div class="welcome-copy">
@@ -971,17 +972,40 @@
           </button>`).join('')}
       </div>      </section>`).join('')}`;
   }
+  // 1.5 (B11): the item picked in Settings → Menu link, as a photo card at the top of the menu.
+  // get_qr_menu sends it only when it is one of this menu's items (else null: nothing shown).
+  // Sold out today: greyed, can't be added. The price shown is the menu's (display only).
+  function highlightHtml(preview){
+    const h = S.menu && S.menu.highlight;
+    if(!h || typeof h !== 'object' || h.item_id == null) return '';
+    const it = itemById(h.item_id);
+    if(!it) return '';
+    const off = h.available === false || !!h.sold_out || !it.available;
+    const disabled = off || preview || !S.canOrder;
+    const img = h.image_url || it.image_url;
+    const label = String(h.label || '').trim() || 'Today\'s pick';
+    return `<button class="hl${off ? ' off' : ''}" type="button" id="highlight" data-item="${esc(it.id)}"${disabled ? ' aria-disabled="true"' : ''}>
+      <span class="hl-photo">${img ? `<img src="${esc(img)}" alt="" width="560" height="315" loading="lazy" decoding="async">` : ico('cup', {size: 40})}
+        <span class="hl-label">${ico('star', {size: 16})}<span>${esc(label)}</span></span></span>
+      <span class="hl-body">
+        <span class="hl-name">${esc(h.name || it.name)}</span>
+        ${h.blurb ? `<span class="hl-blurb">${esc(h.blurb)}</span>` : ''}
+        <span class="hl-foot"><span class="hl-price">${money(it.price)}</span>
+          ${off ? '<span class="hl-sold">Sold out today</span>' : `<span class="hl-add" aria-hidden="true">${ico('plus', {size: 20})}<span>Add</span></span>`}</span>
+      </span>
+    </button>`;
+  }
   function wireMenu(){
     document.querySelectorAll('.cat').forEach(b => b.onclick = () => {
       document.querySelectorAll('.cat').forEach(x => x.classList.toggle('on', x === b));
       const sec = document.getElementById('cat-' + b.dataset.cat);
       if(sec) sec.scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
     });
-    document.querySelectorAll('.item[data-item]').forEach(b => b.onclick = () => {
+    document.querySelectorAll('.item[data-item], .hl[data-item]').forEach(b => b.onclick = () => {
       if(b.getAttribute('aria-disabled') === 'true'){
         const it = itemById(b.dataset.item);
-        if(S.canOrder && !S.customer) toast('Enter your name above first');
-        else if(it && !it.available) toast(`${it.name} is sold out right now`);
+        if(S.canOrder && !S.customer && !guestOrdering()) toast('Choose "Register" or "Order as guest" above first');
+        else if(it && (!it.available || b.classList.contains('off'))) toast(`${it.name} is sold out right now`);
         return;
       }
       openItemSheet(b.dataset.item);
@@ -991,13 +1015,13 @@
   function renderMenu(quiet){
     const y = window.scrollY;
     $('#main').innerHTML = `
-      ${S.customer ? memberCardHtml() : ''}
+      ${S.customer ? memberCardHtml() : (guestOrdering() ? guestCardHtml() : '')}
       ${!S.canOrder ? `<div class="notice warn" role="status">${esc(S.blockedReason)}</div>` : (S.menu.welcome_message ? `<div class="notice">${esc(S.menu.welcome_message)}</div>` : '')}
       ${openOrdersHtml()}
       ${menuHtml(false)}`;
     wireMenu();
     wireOpenOrders();
-    const nm = $('#not-me'); if(nm) nm.onclick = notMe;
+    wireAccount();
     if(quiet) window.scrollTo({top: y});
   }
   function statusPill(o){
@@ -1009,7 +1033,7 @@
   function renderBottom(){
     const b = $('#bottom');
     const t = cartTotals();
-    if(S.view !== 'menu' || !isOpen() || !S.canOrder || !S.customer || !t.count){ b.hidden = true; return; }
+    if(S.view !== 'menu' || !isOpen() || !S.canOrder || !(S.customer || guestOrdering()) || !t.count){ b.hidden = true; return; }
     b.hidden = false;
     b.innerHTML = `<button class="btn" id="view-cart"><span>View order · ${t.count} item${t.count === 1 ? '' : 's'}</span><span>${money(t.total)}</span></button>`;
     $('#view-cart').onclick = openCartSheet;
@@ -1047,7 +1071,7 @@
     const body = `
       ${it.image_url ? `<img class="sheet-photo" src="${esc(it.image_url)}" alt="" loading="lazy" decoding="async">` : ''}
       ${it.description ? `<p class="sheet-desc">${esc(it.description)}</p>` : ''}
-      ${groups.map((g, gi) => groupHtml(g, gi)).join('')}
+      ${groups.map((g, gi) => groupHtml(g, gi, selections)).join('')}
       <div class="field gap-top"><label for="it-note">Special request (optional)</label>
         <input class="input" id="it-note" maxlength="140" placeholder="e.g. less ice"></div>
       <div class="qty" role="group" aria-label="How many"><button id="q-minus" aria-label="One less">${ico('minus', {size: 22})}</button><span id="q-val" aria-live="polite">1</span><button id="q-plus" aria-label="One more">${ico('plus', {size: 22})}</button></div>`;
@@ -1122,12 +1146,24 @@
   }
   // One option group in the item sheet. Short labels (Hot / Iced, sizes) sit two to a row so a
   // drink with many groups stays short; long labels get the full width.
-  function groupHtml(g, gi){
-    const short = g.options.length >= 2 && g.options.length <= 6 &&g.options.every(o => String(o.label || '').length <= 14);
+  // 1.5 (B12): swap options (e.g. non-dairy milk) come after the prompt "Lactose intolerant?
+  // Have this instead", and only those the server marks available right now (display only; the
+  // server still accepts the order either way). None available: no prompt. An option already
+  // chosen on a cart line being changed stays visible, and a required group shows all of its
+  // options (so it can always be completed). A group left with nothing to show is hidden.
+  function isSwap(o){ return String(o && o.kind || '').toUpperCase() === 'SWAP'; }
+  function groupHtml(g, gi, chosen){
+    const picked = new Set((chosen || []).filter(s => s.group_id === g.id).map(s => s.option_id));
+    const plain = g.options.filter(o => !isSwap(o));
+    const swaps = g.options.filter(o => isSwap(o) && (g.required || o.available !== false || picked.has(o.id)));
+    if(!plain.length && !swaps.length) return '';
+    const short = plain.length >= 2 && plain.length <= 6 && plain.every(o => String(o.label || '').length <= 14);
     const titleId = 'g-title-' + gi;
     return `<section class="group${g.required ? ' is-req' : ''}" data-group="${esc(g.id)}" role="group" aria-labelledby="${titleId}" tabindex="-1">
       <div class="group-title"><h4 id="${titleId}">${esc(g.name)}</h4><small class="g-hint${g.required ? ' req' : ''}">${esc(groupHint(g))}</small></div>
-      <div class="opts${short ? ' opts-2' : ''}">${g.options.map(o => optionHtml(g, o)).join('')}</div></section>`;
+      ${plain.length ? `<div class="opts${short ? ' opts-2' : ''}">${plain.map(o => optionHtml(g, o)).join('')}</div>` : ''}
+      ${swaps.length ? `<p class="swap-ask${plain.length ? ' after' : ''}">Lactose intolerant? Have this instead</p>
+      <div class="opts">${swaps.map(o => optionHtml(g, o)).join('')}</div>` : ''}</section>`;
   }
   function groupHint(g){
     if(g.required) return g.multi_select ? 'Required · choose 1 or more' : 'Required · choose 1';
@@ -1135,11 +1171,11 @@
   }
   function optionHtml(g, o){
     const delta = Number(o.price_delta) || 0;
-    // A swap (e.g. "Non-dairy milk") replaces something in the drink: say so under the label.
-    const swap = String(o.kind || '').toUpperCase() === 'SWAP';
+    // A swap (e.g. "Non-dairy milk") sits under the "Lactose intolerant?" prompt (groupHtml).
+    const swap = isSwap(o);
     return `<button class="opt${g.multi_select ? ' multi' : ''}${swap ? ' swap' : ''}" aria-pressed="false" data-g="${esc(g.id)}" data-o="${esc(o.id)}">
       <span class="tick">${ico('check', {size: 14})}</span>
-      <span class="opt-label">${esc(o.label)}${swap ? '<span class="opt-sub">In place of the usual</span>' : ''}</span>
+      <span class="opt-label">${esc(o.label)}</span>
       ${delta ? `<span class="delta">${delta > 0 ? '+' : '−'}${money(Math.abs(delta))}</span>` : ''}</button>`;
   }
 
@@ -1171,7 +1207,9 @@
         <div class="grand"><span>Total</span><span>${money(t.total)}</span></div>
       </div>
       <p class="pay-note">${esc(S.menu.payment_note || 'Pay at the counter.')}</p>
-      <div class="form-error err-after" id="c-err" role="alert"></div>`;
+      ${guestOrdering() ? '<p class="pay-note">Ordering as a guest: this order won\'t collect stamps.</p>' : ''}
+      <div class="form-error err-after" id="c-err" role="alert"></div>
+      <div id="c-help"></div>`;
     openSheet('Your order', body, `<button class="btn btn-main" id="c-place">Place order · ${money(t.total)}</button>`, (sheet) => {
       $('#sheet-root').dataset.kind = 'order';
       sheet.querySelectorAll('[data-inc],[data-dec]').forEach(b => b.onclick = () => {
@@ -1211,16 +1249,25 @@
       return;
     }
     btn.disabled = true; err.textContent = '';
+    const help = $('#c-help'); if(help) help.innerHTML = '';
     btn.textContent = 'Sending…';
     try{
-      const r = await cloud.rpc('qr_place_order', {
+      const args = {
         p_token: token,
         p_items: S.cart.map(l => ({recipe_id: l.recipe_id, quantity: l.quantity, notes: l.notes || null, modifiers: l.modifiers})),
         p_note: S.note || null, p_order_type: S.orderType,
-      });
+      };
+      // 1.5: a guest says so; a phone with an account always orders as itself (the server decides).
+      if(guestOrdering()) args.p_guest = true;
+      const r = await cloud.rpc('qr_place_order', args);
       if(r.error){
         err.textContent = errText(r);
         btn.disabled = false; btn.textContent = `Place order · ${money(cartTotals().total)}`;
+        // One guest per table (Q4): registering lets them order too; the cart stays.
+        if(r.error === 'GUEST_TABLE_BUSY' && help){
+          help.innerHTML = `<button class="btn btn-quiet wide" type="button" id="c-register">${ico('star', {size: 20})}<span>Register to order</span></button>`;
+          $('#c-register').onclick = startJoining;
+        }
         if(r.error === 'ITEM_UNAVAILABLE'){ refreshMenuQuietly(); }
         if(r.error === 'BAD_OPTION' || r.error === 'OPTION_REQUIRED'){
           // The item's choices changed (e.g. the shop made Hot or iced required): fetch the menu,
@@ -1232,7 +1279,13 @@
             $('#c-err').textContent = S.cart.some(lineNeedsChoice) ? 'Some choices changed. Tap "Choose again" on the marked item.' : text;
           }
         }
-        if(r.error === 'REGISTER_FIRST'){ S.customer = null; closeSheet(); render(); }
+        if(r.error === 'REGISTER_FIRST'){
+          // This phone has no account any more (e.g. it was opened on another phone): ask again.
+          S.customer = null; S.guest = false; S.joining = false; saveGuest(false);
+          closeSheet();
+          try{ applySession(await cloud.rpc('qr_session', {p_token: token})); }catch(e){}
+          window.scrollTo({top: 0}); render();
+        }
         if(r.error === 'SHOP_CLOSED'){
           // The last shift closed while they were ordering: show the closed screen. The cart
           // is NOT cleared (it stays saved on this phone for when the shop opens).
@@ -1267,6 +1320,7 @@
       <div class="field"><label for="r-phone">Mobile number</label><input class="input" id="r-phone" inputmode="tel" autocomplete="tel" placeholder="0917 123 4567"></div>
       <div class="field"><label for="r-name">Name or nickname you used</label><input class="input" id="r-name" maxlength="30" autocomplete="nickname"></div>
       <div class="form-error" id="r-err" role="alert"></div>
+      <div id="r-help"></div>
       ${filled ? '' : '<p class="sheet-desc small">Didn\'t give us a number before? Just start fresh, and ask our staff to join your old visits to the new name.</p>'}`,
       `<button class="btn btn-main" id="r-go">Connect this phone</button>`, () => {
         if(prefill.phone) $('#r-phone').value = prefill.phone;
@@ -1280,8 +1334,19 @@
           }
           try{
             const r = await cloud.rpc('qr_relink', {p_token: token, p_phone: $('#r-phone').value.trim(), p_nickname: $('#r-name').value.trim()});
-            if(r.error){ err.textContent = errFor(r, 'relink'); btn.disabled = false; return; }
+            if(r.error){
+              err.textContent = errFor(r, 'relink'); btn.disabled = false;
+              // 1.5 (Q5): this phone is still signed in (e.g. a number saved on the ticket belongs
+              // to an older record): sign out first, through the same unpaid-orders check.
+              if(r.error === 'SIGN_OUT_FIRST' && S.customer){
+                const nm = S.customer.nickname;
+                $('#r-help').innerHTML = `<button class="btn btn-quiet wide" type="button" id="r-signout">${ico('logout', {size: 20})}<span>Sign out of ${esc(nm)}</span></button>`;
+                $('#r-signout').onclick = notMe;
+              }
+              return;
+            }
             S.customer = r.customer; S.justRegistered = false;
+            S.guest = false; S.joining = false; saveGuest(false);
             closeSheet();
             await loadOrders();
             render();
@@ -1291,23 +1356,102 @@
       });
   }
 
-  function notMe(){
-    const name = S.customer ? S.customer.nickname : '';
-    openSheet(`Not ${name}?`, `<p class="sheet-desc">This phone will forget ${esc(name)}. You can then enter your own name. ${esc(name)}'s visits are kept safe.</p>`,
-      `<div class="btn-row"><button class="btn btn-quiet" id="nm-cancel">Keep ${esc(name)}</button><button class="btn btn-main" id="nm-go">Use my name</button></div>`, () => {
-        $('#nm-cancel').onclick = closeSheet;
-        $('#nm-go').onclick = async () => {
-          $('#nm-go').disabled = true;
-          try{ await cloud.rpc('qr_forget_device', {p_token: token}); }catch(e){}
-          await cloud.signOut();
-          // With the person check on, show the name screen first: the check's box lives there.
-          const later = captchaOn();
-          if(!later){ try{ await cloud.signInAnonymously(); }catch(e){ S.canOrder = false; S.blockedReason = errText(e); } }
-          S.customer = null; S.orders = []; S.cart = []; saveCart(); S.view = 'menu';
-          closeSheet(); render();
-          if(later) beginSignIn();
+  /* ---------------- username (release 1.5, Q2) ----------------
+     Made by the server from the nickname (e.g. "Mika the Coffee Devourer"), unique in the shop.
+     The customer may change it; the server checks the rules and uniqueness (qr_set_username). */
+  function openUsernameSheet(){
+    if(!S.customer) return;
+    const cur = S.customer.username || '';
+    openSheet('Your username', `
+      <p class="sheet-desc lead">Your username is yours alone in this shop, so our staff can tell you apart from others with the same name.</p>
+      <div class="field"><label for="un-input">Username</label>
+        <input class="input" id="un-input" maxlength="50" autocomplete="off" autocapitalize="words" spellcheck="false" enterkeyhint="done">
+        <div class="help">3 to 50 letters. Spaces, . ' - _ and up to 4 numbers are OK.</div></div>
+      <div class="form-error" id="un-err" role="alert"></div>`,
+      `<button class="btn btn-main" id="un-save">Save username</button>`, () => {
+        const input = $('#un-input'), err = $('#un-err'), btn = $('#un-save');
+        input.value = cur;
+        input.oninput = () => { err.textContent = ''; };
+        input.onkeydown = (e) => { if(e.key === 'Enter') btn.click(); };
+        input.focus(); input.select();
+        btn.onclick = async () => {
+          const v = input.value.replace(/\s+/g, ' ').trim();
+          err.textContent = '';
+          if(v === cur){ closeSheet(); return; }
+          if(v.length < 3){ err.textContent = MSG.BAD_USERNAME; input.focus(); return; }
+          btn.disabled = true;
+          try{
+            const r = (await cloud.rpc('qr_set_username', {p_token: token, p_username: v})) || {};
+            if(r.error || !r.customer){
+              err.textContent = errFor(r.error ? r : null, 'username'); btn.disabled = false;
+              if(r.error === 'REGISTER_FIRST' || r.error === 'NOT_SIGNED_IN'){ closeSheet(); toast(errText(r), true); refreshCustomer(); }
+              else input.focus();
+              return;
+            }
+            S.customer = r.customer;
+            closeSheet(); render(true);
+            toast('Username saved');
+          }catch(e){ err.textContent = errFor(e, 'username'); btn.disabled = false; }
         };
       });
+  }
+
+  /* ---------------- "Not you?" / switch account (release 1.5, Q5) ----------------
+     qr_switch_account(token, false): with unpaid orders on this phone the server answers
+     UNPAID_ORDERS {waiting, in_progress} and changes nothing; the sheet then asks
+     "You still have unpaid orders. Do you still want to proceed?". Yes = the same call with
+     p_confirm true: only WAITING orders are cancelled; orders already being made (or ready)
+     stay and are paid at the counter. The answer {cancelled, kept} is shown on the next screen.
+     The phone keeps its own login (one phone = one sign-in); only the account link is removed. */
+  function plural(n, one, many){ return `${n} ${n === 1 ? one : many}`; }
+  function notMe(){
+    const name = S.customer ? S.customer.nickname : '';
+    openSheet(`Not ${name}?`, `<p class="sheet-desc">This phone will sign out of ${esc(name)}. ${esc(name)}'s visits and stamps are kept safe. You can then register your own name or order as a guest.</p>
+      <div class="form-error err-after" id="nm-err" role="alert"></div>`,
+      `<div class="btn-row"><button class="btn btn-quiet" id="nm-cancel">Keep ${esc(name)}</button><button class="btn btn-main" id="nm-go">Sign out</button></div>`, () => {
+        $('#nm-cancel').onclick = closeSheet;
+        $('#nm-go').onclick = () => switchAccount(false, $('#nm-go'), $('#nm-err'));
+      });
+  }
+  async function switchAccount(confirm, btn, errEl){
+    if(btn) btn.disabled = true;
+    if(errEl) errEl.textContent = '';
+    let r;
+    try{ r = (await cloud.rpc('qr_switch_account', {p_token: token, p_confirm: !!confirm})) || {}; }
+    catch(e){ if(errEl) errEl.textContent = errText(e); if(btn && btn.isConnected) btn.disabled = false; return; }
+    if(r.error === 'UNPAID_ORDERS' && !confirm){ askUnpaid(r); return; }
+    if(r.error || !r.ok){ if(errEl) errEl.textContent = errText(r.error ? r : null); if(btn && btn.isConnected) btn.disabled = false; return; }
+    await afterSwitch(r);
+  }
+  function askUnpaid(r){
+    const w = Math.max(0, Number(r.waiting) || 0), k = Math.max(0, Number(r.in_progress) || 0);
+    const name = S.customer ? S.customer.nickname : '';
+    const lines = [];
+    if(w) lines.push(`<li>${ico('x', {size: 18})}<span>${esc(plural(w, 'order', 'orders'))} still waiting for the barista will be <b>cancelled</b>.</span></li>`);
+    if(k) lines.push(`<li>${ico('cup', {size: 18})}<span>${esc(plural(k, 'order is', 'orders are'))} already being made. ${k === 1 ? 'It stays' : 'They stay'}, and you can still pay at the counter.</span></li>`);
+    openSheet('Unpaid orders', `<p class="ask-big">${esc(MSG.UNPAID_ORDERS)}</p>
+      ${lines.length ? `<ul class="ask-list">${lines.join('')}</ul>` : ''}
+      <div class="form-error err-after" id="sw-err" role="alert"></div>`,
+      `<div class="btn-row"><button class="btn btn-quiet" id="sw-no">No, keep ${esc(name || 'me')}</button><button class="btn btn-main" id="sw-yes">Yes, sign out</button></div>`, () => {
+        $('#sw-no').onclick = closeSheet;
+        $('#sw-yes').onclick = () => switchAccount(true, $('#sw-yes'), $('#sw-err'));
+        $('#sw-no').focus();
+      });
+  }
+  async function afterSwitch(r){
+    const cancelled = Math.max(0, Number(r.cancelled) || 0), kept = Math.max(0, Number(r.kept) || 0);
+    const parts = ['Signed out.'];
+    if(cancelled) parts.push(`${plural(cancelled, 'waiting order was', 'waiting orders were')} cancelled.`);
+    if(kept) parts.push(`${plural(kept, 'order is', 'orders are')} still being made: pay at the counter as usual.`);
+    S.customer = null; S.guest = false; S.joining = false; saveGuest(false);
+    S.justRegistered = false;
+    S.cart = []; saveCart(); S.view = 'menu';
+    S.welcomeNote = parts.join(' ');
+    closeSheet();
+    await loadOrders();
+    window.scrollTo({top: 0});
+    render();
+    schedulePoll();
   }
 
   /* ---------------- order ticket ---------------- */
@@ -1365,7 +1509,7 @@
         <div class="ticket-top${bad ? ' is-bad' : ''}">
           <div class="ticket-label">${st === 'COMPLETED' ? 'Enjoy!' : 'Your order number'}</div>
           <div class="ticket-no">${esc(o.order_number)}</div>
-          <div class="ticket-where">${esc(o.table_label || '')} · ${takeaway ? 'Take away' : 'Dine in'}${c.nickname ? ` · for ${esc(c.nickname)}` : ''}</div>
+          <div class="ticket-where">${esc(o.table_label || '')} · ${takeaway ? 'Take away' : 'Dine in'}${o.is_guest ? ' · Guest' : (c.nickname ? ` · for ${esc(c.nickname)}` : '')}</div>
         </div>
         <div class="perf" aria-hidden="true"></div>
         ${bad ? `<div class="ticket-note">${badNote}</div>`
@@ -1376,6 +1520,12 @@
 
   function phoneCardHtml(o){
     const bad = o.status === 'REJECTED' || o.status === 'CANCELLED';
+    // 1.5: a guest can register later on this phone; this order stays a guest order.
+    if(!bad && !S.customer && guestOrdering() && S.menu.loyalty_enabled){
+      return `<div class="card-quiet" id="guest-join-card"><h4>Collect stamps next time</h4>
+        <p>Register (it's free) and your next orders collect stamps. This order stays a guest order.</p>
+        <button class="btn btn-quiet wide" type="button" id="guest-register">${ico('star', {size: 20})}<span>Register to collect stamps</span></button></div>`;
+    }
     if(bad || !S.customer || S.customer.phone_hint) return '';
     return `<div class="card-quiet" id="phone-card"><h4>Keep your visits</h4>
       <p>Add your number so you keep your stamps if you change phones.</p>
@@ -1384,6 +1534,7 @@
       <div id="pc-help"></div></div>`;
   }
   function wirePhoneCard(){
+    const gr = $('#guest-register'); if(gr) gr.onclick = startJoining;
     const save = $('#pc-save');
     if(!save) return;
     const input = $('#pc-phone'), err = $('#pc-err'), help = $('#pc-help');

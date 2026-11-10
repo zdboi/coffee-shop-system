@@ -19,7 +19,8 @@ const BO = {
   ownerStaff: null,          // the owner's own row in `staff`
   profileName: '',
   counts: {open_qr_orders: 0, customer_count: 0, needs_review: 0},
-  reviewSales: 0, reviewRefunds: 0, reviewPayouts: 0,  // parts of counts.needs_review
+  reviewSales: 0, reviewRefunds: 0, reviewPayouts: 0, reviewCounts: 0,  // parts of counts.needs_review
+  has15: false,              // the server has the 1.5 (012) columns: counts, barista kit, R&D, partner branch
   pinUpdateNeeded: [],       // staff ids whose manager/admin PIN is shorter than 6 digits (server list)
   pinLockouts: [],           // counters locked after wrong PINs in the last 7 days (server list)
   hasPayoutLimit: false,     // the server knows settings.payout_review_limit
@@ -173,6 +174,8 @@ function applyBoBootstrap(d){
   BO.menuLink = {};
   if(BO.hasMenuLink) MENU_LINK_KEYS.forEach(k => { BO.menuLink[k] = d.settings[k] == null ? null : d.settings[k]; });
   BO.menuLink.menu_public = BO.menuLink.menu_public === true;
+  // Release 1.5 (012): count at closing, barista kit, R&D, partner branch (TCO). Older database: hidden.
+  BO.has15 = !!(d.settings && Object.prototype.hasOwnProperty.call(d.settings, 'barista_kit'));
   state.staff = d.staff || [];
   state.categories = d.categories || [];
   state.suppliers = d.suppliers || [];
@@ -262,7 +265,8 @@ async function refreshReviewCount(){
   }catch(e){ /* not important */ }
   BO.reviewRefunds = (await loadRefundsToReview().catch(() => [])).length;
   BO.reviewPayouts = (await loadPayoutsToReview().catch(() => [])).length;
-  BO.counts.needs_review = BO.reviewSales + BO.reviewRefunds + BO.reviewPayouts;
+  BO.reviewCounts = (typeof loadCountsToReview === 'function' ? await loadCountsToReview().catch(() => []) : []).length;   // 1.5: flagged stock counts
+  BO.counts.needs_review = BO.reviewSales + BO.reviewRefunds + BO.reviewPayouts + BO.reviewCounts;
   updateNavBadges();
   renderDashReview();
 }
@@ -708,6 +712,8 @@ const BO_NAV = [
   {id: 'ingredients', label: 'Ingredients', ic: 'box'},
   {id: 'purchases', label: 'Purchases', ic: 'inbox'},
   {id: 'production', label: 'Production', ic: 'refresh'},
+  {id: 'stockCounts', label: 'Stock counts', ic: 'check'},
+  {id: 'rnd', label: 'R&D log', ic: 'edit'},
   {id: 'recipes', label: 'Recipes & menu', ic: 'cup'},
   {id: 'inventory', label: 'Inventory', ic: 'grid'},
   {id: 'wasteReport', label: 'Waste report', ic: 'trash'},
@@ -740,6 +746,8 @@ const BO_ROUTES = {
   ingredientDetail: {title: 'Ingredient', param: true, nav: 'ingredients', render: (p) => renderIngredientDetail(p)},
   purchases: {title: 'Purchases', render: () => renderPurchases()},
   production: {title: 'Production', render: () => renderProduction()},
+  stockCounts: {title: 'Stock counts', render: () => renderStockCounts()},                         // bo-counts.js (1.5, B9)
+  rnd: {title: 'R&D log', render: () => renderRnd()},                                               // bo-counts.js (1.5, B8)
   recipes: {title: 'Recipes & menu', render: () => renderRecipes()},
   recipeDetail: {title: 'Recipe', param: true, nav: 'recipes', render: (p) => renderRecipeDetail(p)},
   optionLibrary: {title: 'Options library', nav: 'recipes', render: () => renderOptionLibrary()},     // bo-library.js (1.4, A9)
@@ -1050,6 +1058,7 @@ function renderDashReview(){
     if(BO.reviewSales) parts.push(plural(BO.reviewSales, 'sale'));
     if(BO.reviewRefunds) parts.push(plural(BO.reviewRefunds, 'refund'));
     if(BO.reviewPayouts) parts.push(plural(BO.reviewPayouts, 'large pay-out'));
+    if(BO.reviewCounts) parts.push(plural(BO.reviewCounts, 'stock count'));
     rv.innerHTML = `<div class="notice warn"><b>${esc(parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : (parts[0] || plural(BO.counts.needs_review, 'item')))} ${BO.counts.needs_review === 1 ? 'needs' : 'need'} your review</b> (for example sold below the menu price, totals that don't add up, or cash taken out of a drawer). <a class="linklike" id="dash-go-review">Check them</a>.</div>`;
     rv.querySelector('#dash-go-review').onclick = () => { if(typeof txFilter !== 'undefined') txFilter.review = true; navigate('transactions'); };
   }

@@ -547,3 +547,35 @@ tr.wr-flag-row td{background:var(--cc-warning-tint);}
 .ml-qr-side .mono{overflow-wrap:anywhere;}
 .ml-qr-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
 .ml-qr-actions select{width:auto;min-height:36px;}
+
+/* ---- Release 1.5 (Wave 3): counts, R&D, barista kit, partner branch, stamp card history ---- */
+.ni-table tr.ni-part td{font-size:13px;color:var(--cc-muted);padding-left:22px;border-top-style:dashed;}
+.ni-table tr.ni-part.ni-sub2 td:first-child{padding-left:38px;}
+.count-tick-warn{display:flex;gap:8px;align-items:flex-start;}
+.count-tick-hint{color:var(--cc-warning);display:flex;gap:6px;align-items:flex-start;margin-top:4px;}
+.ci-list{max-height:52vh;overflow:auto;border:1px solid var(--cc-line);border-radius:10px;padding:6px 10px;background:var(--cc-paper);}
+.ci-group + .ci-group{margin-top:8px;border-top:1px solid var(--cc-line);padding-top:6px;}
+.ci-head{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--cc-muted);margin:4px 0;}
+.ci-item{display:flex;margin-right:0;}
+.sc-ticked .ready-pill{margin:2px 4px 2px 0;}
+.sc-new{display:flex;gap:6px;align-items:center;}
+.sc-new input{width:110px;min-width:0;flex:1 1 90px;}
+.sc-new select{width:auto;min-width:64px;flex:0 0 auto;}
+.sc-lines td, .sc-table td{vertical-align:top;}
+.kit-table select{max-width:100%;}
+.kit-table td:first-child{min-width:180px;}
+.set-extra-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--cc-line);flex-wrap:wrap;}
+.set-extra-row:first-of-type{margin-top:6px;}
+.pr-scale-row{flex-wrap:wrap;gap:8px;align-items:center;}
+.pr-scale-row input{min-height:38px;}
+.saved-stamps{margin:6px 0;font-size:14px;color:var(--cc-ink);}
+.past-cards{margin-top:12px;border-top:1px solid var(--cc-line);padding-top:8px;font-size:14px;}
+.past-cards ul{margin:6px 0 0;padding-left:18px;}
+.past-cards li{margin:4px 0;}
+.cust-username{font-style:italic;}
+.wr-projects{max-width:720px;}
+@media(max-width:640px){
+  .sc-new input{width:80px;}
+  .kit-table td:first-child{min-width:120px;}
+}
+.form-row label.chk{display:inline-flex;text-transform:none;letter-spacing:0;font-size:14px;font-weight:500;color:var(--cc-ink);margin-bottom:0;}
