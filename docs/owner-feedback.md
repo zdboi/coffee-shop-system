@@ -214,3 +214,15 @@ Owner: **don't start 1.3 until I say so.**
   - re-pair the counters.
   - Not started; waiting for the owner to choose the address.
 - **Supabase moved (owner, 2026-11-10 12:29):** the owner transferred the Supabase project to the business account. The project URL is unchanged (`qtkoxzuedxvqoktobtyg`), and the Back Office and counter uploads work. No app change is needed. From now on, 012 and later scripts are run from the business account. The GitHub move/address change is still pending the owner's choice.
+
+## B16. New stamp card after the last reward + card history (owner, 2026-11-10 15:20), Wave 3
+- Owner: "when stamp cards are completed by certain customers, they will be issued another stamp card. Their previous stamp card will be kept along with the date it's been completed. Only issue another stamp card after the customer took the last reward."
+- **Overlap (lead):**
+  - Since 1.2, stamps already roll onto card 2 automatically: stamp 16 starts card 2, even if the stamp-15 reward wasn't taken.
+  - Rewards of earlier cards stay available.
+  - There is no card history screen and no completion date.
+- **Owner decisions (2026-11-10):**
+  - The next card is issued only once the customer takes the card's **last reward**.
+  - Stamps earned while the full card waits are **saved** and land on the new card as soon as it's issued. Nobody loses a stamp.
+  - A finished card shows **both dates**: when it was filled (15th stamp) and when the last reward was taken.
+  - Old cards are visible **everywhere**: the QR page, the counter Customers tab and the Back Office.

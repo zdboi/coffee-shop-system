@@ -26,6 +26,11 @@ Owner go-ahead: 2026-11-10 11:06 ("I already did the merging. we can proceed wit
 | B15 | **Partial and multiple production.** The Produce form gets ½×, 1×, 2× buttons and a custom size, plus **"Max I can make"**, which fills in the biggest batch current stock allows and names the ingredient that limits it. **Production from TCO:** a batch can be marked "Made by TCO". It adds the product to stock without taking our ingredients. What we owe is chosen per batch: the same ingredients back (worked out from the recipe at that batch size) or a peso amount (valued at our ingredient costs). A **"To return to TCO"** list shows open debts. Returning ingredients records them as stock leaving (new type) and clears the debt, fully or partly. Paying pesos clears a peso debt. **Money rule (lead):** the TCO batch's cost is the value of what we owe, so its cost per unit flows into recipe costs and Net income only when the product is used. Returning ingredients or paying the pesos is settling that debt, so it is never counted again as ingredients used, waste or an expense. TCO is a supplier flagged "partner branch", not a second shop. | Owner. |
 | QA fix | Counter dates stock lines and "Today · all counters" by Manila time, not the device's clock zone (`todayISO` → shop day). | Lead. |
 
+### Part B2: loyalty
+| Item | What | Decided |
+|---|---|---|
+| B16 | **Next stamp card only after the last reward is taken**; stamps earned meanwhile are saved and land on the new card. **Card history** with the date filled and the date the last reward was taken, on the QR page, the counter Customers tab and the Back Office. | Owner, 2026-11-10 15:2x. |
+
 ### Part C: QR page & menu
 | Item | What | Decided |
 |---|---|---|
