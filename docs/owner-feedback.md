@@ -199,3 +199,17 @@ Owner: **don't start 1.3 until I say so.**
 
 ## Team fix queued for Wave 3 (QA, 2026-11-10)
 - Counter dates stock lines and the "Today · all counters" view by the device's own clock day, not by Manila time. There's no effect while the tablet is set to Philippine time. Fix: use the shop time zone (front-office-dev, with core-sync-engineer for `todayISO`).
+
+## Wave 3 decisions (owner, 2026-11-10 11:2x)
+- **Takeaway / Counter QR:** exempt from the 4-tickets and 1-guest-per-table limits. The per-person and per-shop limits still apply.
+- **Account switch:** cancels **only orders still waiting**. Orders already being made or ready stay, and are paid at the counter.
+- **Lead defaults accepted:**
+  - signing in on a new phone signs the old phone out;
+  - no undo for a TCO batch with a debt;
+  - counts and TCO debts aren't restored by backup import.
+- **Accounts move (owner question, 11:20):** the owner wants the app under the business email (cavitecitycoffeeclub@gmail.com) on Supabase and GitHub, and a more professional link. Plan given:
+  - transfer the Supabase project to a business organization;
+  - move the GitHub repository to a business account/organization, or use their own domain;
+  - leave a forwarding page at the old address;
+  - re-pair the counters.
+  - Not started; waiting for the owner to choose the address.
