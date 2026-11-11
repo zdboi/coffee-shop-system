@@ -126,6 +126,7 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 
 ### B8/B9 reports
 - **`waste_report(p_from, p_to)`**: as 1.4, plus
+  - **B17** every entry adds `entry_table` (`waste_logs` | `waste`), `editable` (false only for "Missing at count"), `edited` (boolean: show "Edited"), `edited_at`, `edited_by_name`, `edit_note`. Deleted entries are no longer listed;
   - `source`: `COUNTER` (uploaded by a counter, incl. `COUNT_SHORTAGE`) / `OFFICE` (waste table **and** R&D);
   - `entries[]` add `project_id`, `project_name`, `stock_count_id`;
   - `by_project: [{project_id, name, status, entries, cost}]` (R&D only).
@@ -157,7 +158,7 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 
 **`shift_close` change:** refused with **`COUNT_REQUIRED`** when ticked items exist and the shift has **no count that has a line for every ticked item** (L4: a count of only some items doesn't count; if the owner ticks another item during the shift, a new full count is needed). Otherwise unchanged.
 
-**Counter `waste` op change (M1):** an id already used by a stock count → `FORBIDDEN_ROW`. Otherwise unchanged (010). ⚠ Old 1.4 counters can't send counts: the owner must not tick items until the 1.5 counter is live.
+**Counter `waste` op change (M1, B17):** an id already used by a stock count, by a Back Office waste row, or as the reference of any stock line → `FORBIDDEN_ROW` (the same entry sent again is still `skipped`). The database also notes which stock lines the entry made. Otherwise unchanged (010). ⚠ Old 1.4 counters can't send counts: the owner must not tick items until the 1.5 counter is live.
 
 **Blind count:** a UI rule. Counters can technically still read stock (`fo_bootstrap.stock`, `v_ingredient_stock`, needed for "can make"); the count screen must not show it.
 
@@ -175,6 +176,49 @@ Everything else new is a new column or a new table. **core (logic.js):** `TXN_SI
 - Back Office "Needs review": `stock_counts` where `needs_review`.
 
 New counter error codes: `COUNT_REQUIRED` "Count the ticked items before closing the shift", `BAD_COUNT`, `CARD_NOT_ISSUED` (B16, sale upload).
+
+### B17. Edit the waste report (owner only)
+Owner decisions 2026-11-11: the owner can change a waste entry's amount, reason, note and date, or delete it; a short note is always needed; the audit log keeps old and new values; the entry shows "Edited". Both functions: Back Office owner login only (`NOT_ALLOWED` for counters / staff logins, `NOT_A_MEMBER` without a shop); another shop's entry → `WASTE_NOT_FOUND`. Errors are **raised**.
+
+Two kinds of entries (tell them apart by `entries[].entry_table` from `waste_report`; the functions find the right one from the id):
+| `entry_table` | What | Items |
+|---|---|---|
+| `waste_logs` | counter "Log waste" entries (`source: COUNTER`) and R&D usage (`reason: RND`, `source: OFFICE`) | 1…30 items: a menu item with options, or an ingredient |
+| `waste` | Back Office "Record waste" rows (`source: OFFICE`) | exactly one ingredient |
+
+**`revise_waste(p jsonb)`** → `{id, source, entry_table, reason, waste_date, note, total_cost, changed: [...], edited_at}`
+```
+p = { id,                         // the entry's id
+      edit_note,                  // WHY (1..200 chars). Always needed -> NOTE_REQUIRED
+      // send ONLY what changes:
+      reason, note,               // note = the entry's own note ("" clears it)
+      waste_date,                 // 'YYYY-MM-DD'
+      items,                      // the FULL new list (replaces the old one)
+      project_id }                // R&D entries only: move to another ACTIVE project
+```
+- `changed` lists what really changed (`reason`, `note`, `waste_date`, `items`, `project_id`). Nothing different → **`NO_CHANGE`** (no audit entry, no "Edited" mark).
+- **Items** (`waste_logs`): `[{ingredient_id, quantity, unit} | {recipe_id, quantity (≤ 100), modifiers:[{group_id, option_id}]}]`, the same shape as the counter's waste upload. **The server works out the stock lines and the cost itself** (recipe + option extras / swaps, unit conversion, costs as of the entry's date); anything else the app sends (`stock_lines`, `cost`, `total_cost`) is ignored. Quantities must be above 0 (`BAD_QUANTITY`); unit must convert (`BAD_UNIT`).
+- **Items** (`waste` rows): exactly one `{quantity, unit}` (optionally `ingredient_id`, which must be the row's own ingredient: it can't be swapped → `BAD_WASTE`). `quantity` is **as typed in `unit`**; it is saved in the stock unit, as "Record waste" does today.
+- **Reason:**
+  - `waste_logs`: `CALIBRATION`, `SPILLAGE`, `COMPLIMENTARY`, `EXPIRED`, `OTHER` only → else `BAD_WASTE_REASON`. `OTHER` needs the entry's own note → `ENTRY_NOTE_REQUIRED`.
+  - An **R&D** entry stays R&D, and no entry can be turned into R&D (`BAD_WASTE_REASON`): delete it and use "Log R&D usage" instead. `COUNT_SHORTAGE` is never a choice.
+  - `COMPLIMENTARY` **keeps its approval record** (`approved_by`, `approved_by_name`) through any edit. An entry *changed to* `COMPLIMENTARY` is recorded as approved by the owner.
+  - `waste` rows: free text, 1…60 characters, not `RND` / `COUNT_SHORTAGE`.
+- **Date:** not in the future, not more than 400 days back → `BAD_DATE`. A changed date re-dates the entry's stock lines and re-costs it as of that day (same stock amounts). Review flags follow the upload rules: `OLD_DATE` when the new date is more than 7 days before the day the entry was received, `BEFORE_START_FRESH` when before the last Start fresh; `STAFF_MISMATCH` and the like stay.
+- **"Missing at count"** (`reason COUNT_SHORTAGE`, `editable:false`): refused with **`USE_COUNT_REVISION`** ("Change this by revising its stock count") → use `revise_stock_count`.
+- **Stock:** only the stock lines the entry itself made are replaced (never "every line with this reference"). Stock, `waste_report`, `net_income_report` and the R&D cost per project follow at once.
+- **Old Back Office rows without a stock line the system can find** (e.g. imported): reason and note can be changed; amount / date → **`WASTE_NOT_LINKED`** ("This old entry isn't linked to stock. Delete it and record it again, or adjust stock").
+- **Edited mark:** `edited_at`, `edited_by_name`, `edit_note` on the row (latest edit); `waste_report` returns them + `edited`.
+- **Audit:** one entry, action **"Waste edited"**, `reference_id` = the entry id, details e.g. `Waste of 2026-11-11 (Spillage by Cathy) | amount: Espresso beans 10 g -> Espresso beans 0.025 kg; cost: 10.00 -> 25.00 | Note: it was the whole scoop`.
+- Errors: `NOT_A_MEMBER`, `NOT_ALLOWED`, `WASTE_NOT_FOUND`, `NOTE_REQUIRED`, `BAD_WASTE` (bad shape, note too long, project on a non-R&D entry, other ingredient on a `waste` row), `USE_COUNT_REVISION`, `BAD_WASTE_REASON`, `ENTRY_NOTE_REQUIRED`, `BAD_DATE`, `UNKNOWN_PROJECT`, `PROJECT_CLOSED`, `NO_CHANGE`, `WASTE_NOT_LINKED`, `BAD_QUANTITY`, `BAD_UNIT`, `UNKNOWN_RECIPE`, `UNKNOWN_INGREDIENT`.
+
+**`delete_waste(p_id uuid, p_note text)`** → `{deleted:true, id, entry_table, stock_restored, cost}`
+- `p_note` (1…200) always needed → `NOTE_REQUIRED`. Works for counter entries, R&D entries (same effect as `delete_rnd_usage`, plus the note) and `waste` rows. "Missing at count" → `USE_COUNT_REVISION`.
+- The entry, its items and **its own** stock lines are removed, so the stock comes back. `stock_restored:false` only for an old row with no stock line the system can find (stock is then left as it is; say so).
+- **Audit:** one entry, action **"Waste deleted"**, saying what the entry was (date, reason, items, cost, its note) + the note.
+- Errors: `NOT_A_MEMBER`, `NOT_ALLOWED`, `WASTE_NOT_FOUND`, `NOTE_REQUIRED`, `BAD_WASTE` (note over 200), `USE_COUNT_REVISION`.
+
+**What the Back Office must do:** Waste report rows get "Edit" and "Delete" (hidden when `editable` is false; for those, link to the stock count). Edit form: reason, note, date, amounts (for `waste_logs` the item list; for `waste` one amount + unit) and a required "Why?" box → `revise_waste` with only the changed things. Delete asks "Why?" → `delete_waste`. Show "Edited" (+ who / when / why) when `edited`. Never write `waste`, `waste_logs`, `waste_log_items` or their stock lines through `apply_changes` to edit an entry (new "Record waste" rows are still saved as today). The live `audit_log` has no allowed-words rule on `action`, so the two new action names are safe.
 
 ### B15. Production: batch size, partner branch (TCO)
 **Columns:**
@@ -222,11 +266,12 @@ INGREDIENTS rows: one per ingredient still owed, amounts in stock units. PESOS r
 ---
 ## Rights (summary)
 - New QR functions `qr_set_username`, `qr_switch_account`: **authenticated only** (a QR customer is always anonymously signed in). Re-made QR functions keep their 004 rights (anon + authenticated).
-- New owner functions (`log_rnd_usage`, `delete_rnd_usage`, `revise_stock_count`, `partner_batch_preview`, `produce_partner_batch`, `partner_return`, `partner_pay`, `bo_customer_loyalty`): authenticated, owner checked inside.
+- New owner functions (`log_rnd_usage`, `delete_rnd_usage`, `revise_stock_count`, `partner_batch_preview`, `produce_partner_batch`, `partner_return`, `partner_pay`, `bo_customer_loyalty`, `revise_waste`, `delete_waste`): authenticated, owner checked inside.
 - New tables: RLS on; `anon` nothing; counters read none of them; no API writes except `rnd_projects` (owner). `apply_changes` adds only `rnd_projects`.
 - Internal tables with **no API access at all** (not even the owner): `stock_line_owners` (M1), `qr_signout_notices` (L3).
+- B17: new internal helper `_adopt_waste_lines` (no API access). At install, 012 notes in `stock_line_owners` the stock lines of the waste entries that already exist (counter entries and "Record waste" rows, matched by the entry id on a WASTE stock line), so they can be edited / deleted safely; new counter uploads are noted as they arrive, "Record waste" rows when first edited. New columns `edited_at`, `edited_by_name`, `edit_note` on `waste_logs` and `waste`.
 - New internal helpers (no API access): `_username_letters`, `_username_key`, `_username_reserved`, `_relink_subject`, `_stock_ref_taken`. `delete_customer_data` re-made with its 004 rights (owner checked inside).
-- QA's F10 allow-list (suite 33) must add: `qr_set_username, qr_switch_account, log_rnd_usage, delete_rnd_usage, revise_stock_count, partner_batch_preview, produce_partner_batch, partner_return, partner_pay, bo_customer_loyalty`.
+- QA's F10 allow-list (suite 33) must add: `qr_set_username, qr_switch_account, log_rnd_usage, delete_rnd_usage, revise_stock_count, partner_batch_preview, produce_partner_batch, partner_return, partner_pay, bo_customer_loyalty, revise_waste, delete_waste`.
 - Re-made internal (no API access, as 008): `_loyalty_summary`, `_loyalty_reward_amount`; new internal: `_loyalty_last_stamp`, `_loyalty_current_card`, `_customer_stamp_times`.
 
 ## Decisions (owner, 2026-11-10)
@@ -236,6 +281,7 @@ INGREDIENTS rows: one per ingredient still owed, amounts in stock units. PESOS r
 - **D4** No undo for a partner batch with a debt (`PARTNER_BATCH_HAS_DEBT`; settle it with returns / payments).
 - **D5** Stock counts and partner debts can't be restored by a backup import (they are written only by their own functions, never by `apply_changes`).
 - **D6 (B16)** Next stamp card only after the last reward is used; stamps meanwhile saved; card history with both dates (A6).
+- **D7 (B17, 2026-11-11)** The owner can edit / delete waste entries with a required note, an audit entry with old and new values, and an "Edited" mark; "Missing at count" only through its stock count (B17).
 
 ## Security gate fixes (2026-11-10, lead decisions)
 - **M1** Ids can't be shared between a count, a waste / R&D entry and other stock lines; counts and R&D remove only the stock lines they made (B8, B9).

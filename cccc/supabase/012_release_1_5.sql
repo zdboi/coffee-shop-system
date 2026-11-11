@@ -1385,14 +1385,20 @@ end $$;
 -- effect, never "every line with this reference" (a reference id can be
 -- reused by other records, e.g. a counter upload). Filled and read only by
 -- the functions; nobody reads or writes it through the API.
---   owner_kind  RND (an R&D usage entry, owner_id = its waste_logs id) or
---               COUNT (a stock count, owner_id = stock_counts id)
+--   owner_kind  RND (an R&D usage entry, owner_id = its waste_logs id),
+--               COUNT (a stock count, owner_id = stock_counts id),
+--               WASTE (a counter waste entry, owner_id = its waste_logs id) or
+--               OFFICE (a Back Office "Record waste" row, owner_id = waste id)
+--               (the last two: B17, so the owner can edit / delete waste)
 create table if not exists public.stock_line_owners (
   txn_id uuid primary key references public.inventory_transactions(id) on delete cascade,
   business_id uuid not null references public.businesses(id) on delete cascade,
-  owner_kind text not null check (owner_kind in ('RND','COUNT')),
+  owner_kind text not null,
   owner_id uuid not null
 );
+alter table public.stock_line_owners drop constraint if exists stock_line_owners_owner_kind_check;
+alter table public.stock_line_owners add constraint stock_line_owners_owner_kind_check
+  check (owner_kind in ('RND','COUNT','WASTE','OFFICE'));
 create index if not exists stock_line_owners_owner_idx on public.stock_line_owners(owner_kind, owner_id);
 alter table public.stock_line_owners enable row level security;
 revoke all on public.stock_line_owners from public, anon, authenticated;
@@ -1608,12 +1614,14 @@ begin
 end $$;
 
 -- Is this id already used by another record that has (or could have) stock
--- lines? (a waste entry, a stock count, or the reference of any stock line).
+-- lines? (a waste entry, a Back Office waste row, a stock count, or the
+-- reference of any stock line).
 -- Used so a new count / R&D entry / counter waste can never share an id with
 -- another record (M1).
 create or replace function public._stock_ref_taken(p_id uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from public.waste_logs where id = p_id)
+      or exists (select 1 from public.waste where id = p_id)
       or exists (select 1 from public.stock_counts where id = p_id)
       or exists (select 1 from public.inventory_transactions where reference_id = p_id::text)
 $$;
@@ -1802,9 +1810,22 @@ begin
     end if;
     return public._fo_apply(p_biz, p_dev, p_type, p_d);
   elsif p_type = 'waste' then
-    -- a counter waste may not reuse a stock count's id (M1)
-    if exists (select 1 from public.stock_counts where id = public._to_uuid(p_d->>'id')) then raise exception 'FORBIDDEN_ROW'; end if;
-    return public._fo_apply(p_biz, p_dev, p_type, p_d);
+    v_cid := public._to_uuid(p_d->>'id');
+    -- a counter waste may not reuse a stock count's id (M1) ...
+    if exists (select 1 from public.stock_counts where id = v_cid) then raise exception 'FORBIDDEN_ROW'; end if;
+    -- ... nor (B17) the id of a Back Office waste row, nor an id that stock
+    -- lines already carry as their reference. (The same entry sent again is
+    -- fine: it is skipped by _fo_apply, as before.)
+    if v_cid is not null and not exists (select 1 from public.waste_logs where id = v_cid)
+       and (exists (select 1 from public.waste where id = v_cid)
+            or exists (select 1 from public.inventory_transactions where reference_id = v_cid::text)) then
+      raise exception 'FORBIDDEN_ROW';
+    end if;
+    v_reason := public._fo_apply(p_biz, p_dev, p_type, p_d);
+    -- B17: note which stock lines this entry made (so an edit / delete by the
+    -- owner later removes exactly those)
+    if v_reason = 'ok' and v_cid is not null then perform public._adopt_waste_lines(p_biz, v_cid, 'WASTE'); end if;
+    return v_reason;
   elsif p_type is distinct from 'stock_count' then
     return public._fo_apply(p_biz, p_dev, p_type, p_d);
   end if;
@@ -2353,6 +2374,394 @@ left join public.ingredients pi on pi.id = b.produced_ingredient_id
 where d.status = 'OPEN' and d.kind = 'PESOS';
 
 -- =============================================================================
+-- PART B5b. B17 EDIT THE WASTE REPORT (owner only)
+-- =============================================================================
+-- Owner decisions 2026-11-11: the owner (Back Office login) can change a waste
+-- entry's amount, reason, note and date, or delete it. Every edit / delete
+-- needs a short note, is written to the audit log with the old and new
+-- values, and the entry shows an "Edited" mark.
+-- Two kinds of waste entries exist (both are in the Waste report):
+--   * waste_logs (+ waste_log_items): counter "Log waste" entries and R&D usage
+--   * waste: the Back Office "Record waste" rows (one ingredient each)
+-- "Missing at count" entries (COUNT_SHORTAGE) are NOT edited here: they are
+-- changed by revising their stock count (revise_stock_count).
+
+-- The "Edited" mark (empty = never edited).
+alter table public.waste_logs add column if not exists edited_at timestamptz;
+alter table public.waste_logs add column if not exists edited_by_name text;
+alter table public.waste_logs add column if not exists edit_note text;
+alter table public.waste add column if not exists edited_at timestamptz;
+alter table public.waste add column if not exists edited_by_name text;
+alter table public.waste add column if not exists edit_note text;
+
+-- Notes, in stock_line_owners, the WASTE stock lines that belong to one waste
+-- entry: the lines whose reference is the entry's id and that no other record
+-- owns yet. (New ids can't clash any more: see _stock_ref_taken and the
+-- counter's waste upload.) An entry whose lines are noted already gets
+-- nothing more (a line added later with the same reference is not its own).
+-- Returns how many lines were newly noted.
+--   p_kind: WASTE (counter entry), OFFICE (Back Office row), RND (R&D entry)
+create or replace function public._adopt_waste_lines(p_biz uuid, p_id uuid, p_kind text) returns integer
+language plpgsql volatile security definer set search_path = public as $$
+declare n integer;
+begin
+  if exists (select 1 from public.stock_line_owners o where o.owner_kind = p_kind and o.owner_id = p_id) then return 0; end if;
+  insert into public.stock_line_owners(txn_id, business_id, owner_kind, owner_id)
+    select t.id, p_biz, p_kind, p_id from public.inventory_transactions t
+    where t.business_id = p_biz and t.reference_id = p_id::text and t.transaction_type = 'WASTE'
+      and not exists (select 1 from public.stock_line_owners o where o.txn_id = t.id)
+    on conflict do nothing;
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+-- One-time: note the stock lines of the waste entries that exist already.
+-- (Running the script again changes nothing: they are all noted by then.)
+insert into public.stock_line_owners(txn_id, business_id, owner_kind, owner_id)
+  select t.id, t.business_id, 'WASTE', l.id
+  from public.waste_logs l
+  join public.inventory_transactions t on t.business_id = l.business_id and t.reference_id = l.id::text and t.transaction_type = 'WASTE'
+  where l.reason not in ('RND', 'COUNT_SHORTAGE') and l.stock_count_id is null
+    and not exists (select 1 from public.stock_line_owners o where o.txn_id = t.id)
+  on conflict do nothing;
+insert into public.stock_line_owners(txn_id, business_id, owner_kind, owner_id)
+  select t.id, t.business_id, 'OFFICE', w.id
+  from public.waste w
+  join public.inventory_transactions t on t.business_id = w.business_id and t.reference_id = w.id::text and t.transaction_type = 'WASTE'
+  where not exists (select 1 from public.stock_line_owners o where o.txn_id = t.id)
+  on conflict do nothing;
+
+-- Back Office: change a waste entry.
+--   p = {id, edit_note (why: 1..200 characters, always needed),
+--        and ONLY the things to change:
+--        reason, note (the entry's own note; "" clears it), waste_date,
+--        items (the full new list, see below), project_id (R&D entries only)}
+-- waste_logs entries (counter + R&D):
+--   reason   CALIBRATION / SPILLAGE / COMPLIMENTARY / EXPIRED / OTHER. An R&D
+--            entry stays R&D and nothing can be turned into R&D (log R&D usage
+--            instead); COUNT_SHORTAGE is never a choice. OTHER needs the
+--            entry's own note. COMPLIMENTARY keeps its approval record; an
+--            entry CHANGED to COMPLIMENTARY is recorded as approved by the owner.
+--   items    1..30 of {ingredient_id, quantity, unit} | {recipe_id, quantity,
+--            modifiers}, exactly like the counter's waste upload. The server
+--            works out the stock and the cost itself (recipe + option extras,
+--            units, costs as of the entry's date).
+--   date     not in the future, not more than 400 days back. A changed date
+--            re-dates the stock lines and re-costs the entry as of that day;
+--            the date flags follow the same rules as an upload (OLD_DATE when
+--            more than 7 days before the day it was received,
+--            BEFORE_START_FRESH); other flags stay.
+-- waste rows (Back Office "Record waste"):
+--   reason   free text (1..60), not COUNT_SHORTAGE / RND
+--   items    exactly one {quantity, unit} for the row's own ingredient
+--            (quantity as typed in unit; saved in the stock unit, as today)
+--   An old row whose stock line can't be found (e.g. imported) can have its
+--   reason and note changed, but not its amount or date: WASTE_NOT_LINKED.
+-- Only the stock lines the entry itself made are replaced (stock_line_owners).
+-- One audit entry "Waste edited" with old -> new values and the note.
+-- Returns {id, source, entry_table, reason, waste_date, note, total_cost,
+--          changed: [...], edited_at}.
+-- Errors: NOT_A_MEMBER, NOT_ALLOWED, BAD_WASTE, WASTE_NOT_FOUND, NOTE_REQUIRED
+--   (no edit_note), USE_COUNT_REVISION, BAD_WASTE_REASON, ENTRY_NOTE_REQUIRED,
+--   BAD_DATE, UNKNOWN_PROJECT, PROJECT_CLOSED, NO_CHANGE, WASTE_NOT_LINKED,
+--   + the item errors (BAD_QUANTITY, BAD_UNIT, UNKNOWN_RECIPE, UNKNOWN_INGREDIENT).
+create or replace function public.revise_waste(p jsonb) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  v_biz uuid := public._require_owner(); v_id uuid; v_note text; v_me public.staff; v_today date;
+  w public.waste_logs%rowtype; o public.waste%rowtype; v_is_log boolean;
+  v_reason text; v_entry_note text; v_day date; v_changes text[] := '{}'; v_changed text[] := '{}';
+  v_kind text; v_item jsonb; v_new jsonb := '[]'::jsonb; v_w jsonb; l jsonb; i record;
+  v_total numeric := 0; v_txn uuid; v_old_sig jsonb; v_new_sig jsonb; v_old_txt text; v_new_txt text;
+  v_remake boolean := false; v_items_changed boolean := false; v_flags text[]; v_fresh timestamptz;
+  v_pr public.rnd_projects%rowtype; v_project uuid; v_line_note text;
+  v_ing public.ingredients%rowtype; v_q numeric; v_typed numeric; v_unit text; v_lines jsonb; v_cost numeric;
+begin
+  if jsonb_typeof(p) is distinct from 'object' then raise exception 'BAD_WASTE'; end if;
+  v_id := public._to_uuid(p->>'id');
+  select * into w from public.waste_logs where id = v_id and business_id = v_biz for update;
+  v_is_log := found;
+  if not v_is_log then
+    select * into o from public.waste where id = v_id and business_id = v_biz for update;
+    if not found then raise exception 'WASTE_NOT_FOUND'; end if;
+  end if;
+  v_note := nullif(btrim(coalesce(p->>'edit_note', '')), '');
+  if v_note is null then raise exception 'NOTE_REQUIRED'; end if;
+  if length(v_note) > 200 then raise exception 'BAD_WASTE'; end if;
+  v_me := public._owner_staff(v_biz);
+  v_today := public._shop_day(v_biz, now());
+  if p ? 'waste_date' then
+    begin v_day := (p->>'waste_date')::date; exception when others then raise exception 'BAD_DATE'; end;
+    if v_day is null or v_day > v_today or v_day < v_today - 400 then raise exception 'BAD_DATE'; end if;
+  end if;
+
+  if v_is_log then
+    -- ---------------- a waste_logs entry (counter or R&D) ----------------
+    if w.reason = 'COUNT_SHORTAGE' or w.stock_count_id is not null then raise exception 'USE_COUNT_REVISION'; end if;
+    v_kind := case when w.reason = 'RND' then 'RND' else 'WASTE' end;
+    v_reason := w.reason;
+    if p ? 'reason' and upper(btrim(coalesce(p->>'reason', ''))) is distinct from w.reason then
+      v_reason := upper(btrim(coalesce(p->>'reason', '')));
+      if w.reason = 'RND' or v_reason not in ('CALIBRATION', 'SPILLAGE', 'COMPLIMENTARY', 'EXPIRED', 'OTHER') then
+        raise exception 'BAD_WASTE_REASON';
+      end if;
+      v_changes := v_changes || format('reason: %s -> %s', w.reason, v_reason); v_changed := v_changed || 'reason'::text;
+    end if;
+    v_entry_note := w.note;
+    if p ? 'note' then
+      if length(coalesce(p->>'note', '')) > 200 then raise exception 'BAD_WASTE'; end if;
+      v_entry_note := nullif(btrim(coalesce(p->>'note', '')), '');
+      if v_entry_note is distinct from w.note then
+        v_changes := v_changes || format('note: "%s" -> "%s"', coalesce(w.note, ''), coalesce(v_entry_note, '')); v_changed := v_changed || 'note'::text;
+      end if;
+    end if;
+    if v_reason = 'OTHER' and v_entry_note is null then raise exception 'ENTRY_NOTE_REQUIRED'; end if;
+    v_project := w.rnd_project_id;
+    if p ? 'project_id' and public._to_uuid(p->>'project_id') is distinct from w.rnd_project_id then
+      if w.reason <> 'RND' then raise exception 'BAD_WASTE'; end if;
+      select * into v_pr from public.rnd_projects where id = public._to_uuid(p->>'project_id') and business_id = v_biz;
+      if not found then raise exception 'UNKNOWN_PROJECT'; end if;
+      if v_pr.status <> 'ACTIVE' then raise exception 'PROJECT_CLOSED'; end if;
+      v_project := v_pr.id;
+      v_changes := v_changes || format('project: %s -> %s', (select name from public.rnd_projects where id = w.rnd_project_id), v_pr.name);
+      v_changed := v_changed || 'project_id'::text;
+    end if;
+    v_day := coalesce(v_day, w.waste_date);
+    if v_day <> w.waste_date then
+      v_changes := v_changes || format('date: %s -> %s', w.waste_date, v_day); v_changed := v_changed || 'waste_date'::text;
+      v_remake := true;
+    end if;
+    -- the items as they are now (for comparing, and for the audit text)
+    select coalesce(jsonb_agg(jsonb_build_object('recipe_id', x.recipe_id, 'ingredient_id', x.ingredient_id, 'quantity', x.quantity,
+                                                 'unit', x.unit, 'modifiers', x.modifiers) order by x.name, x.quantity, x.id), '[]'::jsonb),
+           string_agg(x.name || ' ' || trim(to_char(x.quantity, 'FM999999990.999999'), '.') || coalesce(' ' || x.unit, ''), ', ' order by x.name, x.quantity, x.id)
+      into v_old_sig, v_old_txt from public.waste_log_items x where x.waste_log_id = w.id;
+    if p ? 'items' then
+      if jsonb_typeof(p->'items') is distinct from 'array' or jsonb_array_length(p->'items') not between 1 and 30 then
+        raise exception 'BAD_WASTE';
+      end if;
+      for v_item in select value from jsonb_array_elements(p->'items') loop
+        v_new := v_new || jsonb_build_array(public._waste_item(v_biz, v_item, v_day));     -- the server's stock + cost
+      end loop;
+      select coalesce(jsonb_agg(jsonb_build_object('recipe_id', x->'recipe_id', 'ingredient_id', x->'ingredient_id', 'quantity', (x->>'quantity')::numeric,
+                                                   'unit', x->'unit', 'modifiers', x->'modifiers')
+                                order by x->>'name', (x->>'quantity')::numeric), '[]'::jsonb),
+             string_agg((x->>'name') || ' ' || trim(to_char((x->>'quantity')::numeric, 'FM999999990.999999'), '.') || coalesce(' ' || (x->>'unit'), ''), ', '
+                        order by x->>'name', (x->>'quantity')::numeric)
+        into v_new_sig, v_new_txt from jsonb_array_elements(v_new) x;
+      if v_new_sig is distinct from v_old_sig then          -- (same items, amounts, units and options = no change)
+        v_items_changed := true; v_remake := true;
+        v_changes := v_changes || format('amount: %s -> %s', coalesce(v_old_txt, '(nothing)'), v_new_txt); v_changed := v_changed || 'items'::text;
+      end if;
+    end if;
+    if cardinality(v_changes) = 0 then raise exception 'NO_CHANGE'; end if;
+
+    v_line_note := case when v_kind = 'RND' then left('R&D: ' || coalesce((select name from public.rnd_projects where id = v_project), ''), 200)
+                        else 'Counter waste: ' || initcap(v_reason) end;
+    perform public._adopt_waste_lines(v_biz, w.id, v_kind);
+    if v_remake then
+      -- take back ONLY this entry's own stock lines, then make them again
+      delete from public.inventory_transactions t using public.stock_line_owners so
+        where so.txn_id = t.id and so.owner_kind = v_kind and so.owner_id = w.id and t.business_id = v_biz;
+      if v_items_changed then
+        delete from public.waste_log_items where waste_log_id = w.id;
+        for v_w in select value from jsonb_array_elements(v_new) loop
+          insert into public.waste_log_items(business_id, waste_log_id, recipe_id, ingredient_id, name, quantity, unit, modifiers, stock_lines, cost)
+            values (v_biz, w.id, public._to_uuid(v_w->>'recipe_id'), public._to_uuid(v_w->>'ingredient_id'), v_w->>'name',
+                    (v_w->>'quantity')::numeric, v_w->>'unit', v_w->'modifiers', v_w->'stock_lines', (v_w->>'cost')::numeric);
+        end loop;
+      else
+        -- only the date changed: same stock amounts (as the server worked them
+        -- out when the entry was saved), costed as of the new day
+        for i in select x.id, x.stock_lines from public.waste_log_items x where x.waste_log_id = w.id loop
+          v_lines := public._clean_stock_lines(v_biz, i.stock_lines);
+          v_cost := coalesce((select sum(public._to_num(sl->>'quantity') * public._ingredient_unit_cost(v_biz, public._to_uuid(sl->>'ingredient_id'), v_day))
+                              from jsonb_array_elements(v_lines) sl), 0);
+          update public.waste_log_items set stock_lines = v_lines, cost = round(v_cost, 4) where id = i.id;
+        end loop;
+      end if;
+      for i in select x.stock_lines, x.cost from public.waste_log_items x where x.waste_log_id = w.id loop
+        for l in select value from jsonb_array_elements(i.stock_lines) loop
+          insert into public.inventory_transactions(business_id, ingredient_id, transaction_type, quantity, reference_id, transaction_date, notes)
+            values (v_biz, public._to_uuid(l->>'ingredient_id'), 'WASTE', abs(public._to_num(l->>'quantity')), w.id::text, v_day, v_line_note)
+            returning id into v_txn;
+          insert into public.stock_line_owners(txn_id, business_id, owner_kind, owner_id) values (v_txn, v_biz, v_kind, w.id);
+        end loop;
+        v_total := v_total + i.cost;
+      end loop;
+      if round(v_total, 2) <> w.total_cost then
+        v_changes := v_changes || format('cost: %s -> %s', w.total_cost, round(v_total, 2));
+      end if;
+    else
+      v_total := w.total_cost;
+      update public.inventory_transactions t set notes = v_line_note from public.stock_line_owners so
+        where so.txn_id = t.id and so.owner_kind = v_kind and so.owner_id = w.id and t.business_id = v_biz
+          and t.notes is distinct from v_line_note;
+    end if;
+    -- date flags, by the upload's rules; other flags stay
+    if v_day <> w.waste_date then
+      v_flags := array(select f from unnest(string_to_array(coalesce(w.review_reason, ''), ', ')) f
+                       where f <> '' and f not in ('FUTURE_DATE', 'OLD_DATE', 'BEFORE_START_FRESH'));
+      if v_day < public._shop_day(v_biz, w.received_at) - 7 then v_flags := v_flags || 'OLD_DATE'::text; end if;
+      v_fresh := public._fresh_start_before(v_biz);
+      if v_fresh is not null and v_day < public._shop_day(v_biz, v_fresh) then v_flags := v_flags || 'BEFORE_START_FRESH'::text; end if;
+    end if;
+    update public.waste_logs set
+        reason = v_reason, note = v_entry_note, waste_date = v_day, rnd_project_id = v_project, total_cost = round(v_total, 2),
+        approved_by = case when v_reason = 'COMPLIMENTARY' and approved_by is null then v_me.id else approved_by end,
+        approved_by_name = case when v_reason = 'COMPLIMENTARY' and approved_by is null and approved_by_name is null then coalesce(v_me.name, 'Owner') else approved_by_name end,
+        needs_review = case when v_day <> w.waste_date then cardinality(v_flags) > 0 else needs_review end,
+        review_reason = case when v_day <> w.waste_date then nullif(array_to_string(v_flags, ', '), '') else review_reason end,
+        edited_at = now(), edited_by_name = coalesce(v_me.name, 'Owner'), edit_note = v_note
+      where id = w.id;
+    insert into public.audit_log(business_id, action, actor_id, actor_name, details, reference_id, at)
+      values (v_biz, 'Waste edited', v_me.id, coalesce(v_me.name, 'Owner'),
+              left(concat_ws(' | ', format('Waste of %s (%s%s)', w.waste_date, initcap(replace(w.reason, '_', ' ')), coalesce(' by ' || w.staff_name, '')),
+                             array_to_string(v_changes, '; '), 'Note: ' || v_note), 2000),
+              w.id::text, now());
+    return jsonb_build_object('id', w.id, 'source', case when w.device_id is null then 'OFFICE' else 'COUNTER' end, 'entry_table', 'waste_logs',
+                              'reason', v_reason, 'waste_date', v_day, 'note', v_entry_note, 'total_cost', round(v_total, 2),
+                              'changed', to_jsonb(v_changed), 'edited_at', now());
+  end if;
+
+  -- ---------------- a Back Office "Record waste" row ----------------
+  v_reason := o.reason;
+  if p ? 'reason' and btrim(coalesce(p->>'reason', '')) is distinct from coalesce(o.reason, '') then
+    v_reason := btrim(coalesce(p->>'reason', ''));
+    if v_reason = '' or length(v_reason) > 60 or upper(v_reason) in ('COUNT_SHORTAGE', 'RND') then raise exception 'BAD_WASTE_REASON'; end if;
+    v_changes := v_changes || format('reason: %s -> %s', coalesce(o.reason, ''), v_reason); v_changed := v_changed || 'reason'::text;
+  end if;
+  v_entry_note := o.notes;
+  if p ? 'note' then
+    if length(coalesce(p->>'note', '')) > 500 then raise exception 'BAD_WASTE'; end if;
+    v_entry_note := btrim(coalesce(p->>'note', ''));
+    if v_entry_note is distinct from coalesce(o.notes, '') then
+      v_changes := v_changes || format('note: "%s" -> "%s"', coalesce(o.notes, ''), v_entry_note); v_changed := v_changed || 'note'::text;
+    else
+      v_entry_note := o.notes;
+    end if;
+  end if;
+  v_day := coalesce(v_day, o.date);
+  if v_day is distinct from o.date then
+    v_changes := v_changes || format('date: %s -> %s', o.date, v_day); v_changed := v_changed || 'waste_date'::text;
+    v_remake := true;
+  end if;
+  select * into v_ing from public.ingredients where id = o.ingredient_id;
+  v_q := o.quantity; v_unit := o.unit;
+  if p ? 'items' then
+    if jsonb_typeof(p->'items') is distinct from 'array' or jsonb_array_length(p->'items') <> 1
+       or jsonb_typeof(p->'items'->0) is distinct from 'object' then raise exception 'BAD_WASTE'; end if;
+    v_item := p->'items'->0;
+    if v_item ? 'recipe_id' and v_item->>'recipe_id' is not null then raise exception 'BAD_WASTE'; end if;
+    if v_item->>'ingredient_id' is not null
+       and (public._ingredient_final(v_biz, public._to_uuid(v_item->>'ingredient_id'))).id is distinct from o.ingredient_id then
+      raise exception 'BAD_WASTE';                       -- the row's ingredient can't be swapped for another
+    end if;
+    v_typed := public._to_num(v_item->>'quantity');
+    if v_typed is null or v_typed <= 0 then raise exception 'BAD_QUANTITY'; end if;
+    v_unit := coalesce(nullif(btrim(v_item->>'unit'), ''), v_ing.base_unit);
+    v_q := public._to_base_qty(v_typed, v_unit, v_ing.base_unit, v_ing.weight_g_per_ml);
+    if v_q is null then raise exception 'BAD_UNIT'; end if;
+    if v_q > 1000000 then raise exception 'BAD_QUANTITY'; end if;
+    if abs(v_q - coalesce(o.quantity, 0)) > 0.000001 then
+      v_changes := v_changes || format('amount: %s %s -> %s %s', trim(to_char(coalesce(o.quantity, 0), 'FM999999990.999999'), '.'), v_ing.base_unit,
+                                       trim(to_char(v_q, 'FM999999990.999999'), '.'), v_ing.base_unit);
+      v_changed := v_changed || 'items'::text;
+      v_remake := true;
+    else
+      v_q := o.quantity; v_unit := o.unit;
+    end if;
+  end if;
+  if cardinality(v_changes) = 0 then raise exception 'NO_CHANGE'; end if;
+  v_line_note := left(v_reason || coalesce(' — ' || nullif(v_entry_note, ''), ''), 500);
+  perform public._adopt_waste_lines(v_biz, o.id, 'OFFICE');
+  if v_remake then
+    if not exists (select 1 from public.stock_line_owners so where so.owner_kind = 'OFFICE' and so.owner_id = o.id) then
+      raise exception 'WASTE_NOT_LINKED';
+    end if;
+    delete from public.inventory_transactions t using public.stock_line_owners so
+      where so.txn_id = t.id and so.owner_kind = 'OFFICE' and so.owner_id = o.id and t.business_id = v_biz;
+    insert into public.inventory_transactions(business_id, ingredient_id, transaction_type, quantity, reference_id, transaction_date, notes)
+      values (v_biz, o.ingredient_id, 'WASTE', v_q, o.id::text, v_day, v_line_note)
+      returning id into v_txn;
+    insert into public.stock_line_owners(txn_id, business_id, owner_kind, owner_id) values (v_txn, v_biz, 'OFFICE', o.id);
+  else
+    update public.inventory_transactions t set notes = v_line_note from public.stock_line_owners so
+      where so.txn_id = t.id and so.owner_kind = 'OFFICE' and so.owner_id = o.id and t.business_id = v_biz;
+  end if;
+  update public.waste set quantity = v_q, unit = v_unit, reason = v_reason, date = v_day, notes = v_entry_note,
+         edited_at = now(), edited_by_name = coalesce(v_me.name, 'Owner'), edit_note = v_note
+   where id = o.id;
+  v_total := round(coalesce(v_q, 0) * public._ingredient_unit_cost(v_biz, o.ingredient_id, v_day), 2);
+  insert into public.audit_log(business_id, action, actor_id, actor_name, details, reference_id, at)
+    values (v_biz, 'Waste edited', v_me.id, coalesce(v_me.name, 'Owner'),
+            left(concat_ws(' | ', format('Waste of %s (%s, %s)', o.date, coalesce(nullif(btrim(o.reason), ''), 'Other'), v_ing.name),
+                           array_to_string(v_changes, '; '), 'Note: ' || v_note), 2000),
+            o.id::text, now());
+  return jsonb_build_object('id', o.id, 'source', 'OFFICE', 'entry_table', 'waste', 'reason', v_reason, 'waste_date', v_day,
+                            'note', v_entry_note, 'total_cost', v_total, 'changed', to_jsonb(v_changed), 'edited_at', now());
+end $$;
+
+-- Back Office: delete a waste entry (its stock comes back). p_note = why
+-- (always needed). Only the stock lines the entry itself made are removed.
+-- One audit entry "Waste deleted" with what the entry was.
+-- Returns {deleted: true, id, entry_table, stock_restored (false only for an
+--          old row without a stock line the system can find), cost}.
+-- Errors: NOT_A_MEMBER, NOT_ALLOWED, WASTE_NOT_FOUND, NOTE_REQUIRED, BAD_WASTE
+--   (note longer than 200), USE_COUNT_REVISION.
+create or replace function public.delete_waste(p_id uuid, p_note text) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  v_biz uuid := public._require_owner(); v_note text := nullif(btrim(coalesce(p_note, '')), ''); v_me public.staff;
+  w public.waste_logs%rowtype; o public.waste%rowtype; v_kind text; v_n integer; v_txt text; v_cost numeric;
+begin
+  select * into w from public.waste_logs where id = p_id and business_id = v_biz for update;
+  if found then
+    if v_note is null then raise exception 'NOTE_REQUIRED'; end if;
+    if length(v_note) > 200 then raise exception 'BAD_WASTE'; end if;
+    if w.reason = 'COUNT_SHORTAGE' or w.stock_count_id is not null then raise exception 'USE_COUNT_REVISION'; end if;
+    v_me := public._owner_staff(v_biz);
+    v_kind := case when w.reason = 'RND' then 'RND' else 'WASTE' end;
+    select string_agg(x.name || ' ' || trim(to_char(x.quantity, 'FM999999990.999999'), '.') || coalesce(' ' || x.unit, ''), ', ' order by x.name, x.id)
+      into v_txt from public.waste_log_items x where x.waste_log_id = w.id;
+    perform public._adopt_waste_lines(v_biz, w.id, v_kind);
+    delete from public.inventory_transactions t using public.stock_line_owners so
+      where so.txn_id = t.id and so.owner_kind = v_kind and so.owner_id = w.id and t.business_id = v_biz;
+    get diagnostics v_n = row_count;
+    delete from public.waste_logs where id = w.id;
+    insert into public.audit_log(business_id, action, actor_id, actor_name, details, reference_id, at)
+      values (v_biz, 'Waste deleted', v_me.id, coalesce(v_me.name, 'Owner'),
+              left(concat_ws(' | ', format('Waste of %s (%s%s)', w.waste_date, initcap(replace(w.reason, '_', ' ')), coalesce(' by ' || w.staff_name, '')),
+                             'was: ' || coalesce(v_txt, '(no items)') || format(', cost %s', w.total_cost) || coalesce(', note "' || w.note || '"', ''),
+                             'Note: ' || v_note), 2000),
+              w.id::text, now());
+    return jsonb_build_object('deleted', true, 'id', w.id, 'entry_table', 'waste_logs', 'stock_restored', v_n > 0, 'cost', w.total_cost);
+  end if;
+  select * into o from public.waste where id = p_id and business_id = v_biz for update;
+  if not found then raise exception 'WASTE_NOT_FOUND'; end if;
+  if v_note is null then raise exception 'NOTE_REQUIRED'; end if;
+  if length(v_note) > 200 then raise exception 'BAD_WASTE'; end if;
+  v_me := public._owner_staff(v_biz);
+  v_cost := round(coalesce(o.quantity, 0) * public._ingredient_unit_cost(v_biz, o.ingredient_id, o.date), 2);
+  perform public._adopt_waste_lines(v_biz, o.id, 'OFFICE');
+  delete from public.inventory_transactions t using public.stock_line_owners so
+    where so.txn_id = t.id and so.owner_kind = 'OFFICE' and so.owner_id = o.id and t.business_id = v_biz;
+  get diagnostics v_n = row_count;
+  delete from public.waste where id = o.id;
+  insert into public.audit_log(business_id, action, actor_id, actor_name, details, reference_id, at)
+    values (v_biz, 'Waste deleted', v_me.id, coalesce(v_me.name, 'Owner'),
+            left(concat_ws(' | ', format('Waste of %s (%s)', o.date, coalesce(nullif(btrim(o.reason), ''), 'Other')),
+                           format('was: %s %s %s, cost %s', (select name from public.ingredients where id = o.ingredient_id),
+                                  trim(to_char(coalesce(o.quantity, 0), 'FM999999990.999999'), '.'),
+                                  (select base_unit from public.ingredients where id = o.ingredient_id), v_cost)
+                             || coalesce(', note "' || nullif(o.notes, '') || '"', ''),
+                           case when v_n = 0 then 'no stock line found: stock not changed' end,
+                           'Note: ' || v_note), 2000),
+            o.id::text, now());
+  return jsonb_build_object('deleted', true, 'id', o.id, 'entry_table', 'waste', 'stock_restored', v_n > 0, 'cost', v_cost);
+end $$;
+
+-- =============================================================================
 -- PART B6. REPORTS: waste (R&D per project, count shortages) and net income
 -- =============================================================================
 -- Waste report: same as 010, plus
@@ -2360,6 +2769,10 @@ where d.status = 'OPEN' and d.kind = 'PESOS';
 --             OFFICE for the Back Office (the waste table AND R&D usage)
 --   entries[].project_id / project_name (R&D), entries[].stock_count_id (count)
 --   by_project: [{project_id, name, status, entries, cost}]  (R&D only)
+--   B17: entries[].entry_table (waste_logs | waste), editable (false for
+--   "missing at count": revise the stock count instead), edited (the "Edited"
+--   mark), edited_at, edited_by_name, edit_note. Deleted entries are gone
+--   from the report (they stay in the audit log).
 create or replace function public.waste_report(p_from date, p_to date) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare v_biz uuid := public._require_owner();
@@ -2371,6 +2784,8 @@ begin
              l.note, l.staff_name, l.approved_by_name, l.needs_review, l.total_cost as cost, l.received_at as at,
              l.rnd_project_id as project_id, (select p.name from public.rnd_projects p where p.id = l.rnd_project_id) as project_name,
              l.stock_count_id,
+             'waste_logs'::text as entry_table, (l.reason <> 'COUNT_SHORTAGE' and l.stock_count_id is null) as editable,
+             l.edited_at is not null as edited, l.edited_at, l.edited_by_name, l.edit_note,
              coalesce((select jsonb_agg(jsonb_build_object('name', i.name, 'quantity', i.quantity, 'unit', i.unit,
                                                            'recipe_id', i.recipe_id, 'ingredient_id', i.ingredient_id,
                                                            'modifiers', i.modifiers, 'cost', i.cost))
@@ -2381,6 +2796,7 @@ begin
       select w.id, 'OFFICE', w.date, coalesce(nullif(btrim(w.reason), ''), 'Other'), w.notes, null, null, false,
              round(coalesce(w.quantity, 0) * public._ingredient_unit_cost(v_biz, w.ingredient_id, w.date), 4), w.created_at,
              null::uuid, null::text, null::uuid,
+             'waste'::text, true, w.edited_at is not null, w.edited_at, w.edited_by_name, w.edit_note,
              jsonb_build_array(jsonb_build_object('name', (select name from public.ingredients where id = w.ingredient_id),
                                                   'quantity', w.quantity, 'unit', w.unit, 'recipe_id', null,
                                                   'ingredient_id', w.ingredient_id, 'modifiers', '[]'::jsonb,
@@ -2598,11 +3014,11 @@ declare f record;
     '_loyalty_reward_amount','_merge_rewards_trigger','bo_customer_loyalty','_qr_limits','_qr_customer_json','qr_session','qr_set_username','_relink_subject','qr_relink',
     'qr_switch_account','qr_forget_device','qr_place_order','_customer_for_staff','_counter_customer_json',
     'fo_customer_list','_qr_menu_groups','get_qr_menu','_barista_kit_problem','_settings_check',
-    '_rnd_project_check','_rnd_project_delete_check','_stock_ref_taken','_waste_item','log_rnd_usage','delete_rnd_usage','_count_items','_apply_count_effects',
+    '_rnd_project_check','_rnd_project_delete_check','_stock_ref_taken','_adopt_waste_lines','revise_waste','delete_waste','_waste_item','log_rnd_usage','delete_rnd_usage','_count_items','_apply_count_effects',
     'revise_stock_count','_fo_error_code','_fo_apply_15','fo_sync','_partner_delete_check','_partner_batch_plan',
     'partner_batch_preview','produce_partner_batch','partner_return','partner_pay','waste_report','net_income_report',
     '_writable_tables'];
-  member_fns text[] := array['fo_sync','fo_customer_list','bo_customer_loyalty','log_rnd_usage','delete_rnd_usage','revise_stock_count',
+  member_fns text[] := array['fo_sync','fo_customer_list','bo_customer_loyalty','revise_waste','delete_waste','log_rnd_usage','delete_rnd_usage','revise_stock_count',
     'partner_batch_preview','produce_partner_batch','partner_return','partner_pay','waste_report','net_income_report'];
   public_fns text[] := array['get_qr_menu','qr_session','qr_relink','qr_forget_device','qr_place_order'];
   signed_in_fns text[] := array['qr_set_username','qr_switch_account'];
