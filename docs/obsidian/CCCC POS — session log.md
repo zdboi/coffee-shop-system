@@ -1,8 +1,8 @@
 ---
 tags: [cccc, pos, session-log]
 project: Cavite City Coffee Club POS
-updated: 2026-11-10
-checkpoint: 18
+updated: 2026-11-11
+checkpoint: 19
 repo: zdboi/coffee-shop-system (branch wip/cccc-online-qr)
 ---
 
@@ -14,7 +14,23 @@ It has three apps on one Supabase database:
 - **Back Office:** the owner's email login only.
 - **QR order page:** customers order from their phones and pay at the counter.
 
-## Where things stand (Nov 10): release 1.4.2 ready for me
+## Where things stand (Nov 11): Wave 3 (1.5) being built
+- **1.4.2 is live** (menu QR + swipe tabs) = last working version (checkpoint 19).
+- **Supabase** is now under the business account (cavitecitycoffeeclub@gmail.com); same address, nothing changed in the app.
+- **New way of working:** C builds everything itself; **Z** is the one independent checker (security + final testing).
+  - C's memory: the GitHub repo docs + this Obsidian folder.
+- **Wave 3 contents:**
+  - QR guest/registered and coffee usernames, table limits, one phone per account;
+  - archived no-phone customers;
+  - Barista drink button; R&D log; blind stock count at closing;
+  - half/double/"Max I can make" production, TCO batches + "To return to TCO";
+  - highlighted item and "Lactose intolerant?" on the QR page; tagline off the table cards;
+  - **new stamp card only after the last reward** (saved stamps + past cards);
+  - **edit/delete waste entries** (owner only, with a note).
+- **Status:** database script 012 is done and security-checked (except the newest part, waste editing). All three apps are built. Next: C reviews the code and builds the waste-edit screen, then Z tests everything.
+- **Still my decision:** moving GitHub to the business account / getting a nicer web address.
+
+## Earlier (Nov 10): release 1.4.2 ready for me
 - **1.4.1 is live** (Nov 9, menu link): the **last working version** (checkpoint 17).
 - **1.4.2 = menu QR code + swipe tabs** (checkpoint 18). No database script. Steps are in `docs/RELEASE_1.4.2.md`: merge the PR → reload → scan the QR.
   - Back Office → Settings → Menu link: QR code, Download PNG/SVG, and a "Scan for our menu" print card (A6/A5).

@@ -1,4 +1,4 @@
-# Resume here (save point: 2026-11-10, checkpoint 19, release 1.4.2 LIVE, Wave 3 started)
+# Resume here (save point: 2026-11-11, checkpoint 19, release 1.4.2 LIVE, Wave 3 building)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
@@ -20,7 +20,30 @@ Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"
 - **QA:** `tests/run_all.sh --runs 2` passes 69/71 suites (4,295 checks). The 2 failures were one counter defect (D1), since fixed and re-tested. The money, stock, cash and brand-FIFO reconciliation (`tests/e2e/money12.e2e.js`) matches to the centavo. **Final run on the finished code (2026-11-02, `run_all.sh --runs 1`): 47 suites, 3,007 checks, 0 failing.**
 - **Security:** 008 passed two review rounds (all findings fixed). The 1.2 screens review found 4 low items, all fixed.
 
-## Now: 1.4.2 is LIVE (PR #7 merged 2026-11-10 10:54, 8b522f2 = last working version, checkpoint 19). **Wave 3 (1.5) STARTED** on the owner's go (11:06): plan `docs/PLAN_1.5.md`, DB script `012_release_1_5.sql`, contract `docs/handoff/contract-1.5.md`. Step 1 = database (db-security-engineer).
+## Now (2026-11-11 20:30): Wave 3 (1.5) building. Team model changed: C builds everything, Z checks.
+- **Live:** 1.4.2 (8b522f2, checkpoint 19 = last working version). Supabase project now under the business account (same URL).
+- **012 (`cccc/supabase/012_release_1_5.sql`) is complete**, not yet run on live. It covers:
+  - Q1–Q5, B6 QR accounts; B7 barista kit; B8 R&D; B9 counts; B11/B12 QR menu;
+  - B15 production scale + TCO; B16 stamp card cycling + history; B17 waste editing.
+  - Security passed everything except B17, which still needs Z's gate.
+  - Contract: `docs/handoff/contract-1.5.md`. DB tests for Z to port: scratchpad `db15-tests.sql` (348 checks).
+- **Shared core done.** Screens built (agent hand-off, 2026-11-11). For each, C must still review the code and Z must run the regression:
+  - **Counter (`front.js`/`front.css`):** all 7 items. Expected test updates: `fo_release12` (Zed archived; wait for reward chip), `fo_release13`, `money12`. New checks: scratchpad `fo15-checks.js`.
+  - **Back Office:** all items; new `bo-counts.js`, `bo-partner.js`. The BO regression suites haven't been run. Expected: `bo_release13` (tagline gone), `bo_release14` (needs 012). New checks: scratchpad `bo15.e2e.js`.
+  - **QR page (`order.js`/`order.css`):** all 9 items. Expected updates: `order_extra`, `order_limits`, `order_release12`, `order_release14` (oat milk seed + lactose prompt), `captcha` step 6. New checks: scratchpad `qr15-check.e2e.js`.
+- **C's next steps:**
+  1. Review the three screens' code.
+  2. Lead calls:
+     - accept "sign out keeps the phone's anonymous login";
+     - accept the counter attach-picker keeping `search_customers`;
+     - keep backup format 7.
+  3. Build the B17 Back Office waste edit/delete UI.
+  4. **Z:** security gate on B17 SQL + screens review, port the db15/fo15/bo15/qr15 checks, approve the expected changes, wire 012 into the reset scripts, full `run_all.sh`.
+  5. Fix findings, then the release package (`docs/RELEASE_1.5.md`, checkpoint, PR).
+- **Open, waiting for the owner:** the GitHub move and nicer address (business account / own domain).
+- **Usage note:** the weekly limit hit agents on 2026-11-11; it resets Nov 15, 8 PM (Manila).
+
+## Earlier:  1.4.2 is LIVE (PR #7 merged 2026-11-10 10:54, 8b522f2 = last working version, checkpoint 19). **Wave 3 (1.5) STARTED** on the owner's go (11:06): plan `docs/PLAN_1.5.md`, DB script `012_release_1_5.sql`, contract `docs/handoff/contract-1.5.md`. Step 1 = database (db-security-engineer).
 
 ## Earlier: 1.4.2 was READY (checkpoint 18). It's a PR only, no DB; owner steps are in `docs/RELEASE_1.4.2.md` (merge → reload → check). QA: 70/70 suites, 4,283 checks, 0 failing. After the merge: checkpoint 19 "1.4.2 live" = last working version, then mark it live in the changelog. Wave 3 is still waiting for the owner's go; it includes B15 (partial/multiple production + TCO "to return" list, decided 2026-11-10) and the counter time-zone fix (QA).
 
