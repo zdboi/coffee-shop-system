@@ -226,3 +226,14 @@ Owner: **don't start 1.3 until I say so.**
   - Stamps earned while the full card waits are **saved** and land on the new card as soon as it's issued. Nobody loses a stamp.
   - A finished card shows **both dates**: when it was filled (15th stamp) and when the last reward was taken.
   - Old cards are visible **everywhere**: the QR page, the counter Customers tab and the Back Office.
+
+## B17. Edit the waste report (owner, 2026-11-11 20:09), Wave 3
+- Owner: "I also want to be able to edit the wastage report."
+- **Overlap (lead):** waste entries can't be changed or deleted after saving today (counter waste log, Back Office "Record waste"). Wave 3 already adds "revise a stock count" (owner only) and "delete an R&D entry"; this extends the same idea to every waste entry.
+- **Owner decisions (2026-11-11):**
+  - **Edit everything + delete:** amount, reason, note and date; or delete the entry. Stock and cost reports correct themselves to match.
+  - **Owner only, with a record:** Back Office owner login only. Each edit or delete needs a short note and is saved in the audit log with the old and new values. The entry shows an "Edited" mark.
+- **Lead notes:**
+  - "Missing at count" waste is changed by revising its stock count, not edited directly (one source of truth).
+  - Complimentary waste keeps its manager approval record.
+  - Finished sales stay unchangeable; this is waste only.

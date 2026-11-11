@@ -31,6 +31,8 @@ Owner go-ahead: 2026-11-10 11:06 ("I already did the merging. we can proceed wit
 |---|---|---|
 | B16 | **Next stamp card only after the last reward is taken**; stamps earned meanwhile are saved and land on the new card. **Card history** with the date filled and the date the last reward was taken, on the QR page, the counter Customers tab and the Back Office. | Owner, 2026-11-10 15:2x. |
 
+| B17 | **Edit the waste report** (Back Office, owner only). Edit a waste entry's amount, reason, note and date, or delete it. Stock lines and costs are re-made by the server to match. A note is required; the audit log keeps old and new values; the entry shows "Edited". "Missing at count" entries are changed by revising their stock count. | Owner, 2026-11-11. |
+
 ### Part C: QR page & menu
 | Item | What | Decided |
 |---|---|---|
