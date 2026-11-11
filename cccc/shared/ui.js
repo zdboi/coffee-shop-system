@@ -175,7 +175,12 @@ const ERROR_TEXT = {
   // Release 1.4 (010): counter waste log (fo_sync 'waste')
   BAD_WASTE: 'This waste entry is missing information (it needs 1 to 30 items), so it was not saved. Check it and log it again.',
   BAD_WASTE_REASON: 'Choose a reason for the waste: Calibration, Spillage, Complimentary, Expired or Other.',
-  NOTE_REQUIRED: 'Add a short note saying what happened (needed for waste with the reason "Other", and when you change a stock count).',
+  NOTE_REQUIRED: 'Add a short note saying what happened (needed for waste with the reason "Other", and when you change a stock count or edit or delete a waste entry).',
+  USE_COUNT_REVISION: 'This waste came from a closing stock count. Change it by revising that stock count (Stock counts).',
+  WASTE_NOT_LINKED: 'This old entry isn\'t linked to stock, so its amount and date can\'t be changed. Delete it and record it again, or adjust stock.',
+  ENTRY_NOTE_REQUIRED: 'Waste with the reason "Other" needs its own note saying what happened.',
+  NO_CHANGE: 'Nothing was changed, so nothing was saved.',
+  WASTE_NOT_FOUND: 'This waste entry no longer exists. Refresh the report.',
   BAD_QUANTITY: 'That quantity is not valid. Enter an amount above 0 (at most 100 of a menu item at a time).',
   BAD_UNIT: 'That unit doesn\'t fit this item (for example grams for an item counted in pieces). Choose one of the item\'s units.',
   // Release 1.4: units and "weighs" (A10)

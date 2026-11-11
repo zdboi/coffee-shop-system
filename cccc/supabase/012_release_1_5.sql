@@ -2798,7 +2798,8 @@ begin
              null::uuid, null::text, null::uuid,
              'waste'::text, true, w.edited_at is not null, w.edited_at, w.edited_by_name, w.edit_note,
              jsonb_build_array(jsonb_build_object('name', (select name from public.ingredients where id = w.ingredient_id),
-                                                  'quantity', w.quantity, 'unit', w.unit, 'recipe_id', null,
+                                                  -- w.quantity is stored in the stock (base) unit; w.unit is only the unit the owner typed
+                                                  'quantity', w.quantity, 'unit', coalesce((select base_unit from public.ingredients where id = w.ingredient_id), w.unit), 'recipe_id', null,
                                                   'ingredient_id', w.ingredient_id, 'modifiers', '[]'::jsonb,
                                                   'cost', round(coalesce(w.quantity, 0) * public._ingredient_unit_cost(v_biz, w.ingredient_id, w.date), 4)))
       from public.waste w

@@ -37,7 +37,7 @@ Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"
      - accept "sign out keeps the phone's anonymous login";
      - accept the counter attach-picker keeping `search_customers`;
      - keep backup format 7.
-  3. Build the B17 Back Office waste edit/delete UI.
+  3. ~~Build the B17 Back Office waste edit/delete UI.~~ **Done 2026-11-12** (`bo-money.js`: Edit/Delete on Waste report rows, "Why?" required, Edited mark; checks in scratchpad `b17-bo.e2e.js`, 18/18; `bo_release14` 55/55 on 012).
   4. **Z:** security gate on B17 SQL + screens review, port the db15/fo15/bo15/qr15 checks, approve the expected changes, wire 012 into the reset scripts, full `run_all.sh`.
   5. Fix findings, then the release package (`docs/RELEASE_1.5.md`, checkpoint, PR).
 - **Open, waiting for the owner:** the GitHub move and nicer address (business account / own domain).
