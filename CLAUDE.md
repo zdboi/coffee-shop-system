@@ -174,7 +174,8 @@ tests/run_all.sh                     # full regression (QA; uses 8787 / cccc)
   output). The 004 script must install on top of it and run twice without errors.
 - Browser tests use Playwright from `/opt/npm-tools/node_modules/playwright` (Chromium preinstalled).
 - The sandbox blocks npm and most CDNs.
-- Several agents test at the same time, each with its own database and port:
-  Front Office `db_fo` / 8790, Back Office `db_bo` / 8791, QR page `db_qr` / 8792, database work `db_sec`.
-  `cccc` and port 8787 belong to QA. Example: `tests/e2e_reset.sh db_bo && tests/restart_fake.sh 8791 db_bo`,
+- C and Z test at the same time on separate databases and ports. C uses `db_fo` / 8790 (counter),
+  `db_bo` / 8791 (Back Office), `db_qr` / 8792 (QR page) and `db_sec` (database work). Z uses `cccc` / 8787
+  and `db_rev*` for security probes. Until Z wires the newest script into the reset scripts, install it after a
+  reset: `psql -h /tmp -p 54329 -U postgres -d <db> -q -f cccc/supabase/012_release_1_5.sql`. Example: `tests/e2e_reset.sh db_bo && tests/restart_fake.sh 8791 db_bo`,
   then open `http://localhost:8791/cccc/back/`. Browser tests: `FAKE_PORT=8790 FAKE_DB=db_fo node tests/e2e/fo.e2e.js`.
