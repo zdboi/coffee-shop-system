@@ -1056,9 +1056,55 @@ select test.chk(test.err($$select public.revise_waste('{"id":"b1720000-0000-0000
 select test.chk(test.err($$select public.revise_waste('{"id":"b1720000-0000-0000-0000-000000000001","edit_note":"x","items":[{"ingredient_id":"b1720000-0000-0000-0000-000000000009","quantity":1}]}')$$) like 'UNKNOWN_INGREDIENT%'
   and test.err($$select public.revise_waste('{"id":"b1720000-0000-0000-0000-000000000001","edit_note":"x","items":[{"recipe_id":"b1720000-0000-0000-0000-000000000009","quantity":1}]}')$$) like 'UNKNOWN_RECIPE%',
   'Z: another shop''s ingredient / an unknown recipe in the new item list refused');
+reset role;
+-- ---- gate fixes 2026-11-12 (Z's Lows 1-3) ----
+-- Low 1: the "why" note comes right after the header, so a long item list can't push it past the 2,000-character cut
+update ingredients set name = repeat('Very long ingredient name ', 3) || 'xx' where id = '22222222-0000-0000-0000-000000000001';
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select public.revise_waste(jsonb_build_object('id','b1720000-0000-0000-0000-000000000001','edit_note','WHY-EDIT-1','items',
+  (select jsonb_agg(jsonb_build_object('ingredient_id','22222222-0000-0000-0000-000000000001','quantity',g + 0.123456,'unit','g')) from generate_series(1,30) g))) is not null as zx \gset
+select public.revise_waste(jsonb_build_object('id','b1720000-0000-0000-0000-000000000001','edit_note','WHY-EDIT-2','items',
+  (select jsonb_agg(jsonb_build_object('ingredient_id','22222222-0000-0000-0000-000000000001','quantity',g + 0.654321,'unit','g')) from generate_series(1,30) g))) is not null as zx \gset
+reset role;
+select test.chk(length(details) = 2000 and details like 'Waste of % | Note: WHY-EDIT-2 | amount: %',
+  'Z Low 1: a 30-item edit with long names: the audit line, cut at 2,000 characters, still has the note (then the old amounts)', length(details)::text || ' ' || left(details, 90))
+  from audit_log where reference_id = 'b1720000-0000-0000-0000-000000000001' and action = 'Waste edited' order by at desc, details desc limit 1;
+-- Low 2: a counter entry whose stock lines are gone: amount / date -> WASTE_NOT_LINKED, stock untouched; reason + note still editable
+create temp table z_lines as select t.* from inventory_transactions t where t.reference_id = 'b1720000-0000-0000-0000-000000000001';
+create temp table z_owners as select o.* from stock_line_owners o where o.owner_id = 'b1720000-0000-0000-0000-000000000001';
+delete from inventory_transactions where reference_id = 'b1720000-0000-0000-0000-000000000001';
+select test.stock('22222222-0000-0000-0000-000000000001') as zb1 \gset
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.chk(test.err(format($$select public.revise_waste('{"id":"b1720000-0000-0000-0000-000000000001","edit_note":"x","waste_date":"%s"}')$$, (select waste_date - 1 from public.waste_logs where id = 'b1720000-0000-0000-0000-000000000001'))) like 'WASTE_NOT_LINKED%'
+  and test.err($$select public.revise_waste('{"id":"b1720000-0000-0000-0000-000000000001","edit_note":"x","items":[{"ingredient_id":"22222222-0000-0000-0000-000000000001","quantity":5,"unit":"g"}]}')$$) like 'WASTE_NOT_LINKED%',
+  'Z Low 2: counter entry without its stock lines: date / amount change -> WASTE_NOT_LINKED');
+select test.chk(public.revise_waste('{"id":"b1720000-0000-0000-0000-000000000001","edit_note":"reason only","reason":"EXPIRED","note":"old bag"}')->'changed' = '["reason", "note"]'::jsonb,
+  'Z Low 2: ... its reason and note can still be changed');
+reset role;
+select test.chk(test.stock('22222222-0000-0000-0000-000000000001') = :zb1 and not exists (select 1 from inventory_transactions where reference_id = 'b1720000-0000-0000-0000-000000000001'),
+  'Z Low 2: ... and stock was not taken a second time');
+insert into inventory_transactions select * from z_lines;
+insert into stock_line_owners select * from z_owners;
+update ingredients set name = 'Espresso beans' where id = '22222222-0000-0000-0000-000000000001';
+-- Low 3: a Back Office "Record waste" row: the audit line has the cost pair too
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select public.apply_changes(jsonb_build_array(
+  jsonb_build_object('op','upsert','table','waste','row', jsonb_build_object('id','b1720000-0000-0000-0000-000000000004','ingredient_id','22222222-0000-0000-0000-000000000001','quantity',40,'unit','g','reason','Expired','date',current_date,'notes','z')),
+  jsonb_build_object('op','upsert','table','inventory_transactions','row', jsonb_build_object('id','b1720000-0000-0000-0000-0000000000a4','ingredient_id','22222222-0000-0000-0000-000000000001','transaction_type','WASTE','quantity',40,'reference_id','b1720000-0000-0000-0000-000000000004','transaction_date',current_date,'notes','Expired — z')))) is not null as zx \gset
+select (public.revise_waste('{"id":"b1720000-0000-0000-0000-000000000004","edit_note":"WHY-ROW","items":[{"quantity":0.1,"unit":"kg"}]}')->>'total_cost')::numeric as zrow \gset
+reset role;
+select test.chk(:zrow = 100 and details like 'Waste of % | Note: WHY-ROW | %amount: 40 g -> 100 g%' and details ~ 'cost: 40(\.00)? -> 100(\.00)?',
+  'Z Low 3: Back Office row 40 g -> 0.1 kg: audit has the note, the amounts and cost 40 -> 100', details)
+  from audit_log where reference_id = 'b1720000-0000-0000-0000-000000000004' and action = 'Waste edited';
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select public.delete_waste('b1720000-0000-0000-0000-000000000004', 'WHY-ROW-DEL') is not null as zx \gset
 select (public.delete_waste('b1720000-0000-0000-0000-000000000001', 'Z clean-up')->>'stock_restored')::boolean as zdel \gset
 reset role;
 select test.chk(:'zdel' and test.stock('22222222-0000-0000-0000-000000000001') = :zb0, 'Z: deleted: stock exactly back');
+select test.chk((select bool_and(details like 'Waste of % | Note: % | was: %') and count(*) = 2 from audit_log where action = 'Waste deleted' and reference_id in ('b1720000-0000-0000-0000-000000000001','b1720000-0000-0000-0000-000000000004'))
+  and (select length(details) = 2000 and details like '% | Note: Z clean-up | was: cost %' from audit_log where action = 'Waste deleted' and reference_id = 'b1720000-0000-0000-0000-000000000001'),
+  'Z Low 1: delete audit lines: note first, then what the entry was (30 long items: cut at 2,000 with the note and cost kept)',
+  (select left(details, 120) from audit_log where action = 'Waste deleted' and reference_id = 'b1720000-0000-0000-0000-000000000001'));
 delete from ingredients where id = 'b1720000-0000-0000-0000-000000000009';
 delete from profiles where id = '00000000-0000-0000-0000-0000000000f7';
 select 'DB15 DONE';

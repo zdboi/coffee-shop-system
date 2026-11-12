@@ -221,6 +221,39 @@ sql(`update ingredients set count_at_close=false`);
     await page.click('#recount-ok');
     await page.waitForSelector('#cs-confirm');
     ok(/Stock count done: 2 item\(s\), 1 recounted/.test(await modalText()), 'fo15-count: close dialog says the count is done');
+    // Z gate fix (Low 4, 2026-11-12): the recount list is shown ONCE per shift. "Count again" with numbers that differ (beans too now)
+    // finishes without listing differences again, so repeating it can't be used to find the expected amount.
+    await page.click('#cs-recount');
+    await page.waitForSelector('#count-next');
+    ok(await page.evaluate(() => JSON.parse(localStorage.getItem('cccc.fo.countDraft')).checked === true), 'fo15-count: the one recount round is remembered in the count draft');
+    await page.fill(`[data-cqty="${BEANS}"]`, String(exp[0] - 7));
+    await page.click('#count-next');
+    await page.waitForSelector('#cs-confirm');
+    ok(!(await page.$('#recount-ok')) && !/match what the shop expects/i.test(await modalText()), 'fo15-count: "Count again" after the one recount round does not list differences again (beans differ now)');
+    // the same through "Back to the full list" (the round is put back once for this): recount list -> back -> confirm = finished
+    await page.click('#cs-recount');
+    await page.waitForSelector('#count-next');
+    await page.evaluate(() => { const d = JSON.parse(localStorage.getItem('cccc.fo.countDraft')); d.checked = false; localStorage.setItem('cccc.fo.countDraft', JSON.stringify(d)); });
+    await page.click('[data-cancel]'); await page.waitForTimeout(300);
+    await page.click('#close-shift-btn'); await page.waitForSelector('#count-next');
+    await page.click('#count-next');
+    await page.waitForSelector('#recount-back');
+    await page.click('#recount-back');
+    await page.waitForSelector('#count-next');
+    await page.fill(`[data-cqty="${BEANS}"]`, String(exp[0]));
+    await page.fill(`[data-cqty="${MILK}"]`, String(exp[1] - 120));
+    await page.click('#count-next');
+    await page.waitForSelector('#cs-confirm');
+    ok(!(await page.$('#recount-ok')), 'fo15-count: "Back to the full list" then confirm does not bring the recount list back (milk still differs)');
+    // ... and the out-of-stock words never give the amount of a counted item away
+    const need = await page.evaluate(([b, m]) => {
+      const p = {short_ingredients: [{ingredient_id: m, name: 'Milk', needed: 99999, available: 1234}]};
+      const counted = stockNeedText(p);
+      const ing = ingredientById(m); const was = ing.count_at_close; ing.count_at_close = false;
+      const plain = stockNeedText(p); ing.count_at_close = was;
+      return {counted, plain};
+    }, [BEANS, MILK]);
+    ok(need.counted === 'not enough Milk' && /1,?234/.test(need.plain) && /left/.test(need.plain), 'fo15-count: a counted item short at payment says "not enough Milk" with no amounts (other items still show what is left)', need);
     const cash = await page.evaluate(() => shiftMetrics(activeShift()).expectedCash);
     await page.fill('#cs-declared', String(cash));
     await page.click('#cs-confirm');

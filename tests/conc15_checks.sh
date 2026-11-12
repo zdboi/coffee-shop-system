@@ -71,7 +71,7 @@ cat "$S/e1.out" "$S/e2.out" "$S/e3.out" | grep -E '^E[123]|ERROR' | sed 's/^/   
 check "$(grep -h '^E' "$S/e1.out" "$S/e2.out" "$S/e3.out" | sort | tr '\n' ',')" "E1 30.00,E2 50.00,E3 50.00," "B17 race: edit, edit, delete of one entry run one after the other (costs 30, 50, deleted at 50)"
 check "$($P -c "select test.stock('$BEANS') - $B0")" 0.000000 "... stock exactly back"
 check "$($P -c "select (select count(*) from inventory_transactions where reference_id = '$W') + (select count(*) from stock_line_owners where owner_id = '$W') + (select count(*) from waste_logs where id = '$W')")" 0 "... no entry, stock line or owner note left"
-check "$($P -c "select string_agg(action || ':' || right(details, 1), ',' order by at) from audit_log where reference_id = '$W'")" "Waste edited:A,Waste edited:B,Waste deleted:C" "... three audit entries, in order"
+check "$($P -c "select string_agg(action || ':' || substring(details from 'Note: ([A-C]) '), ',' order by at) from audit_log where reference_id = '$W'")" "Waste edited:A,Waste edited:B,Waste deleted:C" "... three audit entries, in order"
 rm -rf "$S"
 echo "SUMMARY conc15_checks: $N checks, $FAILS failed"
 [ "$FAILS" -eq 0 ]
