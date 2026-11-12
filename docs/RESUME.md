@@ -1,4 +1,4 @@
-# Resume here (save point: 2026-11-11, checkpoint 19, release 1.4.2 LIVE, Wave 3 building)
+# Resume here (save point: 2026-11-12, checkpoint 21, release 1.5 LIVE; latest status at the bottom)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 

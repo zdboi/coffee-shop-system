@@ -235,3 +235,10 @@ It has three apps on one Supabase database:
 
 ## To continue
 Open the project in Claude and say **"Resume from docs/RESUME.md"**.
+
+## 2026-11-12: Release 1.5 live
+- Supabase moved to the business account (same address); SQL Editor snippets stay with the personal account, the data moved. Nothing lost.
+- Owner ran 012 ("Success"). Supabase can't save/rename a snippet that big ("request entity too large"): harmless.
+- Owner merged PR #8 at 17:10 (merge commit `976a61f`). Checkpoint 21 = last working version. 012 frozen; next script 013.
+- Private changelog (Project doc) updated with everything in 1.5 and the B18 calendar plan.
+- Next: owner does the shop setup in `docs/RELEASE_1.5.md`. Wave 4 (1.6) only when the owner says go.
