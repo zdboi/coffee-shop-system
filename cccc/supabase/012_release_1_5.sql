@@ -2560,6 +2560,14 @@ begin
                         else 'Counter waste: ' || initcap(v_reason) end;
     perform public._adopt_waste_lines(v_biz, w.id, v_kind);
     if v_remake then
+      -- An entry whose items took stock, but which owns no stock line now (its
+      -- lines were removed some other way): re-making them would take the stock
+      -- a second time. Same rule as the Back Office rows below.
+      if exists (select 1 from public.waste_log_items x where x.waste_log_id = w.id
+                  and jsonb_typeof(x.stock_lines) = 'array' and jsonb_array_length(x.stock_lines) > 0)
+         and not exists (select 1 from public.stock_line_owners so where so.owner_kind = v_kind and so.owner_id = w.id) then
+        raise exception 'WASTE_NOT_LINKED';
+      end if;
       -- take back ONLY this entry's own stock lines, then make them again
       delete from public.inventory_transactions t using public.stock_line_owners so
         where so.txn_id = t.id and so.owner_kind = v_kind and so.owner_id = w.id and t.business_id = v_biz;
@@ -2617,7 +2625,7 @@ begin
     insert into public.audit_log(business_id, action, actor_id, actor_name, details, reference_id, at)
       values (v_biz, 'Waste edited', v_me.id, coalesce(v_me.name, 'Owner'),
               left(concat_ws(' | ', format('Waste of %s (%s%s)', w.waste_date, initcap(replace(w.reason, '_', ' ')), coalesce(' by ' || w.staff_name, '')),
-                             array_to_string(v_changes, '; '), 'Note: ' || v_note), 2000),
+                             'Note: ' || v_note, array_to_string(v_changes, '; ')), 2000),
               w.id::text, now());
     return jsonb_build_object('id', w.id, 'source', case when w.device_id is null then 'OFFICE' else 'COUNTER' end, 'entry_table', 'waste_logs',
                               'reason', v_reason, 'waste_date', v_day, 'note', v_entry_note, 'total_cost', round(v_total, 2),
@@ -2693,10 +2701,14 @@ begin
          edited_at = now(), edited_by_name = coalesce(v_me.name, 'Owner'), edit_note = v_note
    where id = o.id;
   v_total := round(coalesce(v_q, 0) * public._ingredient_unit_cost(v_biz, o.ingredient_id, v_day), 2);
+  v_cost := round(coalesce(o.quantity, 0) * public._ingredient_unit_cost(v_biz, o.ingredient_id, o.date), 2);
+  if v_total <> v_cost then
+    v_changes := v_changes || format('cost: %s -> %s', v_cost, v_total);
+  end if;
   insert into public.audit_log(business_id, action, actor_id, actor_name, details, reference_id, at)
     values (v_biz, 'Waste edited', v_me.id, coalesce(v_me.name, 'Owner'),
             left(concat_ws(' | ', format('Waste of %s (%s, %s)', o.date, coalesce(nullif(btrim(o.reason), ''), 'Other'), v_ing.name),
-                           array_to_string(v_changes, '; '), 'Note: ' || v_note), 2000),
+                           'Note: ' || v_note, array_to_string(v_changes, '; ')), 2000),
             o.id::text, now());
   return jsonb_build_object('id', o.id, 'source', 'OFFICE', 'entry_table', 'waste', 'reason', v_reason, 'waste_date', v_day,
                             'note', v_entry_note, 'total_cost', v_total, 'changed', to_jsonb(v_changed), 'edited_at', now());
@@ -2732,8 +2744,8 @@ begin
     insert into public.audit_log(business_id, action, actor_id, actor_name, details, reference_id, at)
       values (v_biz, 'Waste deleted', v_me.id, coalesce(v_me.name, 'Owner'),
               left(concat_ws(' | ', format('Waste of %s (%s%s)', w.waste_date, initcap(replace(w.reason, '_', ' ')), coalesce(' by ' || w.staff_name, '')),
-                             'was: ' || coalesce(v_txt, '(no items)') || format(', cost %s', w.total_cost) || coalesce(', note "' || w.note || '"', ''),
-                             'Note: ' || v_note), 2000),
+                             'Note: ' || v_note,
+                             'was: ' || format('cost %s, ', w.total_cost) || coalesce(v_txt, '(no items)') || coalesce(', note "' || w.note || '"', '')), 2000),
               w.id::text, now());
     return jsonb_build_object('deleted', true, 'id', w.id, 'entry_table', 'waste_logs', 'stock_restored', v_n > 0, 'cost', w.total_cost);
   end if;
@@ -2751,12 +2763,12 @@ begin
   insert into public.audit_log(business_id, action, actor_id, actor_name, details, reference_id, at)
     values (v_biz, 'Waste deleted', v_me.id, coalesce(v_me.name, 'Owner'),
             left(concat_ws(' | ', format('Waste of %s (%s)', o.date, coalesce(nullif(btrim(o.reason), ''), 'Other')),
+                           'Note: ' || v_note,
                            format('was: %s %s %s, cost %s', (select name from public.ingredients where id = o.ingredient_id),
                                   trim(to_char(coalesce(o.quantity, 0), 'FM999999990.999999'), '.'),
                                   (select base_unit from public.ingredients where id = o.ingredient_id), v_cost)
                              || coalesce(', note "' || nullif(o.notes, '') || '"', ''),
-                           case when v_n = 0 then 'no stock line found: stock not changed' end,
-                           'Note: ' || v_note), 2000),
+                           case when v_n = 0 then 'no stock line found: stock not changed' end), 2000),
             o.id::text, now());
   return jsonb_build_object('deleted', true, 'id', o.id, 'entry_table', 'waste', 'stock_restored', v_n > 0, 'cost', v_cost);
 end $$;

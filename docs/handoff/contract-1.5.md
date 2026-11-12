@@ -314,3 +314,9 @@ Every other 1.2 loyalty check passes unchanged.
 ## Owner steps (Supabase)
 None besides running `012_release_1_5.sql` (SQL Editor → New query → paste the whole file → Run; "Success"). It is safe to run twice. Then: tick "Count at closing" only after the 1.5 counter is live; mark TCO as "Partner branch" in Suppliers.
 - **Stamp cards (B16), for the owner to know:** customers who already have more than 15 stamps but haven't used their free drink will see card 1 full, with their extra stamps "saved for the next card", instead of card 2. As soon as they use the free drink, card 2 opens with all their saved stamps (nobody loses a stamp). Staff can tell them: "Use your free drink and your next card starts with your saved stamps." 
+
+## Z gate fixes (2026-11-12)
+- **Audit text (B17):** the "why" note now comes right after the header in "Waste edited" / "Waste deleted" lines, so the 2,000-character cut can never drop it.
+- **`revise_waste` on counter / R&D entries:** an entry whose items took stock but which owns no stock line now is refused with `WASTE_NOT_LINKED` when its amount or date changes (the same rule as Back Office rows). Reason and note can still change.
+- **`revise_waste` on Back Office rows:** the audit line also shows `cost: old -> new`.
+- **Blind count (counter):** the recount list is shown **once per shift**. After it, "Confirm count" saves the count without listing differences again. The out-of-stock message says "not enough <item>" with no amount for items ticked "Count at closing".

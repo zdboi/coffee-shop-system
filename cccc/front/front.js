@@ -2248,6 +2248,9 @@ function stockNeedText(p){
   return p.short_ingredients.map(si=>{
     const ing = ingredientById(si.ingredient_id);
     const u = ing ? ing.base_unit : '';
+    // Items counted blind at closing never show how much is left (it would give the count away).
+    const counted = ing && (ing.count_at_close || mergeTarget(ing.id).count_at_close);
+    if(counted) return `not enough ${si.name}`;
     return `needs ${formatQuantity(si.needed, u)} ${si.name}, ${Number(si.available) > 0 ? formatQuantity(si.available, u) + ' left' : 'none left'}`;
   }).join('; ');
 }
@@ -4271,7 +4274,10 @@ function openStockCount(shift, onDone){
           return;
         }
         const diffs = countDifferences(countLinesFromDraft(d));
-        if(!diffs.length){ finishStockCount(shift, d, onDone); return; }
+        // One double-check round per shift (security review 2026-11-12): the recount list is shown once.
+        // Showing it again after every change would tell staff when a typed number matches the expected one.
+        if(!diffs.length || d.checked){ finishStockCount(shift, d, onDone); return; }
+        d.checked = true; saveCountDraft(d);
         openCountDoubleCheck(shift, d, diffs.map(x => x.ingredient_id), onDone);
       };
       const firstEmpty = items.find(ing => !(d.lines[ing.id] && String(d.lines[ing.id].quantity || '').trim() !== ''));
@@ -4284,7 +4290,7 @@ function openCountDoubleCheck(shift, d, ids, onDone){
   openModal({title: 'Please recount these', wide: true, body: `
     <div class="notice warn">${icon('alert', {size: 18})} <span>${items.length === 1 ? 'This item doesn\'t' : `These ${items.length} items don't`} match what the shop expects. Count ${items.length === 1 ? 'it' : 'them'} again and fix the number if needed, then confirm.</span></div>
     <div class="waste-lines" id="recount-lines">${items.map(ing => countRowHtml(ing, d.lines[ing.id], 'data-rqty')).join('')}</div>
-    <p class="hint">If your number is right, just confirm. The owner reviews differences in the Back Office.</p>`,
+    <p class="hint">If your number is right, just confirm. This check is shown once; the owner reviews differences in the Back Office.</p>`,
     foot: `<button class="btn btn-outline" id="recount-back">Back to the full list</button><button class="btn btn-primary" id="recount-ok">Confirm count</button>`,
     onMount: (root) => {
       wireCountRows(root, d, 'data-rqty');
