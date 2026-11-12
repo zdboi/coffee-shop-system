@@ -155,3 +155,9 @@ Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs
 - 012 is now frozen (CLAUDE.md updated); next script is 013.
 - Still to do: owner merges PR #8 → then checkpoint 21 "Release 1.5 live", changelog doc, Obsidian notes.
 - Note for owner guides: Supabase can't rename/save a snippet this big ("request entity too large"); harmless, the script lives on GitHub.
+
+## 2026-11-12 17:15: RELEASE 1.5 IS LIVE
+- Owner ran 012 ("Success") and merged PR #8 at 17:10 (merge commit `976a61f`). Checkpoint 21 = last working version.
+- Owner still to do on the shop side (docs/RELEASE_1.5.md): reload devices twice, Barista kit, TCO "Partner branch" tick, "Count at closing" ticks after all counters reloaded.
+- Next: Wave 4 (1.6 "Money & owners": B1, B2, B4, B5, B18 sales calendar) only when the owner says go. Next DB script: 013.
+- Z's written verdict on the final Low fixes is still outstanding (last run: 82 suites, 0 failing).
