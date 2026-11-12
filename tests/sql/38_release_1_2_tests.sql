@@ -422,11 +422,15 @@ reset role;
 select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
 select public.merge_customers('c5000000-0000-0000-0000-000000000001', 'c5000000-0000-0000-0000-0000000000e1') is not null as x \gset
 reset role;
--- Z 2026-11-12: NOT changed, waiting for C's decision. Since 012 (security re-check "Low 1", a lead decision) the clashing reward
--- moves to Stampy's card 2 stamp 5 with merged_from null, so this 1.2 expectation (kept as history, merged_from set) fails.
+-- 1.5 (012, security re-check "Low 1"; approved by C 2026-11-12): a reward BOTH records had used is no longer kept as history
+-- only. Edge's clashing card-1 stamp-5 reward moves to Stampy's lowest card where that reward is still free (card 2 stamp 5)
+-- and counts (merged_from null), so two used rewards always count as two. Nothing is left on Edge.
 select test.chk((select count(*) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-0000000000e1') = 0
-  and (select count(*) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-000000000001' and merged_from = 'c5000000-0000-0000-0000-0000000000e1') = 1,
-  'R: merge moves rewards; a reward both used is kept as history');
+  and (select count(*) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-000000000001' and merged_from = 'c5000000-0000-0000-0000-0000000000e1') = 0
+  and (select count(*) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-000000000001' and card_no = 2 and milestone = 5 and merged_from is null and released_at is null) = 1
+  and (select count(*) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-000000000001' and card_no = 1 and milestone = 5 and merged_from is null and released_at is null) = 1,   -- (Stampy's own; an earlier released one is history)
+  'R: merge moves rewards; a reward both used moves to the kept record''s next free card and counts (1.5, Low 1)',
+  (select string_agg(card_no || '/' || milestone || '/' || coalesce(merged_from::text, '-'), ', ' order by card_no, milestone) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-000000000001'));
 select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
 select test.chk((select count(*) from loyalty_redemptions) = 0, 'R: counter cannot read loyalty_redemptions directly');
 reset role;

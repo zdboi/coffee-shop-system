@@ -200,9 +200,9 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
   await d.click('#w-relink');
   await d.fill('#r-phone', TAKEN); await d.fill('#r-name', 'Zed');
   await d.click('#r-go');
-  // Z 2026-11-12: NOT changed, waiting for C's decision. 1.5 shows "Too many tries. Please ask our staff at the counter, or try
-  // again later." (security-gate fix L3: the lock can also be per number for 24 hours), which is a lead decision, not an owner one.
-  ok(await until(async () => /Too many tries\. Please wait about 15 minutes, or ask our staff/.test(await d.textContent('#r-err')), 5000), 'D: relink -> TOO_MANY_ATTEMPTS (relink wording)', await d.textContent('#r-err'));
+  // 1.5 (security-gate fix L3; approved by C 2026-11-12): the lock can also be per number for 24 hours, so the words no longer
+  // promise "about 15 minutes". Same words whatever the number is.
+  ok(await until(async () => (await d.textContent('#r-err')).trim() === 'Too many tries. Please ask our staff at the counter, or try again later.', 5000), 'D: relink -> TOO_MANY_ATTEMPTS (relink wording, 1.5)', await d.textContent('#r-err'));
   await d.waitForTimeout(350); await d.screenshot({path: shotPath('15-relink-too-many-360.png')});
   await d.click('#sheet-x');
   // leaving the number blank still works

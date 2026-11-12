@@ -293,11 +293,11 @@ async function refuseOnce(page, glob){
       await page.waitForSelector('#sw-yes', {timeout: 10000});
       await page.click('#sw-yes');
       await page.waitForSelector('#w-name', {timeout: 10000});
-      // Z 2026-11-12: NOT changed, waiting for C's decision. The 1.5 page keeps the phone's anonymous login on sign-out,
-      // so there is no new sign-up and no new CAPTCHA token here; the two lines below still expect the 1.4 behaviour.
-      await H.until(() => signups().length === su0 + 1, 10000);
-      const t3 = capTok(signups()[su0]);
-      H.ok(/^tok-/.test(t3 || '') && !toks.includes(t3), '"Not me?": the new sign-in carries its own fresh token', t3);
+      // 1.5 (C's decision 2026-11-12, one phone per account, Q5): the phone keeps its anonymous login on sign-out, so there is
+      // no new sign-up and no CAPTCHA here; the name form shows. (Before 1.5: a new sign-in with its own fresh token.)
+      await H.sleep(1500);
+      H.ok(signups().length === su0 && st.cf.length === cf0 && (await scriptTags(page)) === 0, '"Not me?": no new sign-up and no Turnstile (the phone keeps its login)', [signups().length, su0, st.cf.slice(cf0)]);
+      H.ok(await page.isVisible('#w-name') && !(await page.isVisible('#not-me')), '"Not me?": signed out, the name form shows');
       H.ok(await H.until(async () => await page.$eval('#w-captcha', e => e.hidden), 5000), '"Not me?": check passed, no message');
       await ctx.close();
     }
