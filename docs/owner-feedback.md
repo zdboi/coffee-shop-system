@@ -259,3 +259,12 @@ Owner: **don't start 1.3 until I say so.**
   - **Overlap (lead):** today a manager can already type any % or ₱ discount at the counter (the box even suggests "20 (Senior/PWD)"). That is a general discount with a manager PIN. B19 adds a dedicated Senior/PWD button with the owner's set %, and keeps the general discount as it is.
   - To settle at planning: manager PIN or not; whether to record the ID number and name (and who may see them); VAT exemption on top of the 20% (PH law, RA 9994 / RA 10754); per item vs whole order (group orders where only some diners are senior/PWD); how it shows on the receipt and in reports.
 - **Wave 4 (1.6) "Money" now = B1 Accounting overview, B4 editable payment methods, B5 payment-method charges, B18 Sales calendar overhaul, B19 Senior/PWD discount.**
+
+## B5 change: add or waive (owner, 2026-11-12 17:30)
+- Owner: "as for the extra charge per payment, allow us to tick a box whether we add it or waive it and absorb the charge."
+- Meaning: the charge can be added to the customer's bill, or waived so the shop absorbs it. Waived charges show in the Accounting overview as a shop cost (not hidden).
+- To confirm at planning: tick per sale at the counter, with a default per payment method in Settings; whether waiving needs a manager.
+
+## B19 question (owner, 2026-11-12 17:30)
+- Owner asked why the Senior/PWD perk keeps being suggested if a manual discount already exists.
+- Lead answer: the manual % discount already gives the 20% off. A dedicated button would only add the legal record-keeping (VAT exemption, ID number/name log, a Senior/PWD report). It sat in the "optional extras" list because of that overlap. Waiting for the owner: keep B19 (with those legal parts) or drop it and keep using the manual discount.
