@@ -26,6 +26,8 @@ create or replace function test.chk(cond boolean, msg text, got text default nul
 begin return case when coalesce(cond, false) then 'ok  ' || msg else 'FAIL ' || msg || coalesce('   [got: ' || got || ']', '') end; end $$;
 create or replace function test.err(q text) returns text language plpgsql as $$
 begin execute q; return 'NO ERROR'; exception when others then return sqlerrm; end $$;
+-- 1.5 (012): put Zed back on phone c1 (see 42a_relink_c1.sql)
+\ir 42a_relink_c1.sql
 -- one counter sale through fo_sync (Iced Latte 150 + 10% service = 165, cash 165),
 -- taking p_milk ml of Milk off stock. Returns the op answer {op_id, status, message}.
 create or replace function test.sale9(p_sale uuid, p_at timestamptz, p_milk numeric, p_cust uuid default null,

@@ -297,7 +297,10 @@ from pg_proc p where p.pronamespace = 'public'::regnamespace
     'fo_floor_plan','ingredient_brand_stock','fo_customer_list','fo_customer_detail',   -- 1.2 (008): lead-approved additions 2026-10-29
     'start_fresh_preview','start_fresh',   -- 1.3 (009): lead-approved additions 2026-11-02 (owner-only inside)
     'merge_ingredients_preview','merge_ingredients','save_supplied_item','waste_report','net_income_report',   -- 1.4 (010): lead-approved additions 2026-11-03
-    'public_menu');   -- 1.4.1 (011): lead-approved addition 2026-11-09
+    'public_menu',   -- 1.4.1 (011): lead-approved addition 2026-11-09
+    -- 1.5 (012): lead-approved additions 2026-11-12 (contract-1.5 "Rights"): two QR functions for signed-in phones, the rest owner-only inside
+    'qr_set_username','qr_switch_account','log_rnd_usage','delete_rnd_usage','revise_stock_count','partner_batch_preview','produce_partner_batch',
+    'partner_return','partner_pay','bo_customer_loyalty','revise_waste','delete_waste');
 select test.chk(not has_function_privilege('authenticated', 'public._write_row(text,jsonb,text,text,uuid)', 'execute')
            and not has_function_privilege('authenticated', 'public._update_row(text,jsonb,text,uuid)', 'execute')
            and not has_function_privilege('authenticated', 'public._writable_tables()', 'execute')
@@ -336,7 +339,9 @@ reset role;
 update qr_orders set paid_at = null, status = 'CANCELLED' where id = :'q1';
 
 -- ================= F5: QR flood limits =================
--- 12 phones register (one is already registered), each places 1 order at Table 1 -> the 11th open order at that table is refused
+-- 12 phones register (one is already registered), each places 1 order at Table 1.
+-- 1.5 (012, owner decision Q3, 2026-11-02): at most 4 open UNPAID tickets per table (was 10 waiting -> TOO_MANY_ORDERS); the 5th -> TABLE_FULL.
+-- Accepted-but-unpaid tickets still count; a paid one frees a place. (Expected values changed 2026-11-12 with C's approval.)
 select test.chk(count(*) = 11, 'setup: 11 more QR customers') from (
   select set_config('request.jwt.claims', json_build_object('sub', ('00000000-0000-0000-0000-0000000c' || lpad(g::text, 4, '0')), 'role', 'authenticated')::text, false),
          public.qr_register('tok-t1', 'P' || g, null, true) r from generate_series(2, 12) g) x where x.r ? 'customer';
@@ -344,10 +349,14 @@ create or replace function test.place(g int, tok text) returns text language sql
   select coalesce(r->>'error', 'ok') from (select set_config('request.jwt.claims', json_build_object('sub', ('00000000-0000-0000-0000-0000000c' || lpad(g::text, 4, '0')), 'role', 'authenticated')::text, false) x,
     public.qr_place_order(tok, '[{"recipe_id":"33333333-0000-0000-0000-000000000001","quantity":1}]') r) y
 $$;
-select test.chk(string_agg(test.place(g, 'tok-t1'), ',' order by g) = 'ok,ok,ok,ok,ok,ok,ok,ok,ok,ok,TOO_MANY_ORDERS', 'F5: 10 PENDING orders at one table, the 11th -> TOO_MANY_ORDERS') from generate_series(2, 12) g;
+select string_agg(test.place(g, 'tok-t1'), ',' order by g) as f5 from generate_series(2, 12) g \gset
+select test.chk(:'f5' = 'ok,ok,ok,ok,TABLE_FULL,TABLE_FULL,TABLE_FULL,TABLE_FULL,TABLE_FULL,TABLE_FULL,TABLE_FULL', 'F5: 4 unpaid orders at one table, the 5th and later -> TABLE_FULL (1.5, Q3)', :'f5');
 select test.chk(test.place(12, 'tok-t2') = 'ok', 'F5: the same phone can still order at another table');
-update qr_orders set status = 'PREPARING' where table_id = '77777777-0000-0000-0000-000000000001';
-select test.chk(test.place(12, 'tok-t1') = 'ok', 'F5: once orders are accepted the table can order again');
+update qr_orders set status = 'PREPARING' where table_id = '77777777-0000-0000-0000-000000000001' and status = 'PENDING';   -- the counter accepts the waiting ones (1.5: not the cancelled q1, which would count as open again)
+select test.chk(test.place(12, 'tok-t1') = 'TABLE_FULL', 'F5: accepted but unpaid orders still count (1.5, Q3)');
+update qr_orders set paid_at = now() where id = (select id from qr_orders where table_id = '77777777-0000-0000-0000-000000000001' and paid_at is null and status = 'PREPARING' order by created_at limit 1);
+select test.place(12, 'tok-t1') as f5b \gset
+select test.chk(:'f5b' = 'ok', 'F5: once one order is paid the table can order again (1.5, Q3)', :'f5b');
 -- shop-wide: 60 orders in 10 minutes (13 so far)
 insert into qr_orders(business_id, order_number, order_day, status, created_at)
   select :'biz', 'Q-F' || g, current_date, 'COMPLETED', now() - interval '5 minutes' from generate_series(1, 60 - (select count(*) from qr_orders where business_id = :'biz' and created_at > now() - interval '10 minutes')) g;
