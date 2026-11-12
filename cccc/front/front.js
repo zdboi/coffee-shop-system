@@ -610,7 +610,7 @@ function lockSession(){
   cloud.setStaffToken(null);
   try{ sessionStorage.removeItem(STAFF_SESSION_STORAGE); }catch(e){}
   posState.currentUser = null; posState.loginExpiresAt = null;
-  posState.cart = []; posState.discount = null; posState.customer = null; posState.qrOrder = null; posState.resumingHeldSaleId = null; posState.reward = null;
+  posState.cart = []; posState.discount = null; posState.customer = null; posState.qrOrder = null; posState.resumingHeldSaleId = null; posState.reward = null; posState.senior = null;
   posState.lastSaleId = null;          // the next person doesn't get "Print receipt" for this person's sale
   // Customers screen: forget what was shown (a manager's money view must not stay after locking);
   // answers still on their way are thrown away.
@@ -1688,14 +1688,17 @@ function addToCart(recipe, qty, modifiers, selections, notes){
   toast(`Added ${recipe.name}`, 'success');
 }
 function cartLineTotal(line){ return line.unit_price * line.quantity; }
-function cartLogicLines(){ return posState.cart.map(l=>({recipe_id: l.recipe_id, unit_price: l.unit_price, quantity: l.quantity})); }
+function cartLogicLines(){ return posState.cart.map(l=>({recipe_id: l.recipe_id, unit_price: l.unit_price, quantity: l.quantity, senior: !!(l.senior && posState.senior)})); }
 // Totals always come from the shared maths, with the stamp reward (if one is applied) worked
 // out again from the cart as it is now.
-function currentCartTotals(){
-  return computeSaleTotals(cartLogicLines(), posState.discount, undefined, rewardAmountNow());
+// payment (optional, at checkout): {method, waive} adds the method's extra charge (1.6).
+function currentCartTotals(payment){
+  return computeSaleTotals(cartLogicLines(), posState.discount, undefined, rewardAmountNow(), payment ? {payment} : undefined);
 }
+// Is a Senior / PWD discount on this order (1.6)? Its lines are the customer's own items.
+function seniorOn(){ return !!posState.senior && seniorDiscountPct() > 0 && posState.cart.some(l => l.senior); }
 function clearCart(){
-  posState.cart = []; posState.discount = null; posState.resumingHeldSaleId = null; posState.customer = null; posState.qrOrder = null; posState.reward = null;
+  posState.cart = []; posState.discount = null; posState.resumingHeldSaleId = null; posState.customer = null; posState.qrOrder = null; posState.reward = null; posState.senior = null;
 }
 
 /* ================= Stamp card rewards at checkout (release 1.2) =================
@@ -1795,6 +1798,7 @@ async function recheckRewardOnline(c, key){
   return true;
 }
 async function applyReward(key){
+  if(seniorOn()){ toast('A stamp reward can\'t be used with a Senior / PWD discount. Remove that discount first, or ring this up as a separate sale.', 'warn'); return; }
   const c0 = posState.customer;
   if(!c0 || !usableRewards().some(x => rewardKey(x) === key)) return;
   if(!posState.cart.length){ toast('Add items to the order first, then apply the reward.', 'warn'); return; }
@@ -1972,9 +1976,13 @@ function renderCartPanel(){
   const panel = document.getElementById('pos-cart-panel');
   if(!panel) return;
   checkAppliedReward();
+  // Senior / PWD (1.6): gone when none of its items is left
+  if(posState.senior && !posState.cart.some(l => l.senior)) posState.senior = null;
+  if(!posState.senior) posState.cart.forEach(l => { if(l.senior) l.senior = false; });
   const totals = currentCartTotals();
   const q = posState.qrOrder;
   const a = posState.reward;
+  const sn = seniorOn() ? posState.senior : null;
   const free = totals.grandTotal <= 0 && posState.cart.length > 0;
   panel.innerHTML = `
     <div class="pos-cart-head"><h3>${q?`QR ${escapeHtml(q.order_number)}`:'Current order'}</h3>${posState.cart.length?`<button class="btn btn-ghost btn-sm" id="clear-cart">${icon('trash', {size: 18})} Clear</button>`:''}</div>
@@ -1988,6 +1996,7 @@ function renderCartPanel(){
             <div class="cart-line-main"><div class="cart-line-name">${escapeHtml(line.name)}</div>
               ${line.modifiers.length?`<div class="cart-line-mods">${line.modifiers.map(m=>escapeHtml(m.label)).join(' · ')}</div>`:''}
               ${line.notes?`<div class="cart-line-mods">“${escapeHtml(line.notes)}”</div>`:''}
+              ${sn && line.senior ? `<div class="cart-line-free">${icon('user', {size: 14})} ${escapeHtml(seniorKindLabel(sn.kind))} item</div>` : ''}
               ${a && a.reward.type==='FREE_ITEM' && a.recipe_id===line.recipe_id && posState.cart.find(l=>l.recipe_id===a.recipe_id)===line ? `<div class="cart-line-free">${icon('gift', {size: 14})} One free (stamp reward)</div>` : ''}</div>
             <div class="cart-line-price">${fmtMoney(cartLineTotal(line))}</div>
           </div>
@@ -2004,6 +2013,10 @@ function renderCartPanel(){
         <span>${totals.discountAmt>0?'-'+fmtMoney(totals.discountAmt):fmtMoney(0)} ${!posState.discount?`<a class="linklike" id="add-discount-link" role="button" tabindex="0">add</a>`:`<a class="linklike" id="remove-discount-link" role="button" tabindex="0">remove</a>`}</span></div>
       ${a?`<div class="row reward" id="reward-row"><span class="rw-label">${icon('gift', {size: 16})}<span>Stamp reward · ${escapeHtml(rewardLineName(a))}${a.offline?' <small>(checked when online)</small>':''}</span></span>
         <span class="rw-amt">-${fmtMoney(totals.loyaltyDiscount)} <a class="linklike" id="reward-remove" role="button" tabindex="0">remove</a></span></div>`:''}
+      ${sn ? `${totals.vatExempt>0?`<div class="row"><span>VAT exempt</span><span>-${fmtMoney(totals.vatExempt)}</span></div>`:''}
+        <div class="row reward" id="senior-row"><span class="rw-label">${icon('user', {size: 16})}<span>${escapeHtml(seniorKindLabel(sn.kind))} discount (${totals.seniorPct}%) · ${escapeHtml(sn.holder_name)}</span></span>
+        <span class="rw-amt">-${fmtMoney(totals.seniorDiscount)} <a class="linklike" id="senior-edit" role="button" tabindex="0">edit</a> <a class="linklike" id="senior-remove" role="button" tabindex="0">remove</a></span></div>`
+        : (seniorDiscountPct() > 0 && posState.cart.length ? `<div class="row"><span>Senior / PWD discount</span><span><a class="linklike" id="senior-add" role="button" tabindex="0">add</a></span></div>` : '')}
       ${state.settings.tax_pct>0?`<div class="row"><span>Tax (${state.settings.tax_pct}%${state.settings.tax_inclusive?' incl.':''})</span><span>${fmtMoney(totals.tax)}</span></div>`:''}
       ${state.settings.service_charge_pct>0?`<div class="row"><span>Service charge (${state.settings.service_charge_pct}%)</span><span>${fmtMoney(totals.serviceCharge)}</span></div>`:''}
       <div class="row total"><span class="total-label">Total</span><span class="total-amount">${fmtMoney(totals.grandTotal)}</span></div>
@@ -2033,8 +2046,12 @@ function renderCartPanel(){
   clickish(document.getElementById('add-discount-link'), openDiscountPicker);
   clickish(document.getElementById('remove-discount-link'), ()=>{ posState.discount=null; renderCartPanel(); });
   clickish(document.getElementById('reward-remove'), ()=>{ posState.reward = null; renderCartPanel(); toast('Stamp reward removed'); });
+  clickish(document.getElementById('senior-add'), openSeniorDialog);
+  clickish(document.getElementById('senior-edit'), openSeniorDialog);
+  clickish(document.getElementById('senior-remove'), ()=>{ posState.senior = null; renderCartPanel(); toast('Senior / PWD discount removed'); });
   const discBtn = document.getElementById('cart-discount-btn');
   if(discBtn) discBtn.onclick = ()=>{ if(posState.discount){ posState.discount = null; renderCartPanel(); } else openDiscountPicker(); };
+  if(sn){ const al = document.getElementById('add-discount-link'); if(al) al.closest('.row').hidden = true; if(discBtn) discBtn.disabled = true; }
   const custAdd = document.getElementById('cust-add'); if(custAdd) custAdd.onclick = ()=>openCustomerPicker();
   const custRm = document.getElementById('cust-remove'); if(custRm) custRm.onclick = ()=>{ posState.customer = null; renderCartPanel(); };
   const holdBtn = document.getElementById('hold-order-btn'); if(holdBtn) holdBtn.onclick = holdCurrentOrder;
@@ -2061,7 +2078,76 @@ function editLineNote(line){
     onMount:(root)=>{ root.querySelector('[data-cancel]').onclick = closeModal; root.querySelector('#ln-save').onclick = ()=>{ line.notes = root.querySelector('#ln-note').value.trim(); closeModal(); renderCartPanel(); }; }});
 }
 
+/* ================= Senior / PWD discount (release 1.6, B19) =================
+   Owner decisions 2026-11-12: any cashier can apply it (no manager PIN), but the name and
+   ID number are required; it applies only to the customer's own items (the ones ticked;
+   a line with several pieces is split); the % comes from the shop's settings; it is never
+   combined with a manager discount or a stamp reward. The server checks all of this
+   (BAD_SENIOR) and keeps the name + ID where only the owner's report can read them. */
+function openSeniorDialog(){
+  if(!posState.cart.length) return;
+  const cur = posState.senior || {kind: 'SENIOR', holder_name: '', id_number: ''};
+  const pct = seniorDiscountPct();
+  const other = posState.discount || posState.reward;
+  openModal({title: 'Senior / PWD discount', body: `
+    <p class="text-light" style="margin-top:0;">${pct}% off the customer's own items${state.settings.tax_inclusive && Number(state.settings.tax_pct) > 0 ? ', after taking out the VAT' : ''}. Ask for the ID card.</p>
+    ${other ? `<div class="banner warn" style="margin-bottom:10px;">This can't be combined with ${posState.discount ? 'the discount' : 'the stamp reward'} on this order. Saving here removes it.</div>` : ''}
+    <div class="form-row"><label id="sn-kind-lbl">Who is it for?</label>
+      <div class="seg" role="group" aria-labelledby="sn-kind-lbl" id="sn-kind">
+        <button type="button" class="seg-btn ${cur.kind !== 'PWD' ? 'active' : ''}" data-kind="SENIOR">Senior citizen</button>
+        <button type="button" class="seg-btn ${cur.kind === 'PWD' ? 'active' : ''}" data-kind="PWD">PWD</button></div></div>
+    <div class="form-row"><label for="sn-name">Name on the ID</label><input id="sn-name" maxlength="80" autocomplete="off" value="${escapeHtml(cur.holder_name)}"></div>
+    <div class="form-row"><label for="sn-id">ID number</label><input id="sn-id" maxlength="40" autocomplete="off" value="${escapeHtml(cur.id_number)}"></div>
+    <div class="form-row"><label>Which items are theirs?</label>
+      <div id="sn-items">${posState.cart.map(l => `
+        <label class="sn-item" style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line, #eee);">
+          <input type="checkbox" data-sn-line="${l.lineId}" ${l.senior ? 'checked' : ''} style="width:20px;height:20px;">
+          <span style="flex:1;">${escapeHtml(l.name)}${l.modifiers.length ? ` <small class="text-light">${l.modifiers.map(m => escapeHtml(m.label)).join(' · ')}</small>` : ''}</span>
+          ${Number(l.quantity) > 1 ? `<span style="white-space:nowrap;">how many? <input type="number" min="1" max="${Number(l.quantity)}" step="1" value="${l.senior ? Number(l.quantity) : 1}" data-sn-qty="${l.lineId}" inputmode="numeric" style="width:64px;" aria-label="How many ${escapeHtml(l.name)} are theirs"> of ${Number(l.quantity)}</span>` : ''}
+          <span>${fmtMoney(cartLineTotal(l))}</span></label>`).join('')}</div></div>`,
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="sn-save">Apply discount</button>`,
+    onMount: (root)=>{
+      let kind = cur.kind === 'PWD' ? 'PWD' : 'SENIOR';
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      root.querySelectorAll('[data-kind]').forEach(b => b.onclick = ()=>{ kind = b.dataset.kind; root.querySelectorAll('[data-kind]').forEach(x => x.classList.toggle('active', x === b)); });
+      root.querySelector('#sn-save').onclick = ()=>{
+        const name = root.querySelector('#sn-name').value.replace(/\s+/g, ' ').trim();
+        const idno = root.querySelector('#sn-id').value.replace(/\s+/g, ' ').trim();
+        if(name.length < 2){ toast('Type the name on the ID.', 'error'); root.querySelector('#sn-name').focus(); return; }
+        if(idno.length < 3){ toast('Type the ID number.', 'error'); root.querySelector('#sn-id').focus(); return; }
+        const picks = {};
+        root.querySelectorAll('[data-sn-line]').forEach(c => {
+          if(!c.checked) return;
+          const line = posState.cart.find(l => l.lineId === c.dataset.snLine);
+          if(!line) return;
+          const qi = root.querySelector(`[data-sn-qty="${c.dataset.snLine}"]`);
+          const n = qi ? Math.floor(Number(qi.value)) : Number(line.quantity);
+          picks[line.lineId] = Math.max(1, Math.min(Number(line.quantity), isFinite(n) ? n : 1));
+        });
+        if(!Object.keys(picks).length){ toast('Tick the items that are for this customer.', 'error'); return; }
+        // tick the lines; a line with more pieces than theirs is split in two
+        const cart = [];
+        posState.cart.forEach(l => {
+          const n = picks[l.lineId] || 0, q = Number(l.quantity);
+          if(!n){ l.senior = false; cart.push(l); return; }
+          if(n >= q){ l.senior = true; cart.push(l); return; }
+          cart.push(Object.assign({}, l, {quantity: q - n, senior: false}));
+          cart.push(Object.assign({}, l, {lineId: uid(), quantity: n, senior: true}));
+        });
+        posState.cart = cart;
+        posState.senior = {kind, holder_name: name, id_number: idno};
+        if(posState.discount || posState.reward){
+          posState.discount = null; posState.reward = null;
+          toast('The other discount was removed: it can\'t be combined with a Senior / PWD discount.', 'warn');
+        }
+        closeModal(); renderCartPanel();
+      };
+      setTimeout(()=> root.querySelector('#sn-name').focus(), 50);
+    }});
+}
+
 async function openDiscountPicker(){
+  if(seniorOn()){ toast('A discount can\'t be combined with a Senior / PWD discount. Remove that one first, or ring this up as a separate sale.', 'warn'); return; }
   const approver = await requireOverride('MANAGER');
   if(!approver) return;
   openModal({title:'Apply Discount', body:`
@@ -2180,6 +2266,11 @@ async function holdCurrentOrder(){
   if(posState.reward){
     posState.reward = null;
     toast('Held orders don\'t keep a stamp reward. Apply it again when you finish this order.', 'warn');
+  }
+  // Nor a Senior / PWD discount (the name and ID number are only sent with a finished sale).
+  if(posState.senior){
+    posState.senior = null; posState.cart.forEach(l => { l.senior = false; });
+    toast('Held orders don\'t keep a Senior / PWD discount. Apply it again when you finish this order.', 'warn');
   }
   const now = new Date().toISOString();
   const saleId = posState.resumingHeldSaleId || uid();
@@ -2331,37 +2422,61 @@ function openStockProblems(onReady, opts){
 }
 
 /* ================= Checkout ================= */
-const PAY_METHOD_ICONS = {CASH:'cash', GCASH:'phone', MAYA:'phone', CARD:'card', OTHER:'receipt'};
+const PAY_METHOD_ICONS = {CASH:'cash', GCASH:'phone', MAYA:'phone', QR:'qr', CARD:'card', BANK:'receipt', OTHER:'receipt'};
+// Release 1.6: the methods come from the shop's own list (Back Office → Settings → Payment
+// methods). A method can carry an extra charge: it shows as its own line with an "Add to
+// bill" tick; unticking waives it (the shop absorbs it). The total follows the method.
 function openCheckout(){
   if(posState.cart.length===0) return;
   if(!cartStockOk(openCheckout)) return;                 // out-of-stock items must be removed first (Q6)
   checkAppliedReward();
-  const totals = currentCartTotals();
   // The stamp reward covers everything: nothing to pay, one tap finishes the sale.
-  if(totals.grandTotal <= 0){ openFreeCheckout(totals); return; }
-  let method = 'CASH';
+  if(currentCartTotals().grandTotal <= 0){ openFreeCheckout(currentCartTotals()); return; }
+  const methods = activePaymentMethods();
+  let method = methods[0].id;
+  let waive = methods[0].charge_default === 'WAIVE';
   let tendered = 0;
+  let totals = currentCartTotals({method, waive});
   const a = posState.reward;
+  const sn = seniorOn() ? posState.senior : null;
   const body = `
     <div class="checkout-due"><div class="lbl">Total due</div>
-      <div class="val">${fmtMoney(totals.grandTotal)}</div>
-      ${a?`<div class="checkout-reward">${icon('gift', {size: 16})} Stamp reward: -${fmtMoney(totals.loyaltyDiscount)} (${escapeHtml(rewardLineName(a))})</div>`:''}</div>
-    <div class="pay-methods five" id="pay-methods">
-      ${PAYMENT_METHODS.map((m,i)=>`<button class="pay-method-btn ${i===0?'selected':''}" data-method="${m.id}">${icon(PAY_METHOD_ICONS[m.id] || 'receipt', {size: 26})}<span>${escapeHtml(m.label)}</span></button>`).join('')}
+      <div class="val" id="due-val">${fmtMoney(totals.grandTotal)}</div>
+      ${a?`<div class="checkout-reward">${icon('gift', {size: 16})} Stamp reward: -${fmtMoney(totals.loyaltyDiscount)} (${escapeHtml(rewardLineName(a))})</div>`:''}
+      ${sn?`<div class="checkout-reward">${icon('user', {size: 16})} ${escapeHtml(seniorKindLabel(sn.kind))} discount: -${fmtMoney(totals.seniorDiscount + totals.vatExempt)}</div>`:''}</div>
+    <div class="pay-methods ${methods.length === 5 ? 'five' : ''}" id="pay-methods">
+      ${methods.map((m,i)=>`<button class="pay-method-btn ${i===0?'selected':''}" data-method="${escapeHtml(m.id)}">${icon(PAY_METHOD_ICONS[m.id] || 'receipt', {size: 26})}<span>${escapeHtml(m.label)}</span></button>`).join('')}
     </div>
+    <div id="pay-charge"></div>
     <div id="pay-detail"></div>`;
   const foot = `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="complete-sale-btn">Complete sale</button>`;
   openModal({title:'Checkout', body, foot, onMount:(root)=>{
     root.querySelector('[data-cancel]').onclick = closeModal;
     const detailWrap = root.querySelector('#pay-detail');
+    const chargeWrap = root.querySelector('#pay-charge');
+    function renderCharge(){
+      const m = paymentMethod(method);
+      totals = currentCartTotals({method, waive});
+      root.querySelector('#due-val').textContent = fmtMoney(totals.grandTotal);
+      if(!(totals.paymentFee > 0)){ chargeWrap.innerHTML = ''; return; }
+      chargeWrap.innerHTML = `
+        <label class="pay-charge-row" style="display:flex;gap:10px;align-items:flex-start;margin:0 0 14px;padding:10px 12px;border:1px solid var(--line, #e5e0d8);border-radius:10px;">
+          <input type="checkbox" id="pay-charge-add" ${waive ? '' : 'checked'} style="margin-top:2px;width:20px;height:20px;">
+          <span><b>Add the ${escapeHtml(m.label)} charge${m.charge_type === 'PERCENT' ? ` (${escapeHtml(paymentChargeWords(m))})` : ''}: ${fmtMoney(totals.paymentFee)}</b><br>
+            <small class="text-light" id="pay-charge-note">${waive ? `Waived: the customer doesn't pay it and the shop absorbs ${fmtMoney(totals.paymentFee)}.` : 'Untick to waive it for this sale (the shop absorbs it).'}</small></span>
+        </label>`;
+      chargeWrap.querySelector('#pay-charge-add').onchange = (e)=>{ waive = !e.target.checked; renderCharge(); renderDetail(); };
+    }
     function renderDetail(){
       if(method==='CASH'){
+        const keep = tendered;
         const quick = [...new Set([totals.grandTotal, 100, 200, 500, 1000].filter(v=>v>=totals.grandTotal || v===totals.grandTotal))].slice(0,5);
         detailWrap.innerHTML = `
           <div class="form-row"><label>Cash received</label><input type="number" step="any" inputmode="decimal" id="cash-tendered" placeholder="0.00"></div>
           <div class="quick-cash">${quick.map(v=>`<button data-quick="${v}">${v===totals.grandTotal?'Exact':fmtMoney(v)}</button>`).join('')}</div>
           <div class="change-display"><div class="lbl">Change</div><div class="val" id="change-val">₱0.00</div></div>`;
         const input = detailWrap.querySelector('#cash-tendered');
+        if(keep) input.value = keep;
         function updateChange(){
           tendered = Number(input.value)||0;
           const change = tendered - totals.grandTotal;
@@ -2373,21 +2488,27 @@ function openCheckout(){
         updateChange();
         setTimeout(()=>input.focus(), 50);
       } else {
-        const label = PAYMENT_METHODS.find(m=>m.id===method).label;
+        const m = paymentMethod(method);
+        const label = m ? m.label : method;
+        const keepRef = (detailWrap.querySelector('#pay-ref') || {}).value || '';
+        const keepOk = !!(detailWrap.querySelector('#pay-confirmed') || {}).checked;
         detailWrap.innerHTML = `
-          <div class="form-row"><label>Reference # (optional)</label><input id="pay-ref" placeholder="e.g. ${label} reference number"></div>
+          ${m && m.reference ? `<div class="form-row"><label>Reference # (optional)</label><input id="pay-ref" maxlength="80" placeholder="e.g. ${escapeHtml(label)} reference number" value="${escapeHtml(keepRef)}"></div>` : ''}
           <label style="display:flex;gap:8px;align-items:flex-start;font-size:13.5px;margin-top:10px;">
-            <input type="checkbox" id="pay-confirmed" style="margin-top:3px;width:16px;height:16px;">
-            <span>I checked that this ${escapeHtml(label)} payment was actually received (in the app / SMS / terminal). This app cannot confirm electronic payments by itself.</span>
+            <input type="checkbox" id="pay-confirmed" ${keepOk ? 'checked' : ''} style="margin-top:3px;width:16px;height:16px;">
+            <span>I checked that this ${escapeHtml(label)} payment of <b>${fmtMoney(totals.grandTotal)}</b> was actually received (in the app / SMS / terminal). This app cannot confirm electronic payments by itself.</span>
           </label>`;
       }
     }
     root.querySelectorAll('[data-method]').forEach(b=> b.onclick = ()=>{
       method = b.dataset.method;
+      const m = paymentMethod(method);
+      waive = !!m && m.charge_default === 'WAIVE';
       root.querySelectorAll('[data-method]').forEach(x=>x.classList.toggle('selected', x===b));
-      renderDetail();
+      detailWrap.innerHTML = '';
+      renderCharge(); renderDetail();
     });
-    renderDetail();
+    renderCharge(); renderDetail();
     root.querySelector('#complete-sale-btn').onclick = async (ev)=>{
       if(method==='CASH'){
         if(tendered < totals.grandTotal){ toast('Cash received is less than the total due','error'); return; }
@@ -2405,7 +2526,7 @@ function openCheckout(){
         return;
       }
       const paymentInfo = {
-        method, amount: totals.grandTotal,
+        method, waive, amount: totals.grandTotal,
         tendered: method==='CASH'? tendered : null,
         change: method==='CASH'? Math.max(0,tendered-totals.grandTotal) : null,
         reference: method!=='CASH' ? (detailWrap.querySelector('#pay-ref')?.value||'') : '',
@@ -2456,10 +2577,15 @@ function saleRewardLabel(sale){
 async function completeSale(paymentInfo){
   const now = new Date().toISOString();
   checkAppliedReward();
-  let totals = currentCartTotals();
+  // 1.6: the payment method's extra charge (added or waived) is part of the totals
+  const payFor = (paymentInfo.method && paymentInfo.method !== 'OTHER') ? {method: paymentInfo.method, waive: !!paymentInfo.waive} : null;
+  // a Senior / PWD discount is never combined with another discount or a reward
+  if(seniorOn()){ posState.discount = null; posState.reward = null; }
+  let totals = currentCartTotals(payFor);
   // A reward that takes nothing off (e.g. a 100% discount) is not used up.
-  if(posState.reward && !(totals.loyaltyDiscount > 0)){ posState.reward = null; totals = currentCartTotals(); }
+  if(posState.reward && !(totals.loyaltyDiscount > 0)){ posState.reward = null; totals = currentCartTotals(payFor); }
   const applied = posState.reward;
+  const senior = seniorOn() && totals.seniorDiscount + totals.vatExempt > 0 ? posState.senior : null;
   const saleId = posState.resumingHeldSaleId || uid();
   const existing = state.sales.find(s=>s.id===saleId);
   const shift = activeShift();
@@ -2473,6 +2599,9 @@ async function completeSale(paymentInfo){
     subtotal: totals.subtotal, discount_type: posState.discount ? posState.discount.type : null, discount_value: posState.discount ? posState.discount.value : 0,
     discount_amount: totals.discountAmt, tax_amount: totals.tax, service_charge_amount: totals.serviceCharge,
     grand_total: totals.grandTotal, notes: '',
+    senior_kind: senior ? senior.kind : null, senior_items_amount: senior ? totals.seniorItems : 0,
+    vat_exempt_amount: senior ? totals.vatExempt : 0, senior_discount: senior ? totals.seniorDiscount : 0,
+    payment_charge: totals.paymentCharge, payment_fee: totals.paymentFee,
     discount_approved_by: posState.discount ? posState.discount.approvedById : null,
     discount_approved_by_name: posState.discount ? posState.discount.appliedBy : null,
     source: q ? 'QR' : 'COUNTER', qr_order_id: q ? q.id : null,
@@ -2483,11 +2612,12 @@ async function completeSale(paymentInfo){
   // Stamp reward (contract D): {loyalty_reward:{customer_id, card_no, milestone, recipe_id}, loyalty_discount}.
   // Without one: loyalty_discount 0. The server checks it and refuses the whole sale if it doesn't fit.
   Object.assign(sale, saleLoyaltyFields(applied ? applied.reward : null, applied ? sale.customer_id : null, totals.loyaltyDiscount, applied ? applied.recipe_id : null));
-  const items = posState.cart.map(line=>({
+  const items = posState.cart.map((line, i)=>({
     id: uid(), sale_id: saleId, recipe_id: line.recipe_id, name: line.name, quantity: line.quantity,
     unit_price: line.unit_price, modifiers: line.modifiers, line_total: cartLineTotal(line), notes: line.notes||null, created_at: now,
+    senior_discount: senior ? (totals.seniorLineDiscounts[i] || 0) : 0,
   }));
-  const payment = {id: uid(), sale_id: saleId, method: paymentInfo.method, amount: paymentInfo.amount, tendered: paymentInfo.tendered,
+  const payment = {id: uid(), sale_id: saleId, method: paymentInfo.method, amount: totals.grandTotal, tendered: paymentInfo.tendered,
     change: paymentInfo.change, reference: paymentInfo.reference, status: 'CONFIRMED', created_at: now};
   // Inventory deduction — same recipe traversal as the original app (incl. modifier stock).
   const inventory = [];
@@ -2498,7 +2628,14 @@ async function completeSale(paymentInfo){
     });
   });
   const saleOp = {sale, items, payment, inventory};
+  noteStockMoved(inventory);
   if(posState.discount) saleOp.discount_approval_token = posState.discount.approvalToken || null;
+  if(senior){
+    // name + ID number go up with the sale; this counter only keeps them for this session's receipt
+    saleOp.senior = {kind: senior.kind, holder_name: senior.holder_name, id_number: senior.id_number};
+    posState.seniorBySale = posState.seniorBySale || {};
+    posState.seniorBySale[saleId] = saleOp.senior;
+  }
   await Sync.queue('sale', saleOp);
   queueAudit('Sale completed', `${sale.transaction_number} — ${fmtMoney(sale.grand_total)} (${paymentInfo.method})${q?' · QR '+q.order_number:''}`, saleId);
   const customerName = posState.customer ? posState.customer.nickname : null;
@@ -2537,7 +2674,8 @@ function receiptParts(saleId, dataset, opts){
   const payments = dataset.payments.filter(p=>p.sale_id===saleId);
   const qr = sale.qr_order_id ? state.qrOrders.find(o=>o.id===sale.qr_order_id) : null;
   const customerName = (opts && opts.customerName) || (qr ? qr.customer_nickname : null);
-  return {sale, items, payments, ropts: {qrOrder: qr, customerName, rewardLabel: saleRewardLabel(sale)}};
+  return {sale, items, payments, ropts: {qrOrder: qr, customerName, rewardLabel: saleRewardLabel(sale),
+    senior: (posState.seniorBySale && posState.seniorBySale[saleId]) || null}};
 }
 // The browser's print screen with this receipt (only from a "Use print screen" tap).
 function openReceiptScreen(parts, autoPrint){
@@ -3906,6 +4044,7 @@ async function submitWaste(d, root, btn){
   }
   btn.disabled = true;
   const cost = wasteCostInfo(data.items);
+  noteStockMoved(wasteStockDeltas(data));
   await Sync.queue('waste', data);
   await rememberWaste({id: data.id, shift_id: data.shift_id, reason: data.reason, logged_at: data.logged_at,
     staff_name: me.name, lines: d.items.length, text: d.items.map(wasteLineText).join('; '), cost: cost.known ? cost.cost : null});
@@ -4034,6 +4173,7 @@ async function submitBaristaDrink(d, root, btn){
   btn.disabled = true;
   const text = data.items.map(it => { const ing = ingredientById(it.ingredient_id); return `${Number(it.quantity)} ${unitLabel(it.unit || (ing ? ing.base_unit : ''))} ${ing ? ing.name : ''}`.trim(); }).join('; ');
   const cost = wasteCostInfo(data.items);
+  noteStockMoved(wasteStockDeltas(data));
   await Sync.queue('waste', data);
   await rememberWaste({id: data.id, shift_id: data.shift_id, reason: data.reason, logged_at: data.logged_at, kit: true,
     staff_name: me.name, lines: data.items.length, text: 'Barista drink: ' + text, cost: cost.known ? cost.cost : null});
@@ -4115,7 +4255,8 @@ async function renderShiftScreen(opts){
       ${statCard(SALES_LABELS.netSales, fmtMoney(m.netSales), escapeHtml(SALES_HINTS.netSales))}${statCard('Transactions', m.transactionCount, `${m.voidedCount} voided`)}
     </div>
     <div class="section-title">Payment Breakdown</div>
-    <div class="grid grid-3">${statCard('Cash', fmtMoney(m.cashGross),'')}${statCard('Card', fmtMoney(m.cardGross),'')}${statCard('GCash / Maya / Other', fmtMoney(m.otherGross),'')}</div>
+    <div class="grid grid-3">${(m.byMethod.length ? m.byMethod : [{label: 'Cash', total: 0, count: 0}]).map(x => statCard(x.label, fmtMoney(x.total), `${x.count} sale${x.count === 1 ? '' : 's'}`)).join('')}</div>
+    ${m.chargesWaived > 0 ? `<p class="text-light" style="margin:8px 0 0;">Payment charges waived this shift: ${fmtMoney(m.chargesWaived)}</p>` : ''}
     <div class="section-title">Cash Drawer (live)</div>
     <div class="card drawer-card">
       <div class="drow"><span>Opening Cash</span><b>${fmtMoney(m.openingCash)}</b></div>
@@ -4183,7 +4324,12 @@ async function openCloseShiftFlow(){
   const shift = activeShift();
   if(!shift) return;
   // Release 1.5 (B9): with items ticked "Count at closing", staff count them first (blind).
-  if(countAtCloseIngredients().length){
+  // Release 1.6 (B20): only the items that are DUE (stock changed since their last count, or
+  // not counted for a week): the server says which. Nothing due = no count step.
+  if(btn){ btn.disabled = true; btn.textContent = 'Checking…'; }
+  await refreshCountDue(shift);
+  if(btn){ btn.disabled = false; btn.textContent = 'Close shift'; }
+  if(countDueIngredients().length){
     openStockCount(shift, (count)=> showCloseShiftDialog(shift, closer, closeApprovalToken, checked, {count}));
     return;
   }
@@ -4197,6 +4343,43 @@ async function openCloseShiftFlow(){
    'stock_count' right before 'shift_close' (the outbox uploads in order), so it works offline.
    What staff type is kept on this counter until the shift closes (a reload loses nothing). */
 const COUNT_DRAFT_KEY = 'cccc.fo.countDraft';
+/* Smart count (release 1.6, B20). The SERVER decides which ticked items are due (fo_count_due).
+   Online: asked at Close shift. Offline (or the server can't be reached): the last list this
+   counter got, plus the ticked items this counter moved itself since (sales, refunds, waste).
+   No list ever received: every ticked item (the 1.5 behaviour). */
+const COUNT_DUE_KEY = 'cccc.fo.countDue', COUNT_MOVED_KEY = 'cccc.fo.countMoved';
+function _readIds(key){ try{ const v = JSON.parse(localStorage.getItem(key) || 'null'); return Array.isArray(v) ? v.map(String) : null; }catch(e){ return null; } }
+function _saveIds(key, ids){ try{ localStorage.setItem(key, JSON.stringify([...new Set(ids)])); }catch(e){} }
+// Remember the ticked items this counter just moved (so they are asked even when offline).
+function noteStockMoved(lines){
+  try{
+    const ticked = new Set(state.ingredients.filter(isCountAtClose).map(i => i.id));
+    if(!ticked.size) return;
+    const cur = _readIds(COUNT_MOVED_KEY) || [];
+    (lines || []).forEach(l => { const id = l && l.ingredient_id ? mergeTarget(l.ingredient_id).id : null; if(id && ticked.has(id)) cur.push(id); });
+    _saveIds(COUNT_MOVED_KEY, cur);
+  }catch(e){}
+}
+// After a count is queued: those items are no longer "moved" / due on this counter.
+function countedNow(ids){
+  const done = new Set((ids || []).map(id => mergeTarget(id).id).concat(ids || []));
+  _saveIds(COUNT_MOVED_KEY, (_readIds(COUNT_MOVED_KEY) || []).filter(id => !done.has(id)));
+  const due = _readIds(COUNT_DUE_KEY);
+  if(due) _saveIds(COUNT_DUE_KEY, due.filter(id => !done.has(id)));
+}
+async function refreshCountDue(shift){
+  if(!state.ingredients.some(isCountAtClose)){ setCountDue([]); return; }
+  let ids = null;
+  if(isOnline()){
+    try{
+      const r = await cloud.rpc('fo_count_due', {p_shift_id: shift ? shift.id : null}, {timeout: 6000});
+      if(r && Array.isArray(r.items)){ ids = r.items.map(String); _saveIds(COUNT_DUE_KEY, ids); }
+    }catch(e){ /* offline or the server can't be reached: the last list is used */ }
+  }
+  if(ids === null) ids = _readIds(COUNT_DUE_KEY);
+  if(ids === null){ setCountDue(null); return; }          // never got a list: count every ticked item
+  setCountDue(ids.concat(_readIds(COUNT_MOVED_KEY) || []));
+}
 function countDraft(shift){
   let d = null;
   try{ d = JSON.parse(localStorage.getItem(COUNT_DRAFT_KEY) || 'null'); }catch(e){ d = null; }
@@ -4207,7 +4390,7 @@ function saveCountDraft(d){ try{ localStorage.setItem(COUNT_DRAFT_KEY, JSON.stri
 function clearCountDraft(){ try{ localStorage.removeItem(COUNT_DRAFT_KEY); }catch(e){} }
 // Typed lines for the ticked items (blank ones left out: buildStockCountData names them).
 function countLinesFromDraft(d){
-  return countAtCloseIngredients().map(ing => {
+  return countDueIngredients().map(ing => {
     const e = d.lines[ing.id];
     if(!e || String(e.quantity == null ? '' : e.quantity).trim() === '') return null;
     return {ingredient_id: ing.id, quantity: Number(e.quantity), unit: e.unit || ing.base_unit};
@@ -4251,9 +4434,9 @@ function wireCountRows(root, d, attr){
 // Step 1: the count list (ticked items only, no expected amounts).
 function openStockCount(shift, onDone){
   const d = countDraft(shift);
-  const items = countAtCloseIngredients();
+  const items = countDueIngredients();
   openModal({title: 'Count before closing', wide: true, body: `
-    <p class="hint waste-intro">Count or weigh each item and type what is there now. Type 0 if there is none. The expected amounts are hidden on purpose.</p>
+    <p class="hint waste-intro">Count or weigh each item and type what is there now. Type 0 if there is none. The expected amounts are hidden on purpose.${countDueKnown() ? ' Only items whose stock changed since their last count (or that are due for a weekly check) are listed.' : ''}</p>
     <div class="waste-lines" id="count-lines">${items.map(ing => countRowHtml(ing, d.lines[ing.id], 'data-cqty')).join('')}</div>
     <div class="form-row" style="margin-top:12px;"><label for="count-note">Note <span class="text-light">(optional)</span></label>
       <input id="count-note" maxlength="${STOCK_COUNT_NOTE_MAX}" value="${escapeHtml(d.note || '')}" placeholder="e.g. One milk carton opened today"></div>
@@ -4286,7 +4469,7 @@ function openStockCount(shift, onDone){
 }
 // Step 2: the double-check. Only the items that differ, without saying by how much or which way.
 function openCountDoubleCheck(shift, d, ids, onDone){
-  const items = countAtCloseIngredients().filter(ing => ids.includes(ing.id) || ids.includes(mergeTarget(ing.id).id));
+  const items = countDueIngredients().filter(ing => ids.includes(ing.id) || ids.includes(mergeTarget(ing.id).id));
   openModal({title: 'Please recount these', wide: true, body: `
     <div class="notice warn">${icon('alert', {size: 18})} <span>${items.length === 1 ? 'This item doesn\'t' : `These ${items.length} items don't`} match what the shop expects. Count ${items.length === 1 ? 'it' : 'them'} again and fix the number if needed, then confirm.</span></div>
     <div class="waste-lines" id="recount-lines">${items.map(ing => countRowHtml(ing, d.lines[ing.id], 'data-rqty')).join('')}</div>
@@ -4389,7 +4572,7 @@ function showCloseShiftDialog(shift, closer, closeApprovalToken, checked, preset
         if(closeApprovalToken) closeOp.approval_token = closeApprovalToken;
         // Release 1.5 (B9): the count goes first (the server closes the shift only after a full count).
         let countData = null;
-        if(countAtCloseIngredients().length){
+        if(countDueIngredients().length){
           const cd = preset && preset.count ? preset.count.draft : null;
           try{
             if(!cd) throw Object.assign(new Error('COUNT_REQUIRED'), {code: 'COUNT_REQUIRED'});
@@ -4404,6 +4587,7 @@ function showCloseShiftDialog(shift, closer, closeApprovalToken, checked, preset
         }
         if(countData){
           await Sync.queue('stock_count', countData);
+          countedNow(countData.lines.map(l => l.ingredient_id));
           queueAudit('Stock count at closing', `${shift.shift_number} — ${countData.lines.length} item(s) counted${countData.note ? ' (note: ' + countData.note + ')' : ''}`, countData.id);
           clearCountDraft();
         }
@@ -4474,7 +4658,7 @@ function shiftReportHtml(shift, m, isX){
     ${shiftSalesLines(shift, m).map(r=>`<div class="row"><span>${escapeHtml(r.label)}</span><b>${r.text}</b></div>`).join('\n    ')}<hr>
     <div class="row"><span>Cash</span><b>${fmtMoney(v('cash_sales', m.cashGross))}</b></div>
     <div class="row"><span>Card</span><b>${fmtMoney(v('card_sales', m.cardGross))}</b></div>
-    <div class="row"><span>GCash / Maya / Other</span><b>${fmtMoney(v('other_sales', m.otherGross))}</b></div><hr>
+    <div class="row"><span>Other methods</span><b>${fmtMoney(v('other_sales', m.otherGross))}</b></div><hr>
     <div class="row"><span>Opening Cash</span><b>${fmtMoney(shift.opening_cash)}</b></div>
     <div class="row"><span>Pay Ins / Outs</span><b>+${fmtMoney(m.payIns)} / -${fmtMoney(m.payOuts)}</b></div>
     <div class="row"><span>Expected Cash</span><b>${fmtMoney(v('expected_cash', m.expectedCash))}</b></div>
@@ -4574,8 +4758,7 @@ async function renderSalesScreen(){
 function paymentWords(sale, pay){
   if(!pay) return '—';
   if(Number(sale.grand_total) === 0 && Number(sale.loyalty_discount) > 0) return 'Stamp reward';
-  const m = PAYMENT_METHODS.find(x => x.id === pay.method);
-  return escapeHtml(m ? m.label : pay.method);
+  return escapeHtml(paymentMethodLabel(pay.method));
 }
 function renderSaleDetail(saleId){
   const content = document.getElementById('content');
@@ -4598,14 +4781,14 @@ function renderSaleDetail(saleId){
       </div>
     </div>
     <div class="grid grid-4" style="margin-top:20px;">
-      ${statCard('Total', fmtMoney(sale.grand_total),'')}${statCard('Payment', escapeHtml(pay.method||'—'), pay.reference?('Ref '+escapeHtml(pay.reference)):'')}
-      ${statCard('Discount', Number(sale.discount_amount)>0?fmtMoney(sale.discount_amount):'—', [sale.discount_approved_by_name?('by '+escapeHtml(sale.discount_approved_by_name)):'', Number(sale.loyalty_discount)>0?('Stamp reward -'+fmtMoney(sale.loyalty_discount)):''].filter(Boolean).join(' · '))}
+      ${statCard('Total', fmtMoney(sale.grand_total),'')}${statCard('Payment', paymentWords(sale, pay.method ? pay : null), [pay.reference?('Ref '+escapeHtml(pay.reference)):'', Number(sale.payment_charge)>0?('Charge +'+fmtMoney(sale.payment_charge)):'', (Number(sale.payment_fee)||0)-(Number(sale.payment_charge)||0)>0.005?('Charge waived '+fmtMoney(Number(sale.payment_fee)-Number(sale.payment_charge))):''].filter(Boolean).join(' · '))}
+      ${statCard('Discount', Number(sale.discount_amount)>0?fmtMoney(sale.discount_amount):'—', [sale.discount_approved_by_name?('by '+escapeHtml(sale.discount_approved_by_name)):'', Number(sale.loyalty_discount)>0?('Stamp reward -'+fmtMoney(sale.loyalty_discount)):'', Number(sale.senior_discount)>0?(escapeHtml(seniorKindLabel(sale.senior_kind))+' -'+fmtMoney((Number(sale.senior_discount)||0)+(Number(sale.vat_exempt_amount)||0))):''].filter(Boolean).join(' · '))}
       ${statCard('Tax + Service', fmtMoney((Number(sale.tax_amount)||0)+(Number(sale.service_charge_amount)||0)),'')}
     </div>
     <div class="section-title">Items</div>
     <div class="table-wrap"><table><thead><tr><th>Item</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr></thead>
       <tbody>${items.map(it=>`<tr><td><b>${escapeHtml(it.name)}</b>${(it.modifiers||[]).length?`<div class="text-light" style="font-size:12px;">${it.modifiers.map(m=>escapeHtml(m.label)).join(', ')}</div>`:''}</td>
-        <td>${Number(it.quantity)}</td><td>${fmtMoney(it.unit_price)}</td><td>${fmtMoney(it.line_total)}</td></tr>`).join('')}</tbody></table></div>
+        <td>${Number(it.quantity)}</td><td>${fmtMoney(it.unit_price)}</td><td>${fmtMoney(it.line_total)}${Number(it.senior_discount)>0?`<div class="text-light" style="font-size:12px;">${escapeHtml(seniorKindLabel(sale.senior_kind))} -${fmtMoney(it.senior_discount)}</div>`:''}</td></tr>`).join('')}</tbody></table></div>
     ${refunds.length?`<div class="section-title">Refund / Void History</div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Reason</th><th>Approved By</th></tr></thead>
       <tbody>${refunds.map(r=>`<tr><td>${fmtDateTime(r.date)}</td><td>${r.type.replace(/_/g,' ')}</td><td>${fmtMoney(r.amount)}</td><td>${escapeHtml(r.reason||'—')}</td><td>${escapeHtml(r.approved_by_name||'')}</td></tr>`).join('')}</tbody></table></div>`:''}`;
   content.querySelector('#back-sh').onclick = ()=>navigatePOS('sales');
@@ -4711,6 +4894,7 @@ async function openRefundVoidFlow(sale, items, kind, ds){
           state.sales.push(Object.assign({}, sale));
           state.payments = state.payments.concat(dataset.payments.filter(p=>p.sale_id===sale.id && !state.payments.some(x=>x.id===p.id)));
         }
+        noteStockMoved(inventory);
         await Sync.queue('refund', {refund, inventory, sale_status: saleStatus, approval_token: approver.token || null});
         if(ds && ds!==state){ ds.refunds.push(refund); const s = ds.sales.find(x=>x.id===sale.id); if(s) s.status = saleStatus; }
         queueAudit(isVoid?'Sale voided':'Refund', `${sale.transaction_number} — ${fmtMoney(refund.amount)}${reason?' — '+reason:''} (approved by ${approver.name})`, sale.id);

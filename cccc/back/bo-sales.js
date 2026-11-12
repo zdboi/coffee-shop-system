@@ -25,7 +25,7 @@ function inRange(t, from, to){ const x = new Date(t).getTime(); return x >= from
 function salesIn(ds, from, to){ return ds.sales.filter(s => COUNTED(s) && inRange(s.transaction_date, from || ds.from, to || ds.to)); }
 function refundsIn(ds, from, to){ return ds.refunds.filter(r => r.type !== 'VOID' && inRange(r.date, from || ds.from, to || ds.to)); }
 function payMethod(ds, saleId){ const p = ds.payments.find(x => x.sale_id === saleId); return p ? p.method : null; }
-function payLabel(m){ const p = PAYMENT_METHODS.find(x => x.id === m); return p ? p.label : (m || '—'); }
+function payLabel(m){ return m ? paymentMethodLabel(m) : '—'; }
 // Totals for a set of counted sales (+ the refunds made in the same period).
 function salesSummary(ds, sales, refunds){
   refunds = refunds || refundsIn(ds);
@@ -380,7 +380,7 @@ function calRenderShift(body, ds, range, r){
     </div>
     ${Math.abs(lateDiff) > 0.009 ? `<div class="notice warn">Sales or refunds uploaded after this shift closed change its expected cash by ${fmtMoney(lateDiff)} (now ${fmtMoney(m.expectedCash)}). The figures above are what the cashier saw when closing.</div>` : ''}
     <div class="grid grid-4 cal-kpis">
-      ${statCard('Cash sales', fmtMoney(m.cashGross), '')}${statCard('Card', fmtMoney(m.cardGross), '')}${statCard('GCash / Maya / other', fmtMoney(m.otherGross), '')}${statCard('Refunds / voids', fmtMoney(m.refundsOnly) + ' / ' + fmtMoney(m.voidsOnly), `${m.voidedCount} voided sale${m.voidedCount === 1 ? '' : 's'}`)}
+      ${statCard('Cash sales', fmtMoney(m.cashGross), '')}${statCard('Card', fmtMoney(m.cardGross), '')}${statCard('Other methods', fmtMoney(m.otherGross), '')}${statCard('Refunds / voids', fmtMoney(m.refundsOnly) + ' / ' + fmtMoney(m.voidsOnly), `${m.voidedCount} voided sale${m.voidedCount === 1 ? '' : 's'}`)}
     </div>
     ${shift.notes ? `<p class="hint" style="margin-bottom:12px;">Notes: ${esc(shift.notes)}</p>` : ''}
     ${calDayDetail(ds, sales, refunds, '-' + (shift.shift_number || 'shift'))}`;
@@ -401,7 +401,7 @@ function printShiftSummary(shift, m){
     <div class="hint">${esc(SALES_HINTS.voids)}</div><hr>
     <div class="row"><span>Cash</span><b>${fmtMoney(v('cash_sales', m.cashGross))}</b></div>
     <div class="row"><span>Card</span><b>${fmtMoney(v('card_sales', m.cardGross))}</b></div>
-    <div class="row"><span>GCash / Maya / other</span><b>${fmtMoney(v('other_sales', m.otherGross))}</b></div><hr>
+    <div class="row"><span>Other methods</span><b>${fmtMoney(v('other_sales', m.otherGross))}</b></div><hr>
     <div class="row"><span>Opening cash</span><b>${fmtMoney(shift.opening_cash)}</b></div>
     <div class="row"><span>Pay ins / outs</span><b>+${fmtMoney(m.payIns)} / -${fmtMoney(m.payOuts)}</b></div>
     <div class="row"><span>Expected cash</span><b>${fmtMoney(v('expected_cash', m.expectedCash))}</b></div>
@@ -487,7 +487,7 @@ async function renderTransactions(){
       <div class="toolbar-left">
         ${rangePickerHtml(txFilter, 'tx')}
         <select class="filter" id="tx-status" aria-label="Status"><option value="">All statuses</option>${['COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED', 'VOIDED'].map(s => `<option value="${s}" ${txFilter.status === s ? 'selected' : ''}>${({COMPLETED: 'Completed', PARTIALLY_REFUNDED: 'Partly refunded', REFUNDED: 'Refunded', VOIDED: 'Voided'})[s]}</option>`).join('')}</select>
-        <select class="filter" id="tx-method" aria-label="Payment"><option value="">All payments</option>${PAYMENT_METHODS.map(p => `<option value="${p.id}" ${txFilter.method === p.id ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>
+        <select class="filter" id="tx-method" aria-label="Payment"><option value="">All payments</option>${paymentMethodList().map(p => `<option value="${esc(p.id)}" ${txFilter.method === p.id ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>
         <select class="filter" id="tx-source" aria-label="Source"><option value="">Counter and QR</option><option value="COUNTER" ${txFilter.source === 'COUNTER' ? 'selected' : ''}>Counter only</option><option value="QR" ${txFilter.source === 'QR' ? 'selected' : ''}>QR orders only</option></select>
         <select class="filter" id="tx-cashier" aria-label="Cashier"><option value="">All cashiers</option></select>
         <div class="search-box"><input type="text" id="tx-search" placeholder="Receipt #, item or cashier…" value="${esc(txFilter.search)}" aria-label="Search transactions"></div>

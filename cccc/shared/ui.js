@@ -231,7 +231,13 @@ const ERROR_TEXT = {
   // Release 1.5: barista calibration kit (B7)
   BAD_BARISTA_KIT: 'The barista drink kit could not be saved. Use at most 20 items, each once, with an amount above 0 in one of the item\'s units (switched-on stock items only).',
   // Release 1.5: count at closing (B9)
-  COUNT_REQUIRED: 'Count the ticked items before closing the shift.',
+  COUNT_REQUIRED: 'Count the items on the list before closing the shift.',
+  // release 1.6
+  BAD_SENIOR: 'The Senior / PWD discount could not be saved. It needs the customer\'s name and ID number, at least one ticked item, and no other discount or stamp reward on the same sale.',
+  BAD_PAYMENT_METHODS: 'The payment methods could not be saved. Cash must stay switched on with no charge, every method needs a name, and a charge must be above 0 (at most 25% or ₱1,000).',
+  BAD_SENIOR_PCT: 'The Senior / PWD discount must be between 0 and 100 percent.',
+  BAD_RECHECK_DAYS: 'Type a number of days between 1 and 60.',
+  BAD_RANGE: 'Choose a start date and an end date at most 400 days apart.',
   BAD_COUNT: 'This stock count could not be saved: count each ticked item once (only items ticked "Count at closing"). Check the list and count again.',
   COUNT_NOT_FOUND: 'That stock count was not found (it may have been removed). Refresh and try again.',
   // Release 1.5: R&D log (B8)
