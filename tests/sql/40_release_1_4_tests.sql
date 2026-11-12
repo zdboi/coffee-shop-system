@@ -27,6 +27,8 @@ create or replace function test.stock(p_ing uuid) returns numeric language sql a
   select coalesce((select stock from public.v_ingredient_stock where ingredient_id = p_ing), 0)
 $$;
 grant execute on all functions in schema test to anon, authenticated;
+-- 1.5 (012): put Zed back on phone c1 (see 42a_relink_c1.sql)
+\ir 42a_relink_c1.sql
 
 select business_id as biz from profiles where id = '00000000-0000-0000-0000-0000000000a1' \gset
 select qr_token as tok from dining_tables where business_id = :'biz' and kind = 'TAKEAWAY' limit 1 \gset

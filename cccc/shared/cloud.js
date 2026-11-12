@@ -446,6 +446,19 @@
       rpc(name, args, opts){
         return rest('POST', '/rpc/' + name, Object.assign({body: args || {}}, opts || {}));
       },
+      // Release 1.5 (B16): the stamp cards of many customers at once (Back Office, owner login):
+      // bo_customer_loyalty in pieces of at most 500 ids (the server's limit; BAD_REQUEST above it).
+      // ids: customer ids (duplicates / empty values dropped). -> {"<customer id>": <loyalty summary>, ...}
+      // (ids of another shop are simply not in the answer). No ids -> {} without asking the server.
+      async customerLoyalty(ids, opts){
+        const list = [...new Set((ids || []).filter(Boolean).map(String))];
+        const out = {};
+        for(let i = 0; i < list.length; i += 500){
+          const part = await api.rpc('bo_customer_loyalty', {p_customer_ids: list.slice(i, i + 500)}, opts);
+          if(part && typeof part === 'object') Object.assign(out, part);
+        }
+        return out;
+      },
       select(table, query, opts){
         return rest('GET', '/' + table + '?' + buildQuery(query), opts || {});
       },

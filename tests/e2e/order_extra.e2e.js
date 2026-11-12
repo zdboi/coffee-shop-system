@@ -101,7 +101,10 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
   await b.waitForTimeout(350); await b.screenshot({path: shotPath('04-relink-prefilled.png')});
   await b.click('#r-go');
   ok(await until(async () => /Welcome back/.test(await b.textContent('.member-hello')), 8000) && (await b.textContent('.member-name')).includes('Zed'), 'B: relinked -> "Welcome back, Zed!" member card');
-  ok((await sql(`select count(*) from customer_devices cd join customers c on c.id = cd.customer_id where c.phone = '+639171234567'`)) === 2 && (await sql(`select count(*) from customers`)) === 1, 'B: both phones now point at the one Zed record');
+  // 1.5 (one phone per account, owner-accepted default D3, 2026-11-10): connecting phone B signs phone A out, so the one Zed
+  // record is linked to ONE phone (before 1.5: both phones, count 2). Expected value changed 2026-11-12 with C's approval.
+  ok((await sql(`select count(*) from customer_devices cd join customers c on c.id = cd.customer_id where c.phone = '+639171234567'`)) === 1 && (await sql(`select count(*) from customers`)) === 1
+    && (await sql(`select count(*) from qr_signout_notices`)) === 1, 'B: the one Zed record is now on phone B only; phone A is noted as signed out (1.5)');
   ts = await toastState(b);
   ok(ts.shown && /Welcome back, Zed/.test(ts.text) && ts.hits.length === 0, 'B: welcome-back toast shown, covers no button', JSON.stringify(ts));
   await b.waitForTimeout(350); await b.screenshot({path: shotPath('05-relinked.png')});
@@ -143,17 +146,21 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
   await c.click('#pc-help .taken button');
   await c.waitForSelector('#r-go');
   ok(await c.inputValue('#r-phone') === TAKEN && await c.inputValue('#r-name') === 'Ann', 'C: relink sheet prefilled with the number and current name');
+  // 1.5 (owner decision Q5, one phone per account): this phone is signed in as Ann, so it can't connect to another account
+  // straight from the ticket any more. The server answers SIGN_OUT_FIRST before it looks at any number (so no "No match" here),
+  // and the page offers "Sign out of Ann", which goes through the unpaid-orders question. (Before 1.5: wrong name -> NO_MATCH,
+  // right name -> the ticket became Zed's. Those four checks are replaced by the six below, 2026-11-12, with C's approval.)
   await c.click('#r-go');
-  ok(await until(async () => /No match/i.test(await c.textContent('#r-err')), 5000), 'C: wrong name -> NO_MATCH message');
-  await c.waitForTimeout(350); await c.screenshot({path: shotPath('10-relink-no-match.png')});
-  await c.fill('#r-name', 'Zed');
-  await c.click('#r-go');
-  ok(await until(async () => !(await c.isVisible('#r-go')), 8000), 'C: right name -> sheet closes');
-  ok(await c.isVisible('.ticket-no') && !(await c.isVisible('#phone-card')), 'C: still on the ticket, number card gone (number known now)');
-  ok(/for Zed/.test(await c.textContent('.ticket-where')), 'C: ticket now says "for Zed"');
-  ts = await toastState(c);
-  ok(ts.shown && /Welcome back, Zed/.test(ts.text) && ts.hits.length === 0, 'C: welcome-back toast on the ticket covers no button', JSON.stringify(ts));
-  await c.waitForTimeout(350); await c.screenshot({path: shotPath('11-ticket-after-relink.png'), fullPage: true});
+  ok(await until(async () => /still signed in to another name\. Sign out first/i.test(await c.textContent('#r-err')), 5000), 'C: connect while signed in -> "sign out first" message (1.5)', await c.textContent('#r-err'));
+  ok(await c.isVisible('#r-signout') && /Sign out of Ann/.test(await c.textContent('#r-signout')), 'C: offers "Sign out of Ann"');
+  ok((await sql(`select count(*) from customer_devices cd join customers c on c.id = cd.customer_id where c.nickname = 'Zed'`)) === 1 && (await sql(`select count(*) from customers where nickname = 'Ann'`)) === 1, 'C: nothing changed on the server (Zed still on one phone, Ann kept)');
+  await c.waitForTimeout(350); await c.screenshot({path: shotPath('10-relink-sign-out-first.png')});
+  await c.click('#r-signout');
+  await c.waitForSelector('#nm-go'); await c.click('#nm-go');
+  ok(await until(async () => /You still have unpaid orders\. Do you still want to proceed\?/.test(await c.textContent('.sheet')), 5000), 'C: signing out with an unpaid order asks "You still have unpaid orders. Do you still want to proceed?"');
+  await c.click('#sw-no');
+  ok(await c.isVisible('.ticket-no') && /for Ann/.test(await c.textContent('.ticket-where')) && (await sql(`select count(*) from qr_orders where customer_nickname = 'Ann' and status = 'PENDING'`)) === 1, 'C: "No" keeps Ann signed in and the order waiting');
+  await c.waitForTimeout(350); await c.screenshot({path: shotPath('11-ticket-after-no.png'), fullPage: true});
 
   // cancel -> toast must not cover "Cancel this order" / "Order something else"
   await c.waitForTimeout(3400);
@@ -193,7 +200,9 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
   await d.click('#w-relink');
   await d.fill('#r-phone', TAKEN); await d.fill('#r-name', 'Zed');
   await d.click('#r-go');
-  ok(await until(async () => /Too many tries\. Please wait about 15 minutes, or ask our staff/.test(await d.textContent('#r-err')), 5000), 'D: relink -> TOO_MANY_ATTEMPTS (relink wording)', await d.textContent('#r-err'));
+  // 1.5 (security-gate fix L3; approved by C 2026-11-12): the lock can also be per number for 24 hours, so the words no longer
+  // promise "about 15 minutes". Same words whatever the number is.
+  ok(await until(async () => (await d.textContent('#r-err')).trim() === 'Too many tries. Please ask our staff at the counter, or try again later.', 5000), 'D: relink -> TOO_MANY_ATTEMPTS (relink wording, 1.5)', await d.textContent('#r-err'));
   await d.waitForTimeout(350); await d.screenshot({path: shotPath('15-relink-too-many-360.png')});
   await d.click('#sheet-x');
   // leaving the number blank still works

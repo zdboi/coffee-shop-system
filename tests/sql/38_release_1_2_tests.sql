@@ -394,8 +394,15 @@ select public.fo_sync('device-key-0001-abcdef', test.sale_op('a0000000-0000-0000
 select test.chk(:'r'::jsonb->0->>'message' = 'REWARD_NOT_AVAILABLE', 'R: card 2 stamp 5 not reached yet', :'r');
 reset role;
 select public._loyalty_summary(:'biz', 'c5000000-0000-0000-0000-000000000001') as ls \gset
-select test.chk((:'ls'::jsonb->'card'->>'card_no')::int = 1 and jsonb_array_length(:'ls'::jsonb->'ready_rewards') = 0
-  and (select bool_and(m->>'status' = 'redeemed') from jsonb_array_elements(:'ls'::jsonb->'card'->'milestones') m), 'R: card 1 all redeemed', :'ls'::jsonb->>'card');
+-- 1.5 (012, owner decision B16, 2026-11-10): card 1's last reward (stamp 15) is used, so card 1 is complete and card 2 is issued:
+-- card_no 2 at 0/15, every milestone locked, nothing ready, card 1 in the history. (Before 1.5: card_no 1 with all milestones 'redeemed'.
+-- Expected value changed 2026-11-12 with C's approval.)
+select test.chk((:'ls'::jsonb->'card'->>'card_no')::int = 2 and (:'ls'::jsonb->'card'->>'stamps_on_card')::int = 0
+  and jsonb_array_length(:'ls'::jsonb->'ready_rewards') = 0
+  and (select bool_and(m->>'status' = 'locked') from jsonb_array_elements(:'ls'::jsonb->'card'->'milestones') m)
+  and jsonb_array_length(:'ls'::jsonb->'history') = 1 and (:'ls'::jsonb->'history'->0->>'card_no')::int = 1
+  and (:'ls'::jsonb->'history'->0->>'completed_at') is not null and jsonb_array_length(:'ls'::jsonb->'history'->0->'rewards') = 3,
+  'R: card 1 all redeemed -> card 2 issued at 0/15, card 1 in the history (1.5, B16)', (:'ls'::jsonb->>'card') || ' history=' || (:'ls'::jsonb->>'history'));
 insert into customers(id, business_id, nickname, source) values ('c5000000-0000-0000-0000-0000000000e1', :'biz', 'Edge', 'COUNTER');
 do $$ declare i int; begin
   for i in 1..4 loop
@@ -415,9 +422,15 @@ reset role;
 select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
 select public.merge_customers('c5000000-0000-0000-0000-000000000001', 'c5000000-0000-0000-0000-0000000000e1') is not null as x \gset
 reset role;
+-- 1.5 (012, security re-check "Low 1"; approved by C 2026-11-12): a reward BOTH records had used is no longer kept as history
+-- only. Edge's clashing card-1 stamp-5 reward moves to Stampy's lowest card where that reward is still free (card 2 stamp 5)
+-- and counts (merged_from null), so two used rewards always count as two. Nothing is left on Edge.
 select test.chk((select count(*) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-0000000000e1') = 0
-  and (select count(*) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-000000000001' and merged_from = 'c5000000-0000-0000-0000-0000000000e1') = 1,
-  'R: merge moves rewards; a reward both used is kept as history');
+  and (select count(*) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-000000000001' and merged_from = 'c5000000-0000-0000-0000-0000000000e1') = 0
+  and (select count(*) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-000000000001' and card_no = 2 and milestone = 5 and merged_from is null and released_at is null) = 1
+  and (select count(*) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-000000000001' and card_no = 1 and milestone = 5 and merged_from is null and released_at is null) = 1,   -- (Stampy's own; an earlier released one is history)
+  'R: merge moves rewards; a reward both used moves to the kept record''s next free card and counts (1.5, Low 1)',
+  (select string_agg(card_no || '/' || milestone || '/' || coalesce(merged_from::text, '-'), ', ' order by card_no, milestone) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-000000000001'));
 select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
 select test.chk((select count(*) from loyalty_redemptions) = 0, 'R: counter cannot read loyalty_redemptions directly');
 reset role;

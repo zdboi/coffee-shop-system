@@ -199,3 +199,55 @@ Owner: **don't start 1.3 until I say so.**
 
 ## Team fix queued for Wave 3 (QA, 2026-11-10)
 - Counter dates stock lines and the "Today · all counters" view by the device's own clock day, not by Manila time. There's no effect while the tablet is set to Philippine time. Fix: use the shop time zone (front-office-dev, with core-sync-engineer for `todayISO`).
+
+## Wave 3 decisions (owner, 2026-11-10 11:2x)
+- **Takeaway / Counter QR:** exempt from the 4-tickets and 1-guest-per-table limits. The per-person and per-shop limits still apply.
+- **Account switch:** cancels **only orders still waiting**. Orders already being made or ready stay, and are paid at the counter.
+- **Lead defaults accepted:**
+  - signing in on a new phone signs the old phone out;
+  - no undo for a TCO batch with a debt;
+  - counts and TCO debts aren't restored by backup import.
+- **Accounts move (owner question, 11:20):** the owner wants the app under the business email (cavitecitycoffeeclub@gmail.com) on Supabase and GitHub, and a more professional link. Plan given:
+  - transfer the Supabase project to a business organization;
+  - move the GitHub repository to a business account/organization, or use their own domain;
+  - leave a forwarding page at the old address;
+  - re-pair the counters.
+  - Not started; waiting for the owner to choose the address.
+- **Supabase moved (owner, 2026-11-10 12:29):** the owner transferred the Supabase project to the business account. The project URL is unchanged (`qtkoxzuedxvqoktobtyg`), and the Back Office and counter uploads work. No app change is needed. From now on, 012 and later scripts are run from the business account. The GitHub move/address change is still pending the owner's choice.
+
+## B16. New stamp card after the last reward + card history (owner, 2026-11-10 15:20), Wave 3
+- Owner: "when stamp cards are completed by certain customers, they will be issued another stamp card. Their previous stamp card will be kept along with the date it's been completed. Only issue another stamp card after the customer took the last reward."
+- **Overlap (lead):**
+  - Since 1.2, stamps already roll onto card 2 automatically: stamp 16 starts card 2, even if the stamp-15 reward wasn't taken.
+  - Rewards of earlier cards stay available.
+  - There is no card history screen and no completion date.
+- **Owner decisions (2026-11-10):**
+  - The next card is issued only once the customer takes the card's **last reward**.
+  - Stamps earned while the full card waits are **saved** and land on the new card as soon as it's issued. Nobody loses a stamp.
+  - A finished card shows **both dates**: when it was filled (15th stamp) and when the last reward was taken.
+  - Old cards are visible **everywhere**: the QR page, the counter Customers tab and the Back Office.
+
+## B17. Edit the waste report (owner, 2026-11-11 20:09), Wave 3
+- Owner: "I also want to be able to edit the wastage report."
+- **Overlap (lead):** waste entries can't be changed or deleted after saving today (counter waste log, Back Office "Record waste"). Wave 3 already adds "revise a stock count" (owner only) and "delete an R&D entry"; this extends the same idea to every waste entry.
+- **Owner decisions (2026-11-11):**
+  - **Edit everything + delete:** amount, reason, note and date; or delete the entry. Stock and cost reports correct themselves to match.
+  - **Owner only, with a record:** Back Office owner login only. Each edit or delete needs a short note and is saved in the audit log with the old and new values. The entry shows an "Edited" mark.
+- **Lead notes:**
+  - "Missing at count" waste is changed by revising its stock count, not edited directly (one source of truth).
+  - Complimentary waste keeps its manager approval record.
+  - Finished sales stay unchangeable; this is waste only.
+
+## B18. Sales calendar overhaul (owner, 2026-11-12 16:51), **next wave (Wave 4 / 1.6)**
+- Owner: "I want a more thorough overview of the Sales Calendar: I want to see voids/refunds. I want to see the net income. the wastages. Fixate the calendar so I always see it. Also, I want to be able to check all the collective data from a span of days by clicking an initial date and an ending date. You can check the calendar logic of the Infusion Gem app. I don't need the average sales so you can put the Net sales there. In the Items Sold, separate the Drinks from Food/Pastries."
+- **What it means:**
+  - Per day and per selected range: voids/refunds, net income, waste.
+  - The calendar stays fixed on screen (always visible while the details scroll).
+  - Range selection: click a start date, then an end date (across months, like the owner's Infusion Gem app calendar); totals for the whole span.
+  - Replace "Average sale" with **Net sales**.
+  - Items sold split into **Drinks** and **Food / pastries**.
+- **Overlap (lead):**
+  - The Sales calendar exists (day, week, month views; 1.0).
+  - Net income (monthly) and the Waste report exist (1.4).
+  - Wave 4's B1 Accounting overview already plans "any date range" with voids, waste and net income. B18 puts the same numbers on the calendar; both should read one shared server report so they always agree.
+- Not started. Build with Wave 4.

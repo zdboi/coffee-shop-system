@@ -220,6 +220,10 @@ function netIncomeLines(r){
     ['Ingredients used for sales', -num(I.sold), 'line'],
     ['Ingredients wasted', -num(I.wasted), 'line'],
   ];
+  // 012: parts of the waste line (already inside "Ingredients wasted", never taken off again)
+  if(num(I.rnd)) L.push(['Of which R&D (in the line above)', -num(I.rnd), 'part']);
+  (Array.isArray(r.rnd_projects) ? r.rnd_projects : []).forEach(p => { if(num(p.cost)) L.push(['R&D project: ' + (p.name || 'project'), -num(p.cost), 'part sub2']); });
+  if(num(I.count_shortage)) L.push(['Of which missing at count (in the line above)', -num(I.count_shortage), 'part']);
   EXPENSE_CATEGORIES.forEach(c => { if(by[c.id]) L.push(['Expenses: ' + c.label, -num(by[c.id]), 'line']); });
   Object.keys(by).filter(k => !EXPENSE_CATEGORIES.some(c => c.id === k)).forEach(k => L.push(['Expenses: ' + k, -num(by[k]), 'line']));
   L.push(['Net income', num(r.net_income), 'total']);
@@ -239,7 +243,7 @@ function netIncomeHtml(r){
     <div class="card ni-statement">
       <h3 class="ni-title">${esc(monthLabel(r.month || netState.month))} <span class="text-light">· ${esc(fmtDay(r.from))} to ${esc(fmtDay(r.to))}, shop time</span></h3>
       <table class="ni-table"><tbody>
-        ${netIncomeLines(r).map(([label, v, kind]) => `<tr class="ni-${kind}"><td>${esc(label)}</td><td class="num">${kind === 'line' && v > 0 ? '' : ''}${signed(v)}</td></tr>`).join('')}
+        ${netIncomeLines(r).map(([label, v, kind]) => `<tr class="${kind.split(' ').map(k => 'ni-' + k).join(' ')}"><td>${esc(label)}</td><td class="num">${kind === 'line' && v > 0 ? '' : ''}${signed(v)}</td></tr>`).join('')}
       </tbody></table>
       <p class="hint" style="margin-bottom:0;">Service charge collected: ${fmtMoney(S.service_charge)} (kept in net sales as income). Ingredients are costed with your costing method (${costingMethod() === 'latest' ? 'latest purchase price' : 'weighted average'}) as of the month's last day; stock counts and production are not costs here. Refunds count in the month they were given.</p>
     </div>`;
@@ -257,8 +261,22 @@ function exportNetIncomeCSV(){
 /* ================= Waste report (A15) ================= */
 const wrState = {preset: 'month', from: '', to: ''};
 let WR_LAST = null;
-function wasteReasonText(entry){ return entry.source === 'COUNTER' ? wasteReasonLabel(entry.reason) : String(entry.reason || 'Other'); }
+// A reason code (counter waste, R&D, missing at count) in plain words; the Back Office "Record waste" form
+// keeps the words the owner chose (e.g. "Expired"), shown as they are. (012 labels every waste-log row
+// without a counter as OFFICE, so the code check no longer depends on the source.)
+const WASTE_REASON_CODES = ['CALIBRATION', 'SPILLAGE', 'COMPLIMENTARY', 'EXPIRED', 'OTHER', 'RND', 'COUNT_SHORTAGE'];
+function wasteReasonText(entry){
+  const r = String((entry && entry.reason) || '');
+  return WASTE_REASON_CODES.includes(r) ? wasteReasonLabel(r) : (r || 'Other');
+}
+function wasteWhereText(x){ return x.source === 'COUNTER' ? 'Counter' : (x.reason === 'RND' ? 'R&D' : 'Back Office'); }
 async function renderWasteReport(){
+  // 1.5 (B7, B8): the barista drink kit and the R&D log live next to the waste report
+  if(BO.has15){
+    const bar = setTopbarActions(`<button class="btn btn-outline" id="btn-barista-kit">Barista drink kit</button> <button class="btn btn-outline" id="btn-wr-rnd">R&amp;D log</button>`);
+    bar.querySelector('#btn-barista-kit').onclick = openBaristaKitForm;
+    bar.querySelector('#btn-wr-rnd').onclick = () => navigate('rnd');
+  }
   const content = document.getElementById('content');
   content.innerHTML = `
     <div class="toolbar">
@@ -279,7 +297,8 @@ async function drawWasteReport(){
   let r, flags = {};
   try{
     r = await cloud.rpc('waste_report', {p_from: a, p_to: b});
-    const ids = (r.entries || []).filter(x => x.needs_review && x.source === 'COUNTER').map(x => x.id);
+    // every flagged row (counter or office): its reason codes are on the waste_logs row
+    const ids = (r.entries || []).filter(x => x.needs_review).map(x => x.id);
     for(let i = 0; i < ids.length; i += 100){
       const rows = await cloud.select('waste_logs', {select: 'id,review_reason,staff_id,signed_in_staff_id', in: {id: ids.slice(i, i + 100)}}).catch(() => []);
       (rows || []).forEach(x => { flags[x.id] = x.review_reason || ''; });
@@ -293,6 +312,7 @@ async function drawWasteReport(){
   if(!entries.length){ wrap.innerHTML = `<p class="hint">${esc(WR_LAST.label)}</p>` + emptyBlock('No waste logged in these dates.'); return; }
   const flagged = entries.filter(x => x.needs_review);
   const comp = entries.filter(x => x.source === 'COUNTER' && x.reason === 'COMPLIMENTARY');
+  const rnd = entries.filter(x => x.reason === 'RND'), shortage = entries.filter(x => x.reason === 'COUNT_SHORTAGE');
   // per day: one row per day, a column per reason (cost)
   const reasons = (r.by_reason || []).map(x => x.reason);
   const reasonLabelOf = (code) => { const e = entries.find(x => x.reason === code); return e ? wasteReasonText(e) : (WASTE_REASONS.some(w => w.id === code) ? wasteReasonLabel(code) : String(code)); };
@@ -307,6 +327,14 @@ async function drawWasteReport(){
       ${statCard('Complimentary', fmtMoney(comp.reduce((s, x) => s + num(x.cost), 0)), plural(comp.length, 'entry', 'entries') + ', manager approved')}
       ${statCard('To review', flagged.length, flagged.length ? 'see the flags below' : 'nothing flagged')}
     </div>
+    ${(r.by_project || []).length || shortage.length ? `<div class="grid grid-4 kpi-sans" style="margin-bottom:16px;">
+      ${statCard('R&amp;D', fmtMoney(rnd.reduce((s, x) => s + num(x.cost), 0)), plural(rnd.length, 'entry', 'entries') + ' · <a class="linklike" data-go-rnd>R&amp;D log</a>')}
+      ${statCard('Missing at count', fmtMoney(shortage.reduce((s, x) => s + num(x.cost), 0)), plural(shortage.length, 'count') + ' · <a class="linklike" data-go-counts>stock counts</a>')}
+    </div>` : ''}
+    ${(r.by_project || []).length ? `<div class="card wr-projects" style="margin-bottom:16px;"><b>R&amp;D cost by project</b>
+      <table class="wr-small"><thead><tr><th>Project</th><th>Status</th><th class="num">Entries</th><th class="num">Cost</th></tr></thead><tbody>
+        ${r.by_project.map(p => `<tr><td>${esc(p.name || '')}</td><td>${esc(rndStatusLabel(p.status))}</td><td class="num">${esc(String(p.entries))}</td><td class="num">${fmtMoney(p.cost)}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
     <div class="grid grid-2 wr-grid">
       <div class="card"><b>By reason</b>
         <table class="wr-small"><thead><tr><th>Reason</th><th class="num">Entries</th><th class="num">Cost</th></tr></thead><tbody>
@@ -319,24 +347,128 @@ async function drawWasteReport(){
     </div>
     <div class="section-title">Entries ${entries.length >= 500 ? '<span class="text-light">(newest 500)</span>' : ''}</div>
     <div class="table-wrap"><table class="wr-entries">
-      <thead><tr><th>Day</th><th>Where</th><th>Reason</th><th>What</th><th>Who</th><th class="num">Cost</th></tr></thead>
+      <thead><tr><th>Day</th><th>Where</th><th>Reason</th><th>What</th><th>Who</th><th class="num">Cost</th>${BO.has15 ? '<th><span class="sr-only">Change</span></th>' : ''}</tr></thead>
       <tbody>${entries.map(x => `<tr class="${x.needs_review ? 'wr-flag-row' : ''}">
         <td>${fmtDay(x.day)}</td>
-        <td>${x.source === 'COUNTER' ? '<span class="badge badge-gray">Counter</span>' : '<span class="badge badge-gray" style="opacity:.7;">Back Office</span>'}</td>
-        <td>${esc(wasteReasonText(x))}${x.note ? `<div class="hint">${esc(x.note)}</div>` : ''}</td>
+        <td><span class="badge badge-gray"${x.source === 'COUNTER' ? '' : ' style="opacity:.7;"'}>${esc(wasteWhereText(x))}</span></td>
+        <td>${esc(wasteReasonText(x))}${x.project_name ? `<div class="hint">Project: ${esc(x.project_name)}</div>` : ''}${x.note ? `<div class="hint">${esc(x.note)}</div>` : ''}</td>
         <td>${(x.items || []).map(it => `<div>${esc(fmtNum(it.quantity, 2).replace(/\.00$/, ''))}${it.unit ? ' ' + esc(unitLabel(it.unit)) : ' ×'} ${esc(it.name || (it.recipe_id ? 'menu item' : 'ingredient'))}${Array.isArray(it.modifiers) && it.modifiers.length ? ` <span class="text-light">(${it.modifiers.map(m => esc((m && m.label) || '')).join(', ')})</span>` : ''} <span class="text-light">${fmtMoney(it.cost)}</span></div>`).join('')}</td>
         <td>${esc(x.staff_name || (x.source === 'OFFICE' ? 'Back Office' : '—'))}${x.approved_by_name ? `<div class="hint">Approved by ${esc(x.approved_by_name)}</div>` : ''}
-          ${x.needs_review ? `<div class="review-flag">${icon('alert', {size: 16})} ${esc(reviewReasonText(flags[x.id] || ''))}</div>` : ''}</td>
-        <td class="num"><b>${fmtMoney(x.cost)}</b></td></tr>`).join('')}</tbody></table></div>
+          ${x.needs_review ? `<div class="review-flag">${icon('alert', {size: 16})} ${esc(reviewReasonText(flags[x.id] || ''))}</div>` : ''}
+          ${x.edited ? `<div class="hint wr-edited"><span class="badge badge-yellow">Edited</span> ${esc(x.edited_by_name || '')}${x.edited_at ? ' · ' + esc(fmtShopDate(x.edited_at)) : ''}${x.edit_note ? `<div>Why: ${esc(x.edit_note)}</div>` : ''}</div>` : ''}</td>
+        <td class="num"><b>${fmtMoney(x.cost)}</b></td>
+        ${BO.has15 ? `<td class="wr-actions">${x.editable === false
+          ? `<a class="linklike" data-go-counts title="Change this by revising its stock count">Revise count</a>`
+          : `<button class="btn btn-ghost btn-sm" data-wr-edit="${esc(x.id)}">Edit</button><button class="btn btn-ghost btn-sm text-red" data-wr-del="${esc(x.id)}">Delete</button>`}</td>` : ''}</tr>`).join('')}</tbody></table></div>
     <p class="hint wr-cost-note" style="margin-top:8px;">Costs here are kept at the ingredient cost on the day the waste was logged, so they can differ slightly from Net income, which values the month's waste at that month's cost.</p>
-    <p class="hint" style="margin-top:4px;">Counter waste is taken from stock the same way a sale is (recipe and options). Stamp-card freebies are not waste: they show as ₱0 sales with a loyalty reward.</p>`;
+    <p class="hint" style="margin-top:4px;">Counter waste is taken from stock the same way a sale is (recipe and options). Stamp-card freebies are not waste: they show as ₱0 sales with a loyalty reward. R&amp;D usage and stock missing at a closing count are waste too.</p>`;
+  wrap.querySelectorAll('[data-go-rnd]').forEach(a => a.onclick = () => navigate('rnd'));
+  wrap.querySelectorAll('[data-go-counts]').forEach(a => a.onclick = () => navigate('stockCounts'));
+  const byId = (id) => entries.find(x => String(x.id) === String(id));
+  wrap.querySelectorAll('[data-wr-edit]').forEach(b => b.onclick = () => { const e = byId(b.dataset.wrEdit); if(e) openWasteEdit(e); });
+  wrap.querySelectorAll('[data-wr-del]').forEach(b => b.onclick = () => { const e = byId(b.dataset.wrDel); if(e) openWasteDelete(e); });
+}
+
+/* ================= Edit / delete a waste entry (1.5, B17; owner only) =================
+   The server (revise_waste / delete_waste) re-makes the entry's stock lines and cost itself; the page only
+   sends what changed plus the owner's reason ("Why?"), which goes into the audit log. */
+const WASTE_EDIT_REASONS = WASTE_REASONS.map(r => r.id);   // counter / waste_logs reasons (not RND, not COUNT_SHORTAGE)
+function wasteItemsForServer(entry, rows){
+  // rows: [{k, quantity, unit}] typed by the owner, one per original item
+  return (entry.items || []).map((it, k) => {
+    const row = rows.find(r => r.k === k); if(!row) return null;
+    if(it.recipe_id) return {recipe_id: it.recipe_id, quantity: row.quantity,
+      modifiers: (Array.isArray(it.modifiers) ? it.modifiers : []).filter(m => m && m.group_id && m.option_id).map(m => ({group_id: m.group_id, option_id: m.option_id}))};
+    return {ingredient_id: it.ingredient_id, quantity: row.quantity, unit: row.unit || it.unit};
+  }).filter(Boolean);
+}
+async function openWasteEdit(entry){
+  if(entry.reason === 'RND' && !(RND.projects || []).length){ try{ await loadRnd(); }catch(e){} }
+  const isLog = entry.entry_table !== 'waste', isRnd = entry.reason === 'RND';
+  const items = entry.items || [];
+  const reasonField = isRnd
+    ? `<div class="form-row"><label>Reason</label><div><b>R&amp;D</b> <span class="hint">R&amp;D entries stay R&amp;D. To change that, delete this entry.</span></div></div>
+       <div class="form-row"><label for="we-project">Project</label><select id="we-project">${(RND.projects || []).filter(p => p.status === 'ACTIVE' || p.id === entry.project_id).map(p => `<option value="${esc(p.id)}" ${p.id === entry.project_id ? 'selected' : ''}>${esc(p.name)}</option>`).join('') || `<option value="${esc(entry.project_id || '')}">${esc(entry.project_name || 'Current project')}</option>`}</select></div>`
+    : isLog
+      ? `<div class="form-row"><label for="we-reason">Reason</label><select id="we-reason">${WASTE_EDIT_REASONS.map(id => `<option value="${esc(id)}" ${id === entry.reason ? 'selected' : ''}>${esc(wasteReasonLabel(id))}</option>`).join('')}</select>
+         ${entry.reason === 'COMPLIMENTARY' && entry.approved_by_name ? `<div class="hint">Approved by ${esc(entry.approved_by_name)}: kept with the entry.</div>` : ''}</div>`
+      : `<div class="form-row"><label for="we-reason">Reason</label><input id="we-reason" maxlength="60" value="${esc(entry.reason || '')}"></div>`;
+  const itemRows = items.map((it, k) => {
+    const ing = it.ingredient_id ? ingredientById(it.ingredient_id) : null;
+    const unitSel = it.recipe_id ? '<span class="hint">×</span>'
+      : `<select data-we-unit="${k}" class="unit-pick" aria-label="Unit for ${esc(it.name || 'item')}" style="width:auto;min-width:70px;">${unitOptionsHtml((ing && ing.base_unit) || it.unit, it.unit, ing && ing.weight_g_per_ml)}</select>`;
+    const mods = Array.isArray(it.modifiers) && it.modifiers.length ? ` <span class="text-light">(${it.modifiers.map(m => esc((m && m.label) || '')).join(', ')})</span>` : '';
+    return `<div class="form-row we-item"><label for="we-q-${k}">${esc(it.name || (it.recipe_id ? 'Menu item' : 'Ingredient'))}${mods}</label>
+      <div class="field-inline"><input id="we-q-${k}" data-we-q="${k}" type="number" inputmode="decimal" min="0" step="any" value="${esc(String(num(it.quantity)))}" style="max-width:140px;">${unitSel}</div></div>`;
+  }).join('');
+  const body = `
+    <p class="hint">${esc(wasteWhereText(entry))} · ${esc(fmtDay(entry.day))} · now ${fmtMoney(entry.cost)}. Stock and costs are worked out again when you save.</p>
+    <div class="form-grid">
+      <div class="form-row"><label for="we-date">Date</label><input type="date" id="we-date" value="${esc(dayValue(entry.day))}" max="${esc(shopTodayKey())}"></div>
+    </div>
+    ${reasonField}
+    ${itemRows}
+    <div class="form-row"><label for="we-note">Entry note</label><input id="we-note" maxlength="200" value="${esc(entry.note || '')}" placeholder="Optional (needed for Other)"></div>
+    <div class="form-row"><label for="we-why">Why are you changing it? <span class="text-red">*</span></label><input id="we-why" maxlength="200" placeholder="e.g. Wrong amount typed"></div>`;
+  openModal({title: 'Edit waste entry', wide: true, body,
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="we-save">Save changes</button>`,
+    onMount: (root) => {
+      const q = (sel) => root.querySelector(sel);
+      q('[data-cancel]').onclick = closeModal;
+      q('#we-save').onclick = async () => {
+        const why = q('#we-why').value.trim();
+        if(!why){ toast('Say why you\'re changing it. This goes in the audit log.', 'error'); q('#we-why').focus(); return; }
+        const p = {id: entry.id, edit_note: why};
+        const date = q('#we-date').value;
+        if(date && date !== dayValue(entry.day)) p.waste_date = date;
+        if(!isRnd){ const r = q('#we-reason').value.trim(); if(r !== (entry.reason || '')) p.reason = r; }
+        else { const pr = q('#we-project'); if(pr && pr.value && pr.value !== entry.project_id) p.project_id = pr.value; }
+        const note = q('#we-note').value.trim(); if(note !== (entry.note || '')) p.note = note;
+        let itemsChanged = false; const rows = [];
+        for(let k = 0; k < items.length; k++){
+          const qty = Number(q(`[data-we-q="${k}"]`).value), unitEl = q(`[data-we-unit="${k}"]`), unit = unitEl ? unitEl.value : items[k].unit;
+          if(!(qty > 0)){ toast(friendlyError('BAD_QUANTITY'), 'error'); q(`[data-we-q="${k}"]`).focus(); return; }
+          if(Math.abs(qty - num(items[k].quantity)) > 1e-9 || (unitEl && unit !== items[k].unit)) itemsChanged = true;
+          rows.push({k, quantity: qty, unit});
+        }
+        if(itemsChanged) p.items = isLog ? wasteItemsForServer(entry, rows) : [{quantity: rows[0].quantity, unit: rows[0].unit}];
+        const btn = q('#we-save'); btn.disabled = true;
+        try{
+          const r = await cloud.rpc('revise_waste', {p});
+          closeModal(); toast(`Waste entry saved${r && r.total_cost != null ? ' · cost now ' + fmtMoney(r.total_cost) : ''}`);
+          await boLoad().catch(() => {}); drawWasteReport();
+        }catch(e){ btn.disabled = false; toast(friendlyError(e), 'error'); }
+      };
+    }});
+}
+function openWasteDelete(entry){
+  const what = (entry.items || []).map(it => `${fmtNum(it.quantity, 2).replace(/\.00$/, '')}${it.unit ? ' ' + unitLabel(it.unit) : ' ×'} ${it.name || ''}`.trim()).join(', ');
+  openModal({title: 'Delete waste entry',
+    body: `<p>Delete this waste entry? Its stock goes back and the waste cost (${fmtMoney(entry.cost)}) leaves the reports.</p>
+      <p class="hint">${esc(fmtDay(entry.day))} · ${esc(wasteReasonText(entry))} · ${esc(what)}</p>
+      <div class="form-row"><label for="wd-why">Why are you deleting it? <span class="text-red">*</span></label><input id="wd-why" maxlength="200" placeholder="e.g. Logged twice"></div>`,
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-danger" id="wd-ok">Delete entry</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      root.querySelector('#wd-ok').onclick = async () => {
+        const why = root.querySelector('#wd-why').value.trim();
+        if(!why){ toast('Say why you\'re deleting it. This goes in the audit log.', 'error'); root.querySelector('#wd-why').focus(); return; }
+        const btn = root.querySelector('#wd-ok'); btn.disabled = true;
+        try{
+          const r = await cloud.rpc('delete_waste', {p_id: entry.id, p_note: why});
+          closeModal();
+          toast(r && r.stock_restored === false ? 'Entry deleted. It wasn\'t linked to stock, so stock didn\'t change.' : 'Entry deleted and stock put back');
+          await boLoad().catch(() => {}); drawWasteReport();
+        }catch(e){ btn.disabled = false; toast(friendlyError(e), 'error'); }
+      };
+    }});
 }
 function exportWasteCSV(){
   const r = WR_LAST;
   if(!r || !(r.entries || []).length){ toast('Nothing to export', 'warn'); return; }
   const rows = [];
   r.entries.forEach(x => (x.items && x.items.length ? x.items : [{}]).forEach((it, k) => rows.push([
-    dayValue(x.day), x.source === 'COUNTER' ? 'Counter' : 'Back Office', wasteReasonText(x), x.note || '',
+    dayValue(x.day), wasteWhereText(x), wasteReasonText(x) + (x.project_name ? ' (' + x.project_name + ')' : ''), x.note || '',
     it.name || '', it.quantity == null ? '' : it.quantity, it.unit || '', Array.isArray(it.modifiers) ? it.modifiers.map(m => (m && m.label) || '').join(' / ') : '',
     num(it.cost).toFixed(2), k === 0 ? num(x.cost).toFixed(2) : '', x.staff_name || '', x.approved_by_name || '', x.needs_review ? reviewReasonText(r.flags[x.id] || '') : ''])));
   rows.push(['Total', '', '', '', '', '', '', '', '', num(r.total_cost).toFixed(2), '', '', '']);

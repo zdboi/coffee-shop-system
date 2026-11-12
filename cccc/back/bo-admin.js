@@ -171,7 +171,8 @@ function openTableForm(t){
 }
 /* ---- QR code printouts in the café's look (release 1.3, owner item A18) ----
    Each card: the tile icon and the Brunson wordmark on terracotta, the table name big, the QR code,
-   "Scan to order" with a 3-step how-to, and "Bienvenido na Kapihan!". Cards keep the A6 shape and
+   "Scan to order" with a 3-step how-to, and a plain coloured foot (the "Bienvenido na Kapihan!" tagline was
+   dropped in 1.5, owner item B12). Cards keep the A6 shape and
    print 1, 2 or 4 to an A4 page, with optional crop marks. The QR codes and their links are made
    exactly as before (qrSvg + tableOrderUrl). With the Custom theme the shop's own logo, name and
    main colour are used instead. */
@@ -224,7 +225,7 @@ function qrCardHtml(t, s){
       <div class="scan">${takeaway ? 'Scan to order ahead' : 'Scan to order'}</div>
       <ol class="steps"><li><span class="n">1</span><span class="w">Scan</span></li><li><span class="n">2</span><span class="w">Order</span></li><li><span class="n">3</span><span class="w">Pay &amp; pick up at the counter</span></li></ol>
     </div>
-    <div class="foot">Bienvenido na Kapihan!</div>
+    <div class="foot" aria-hidden="true"></div>
     <i class="cm tl"></i><i class="cm tr"></i><i class="cm bl"></i><i class="cm br"></i>
   </div>`;
 }
@@ -708,7 +709,15 @@ function renderSettings(){
         <div class="hint">${BO.hasPayoutLimit ? 'A pay-out (cash taken out of a counter drawer) bigger than this shows in Transactions → "Needs review".' : 'Available after the latest database update is installed.'}</div></div>
       <p class="hint" style="margin:0 0 14px;">The look of the apps (Cavite City Coffee Club or your own colours) is in <a class="linklike" data-tab-link="branding">Branding</a>.</p>
       <button class="btn btn-primary" id="save-general">Save</button>
-    </div>`;
+    </div>
+    ${BO.has15 ? `<div class="card" style="margin-top:16px;" id="set-counter-extras">
+      <b style="font-size:15px;">At the counter (release 1.5)</b>
+      <div class="set-extra-row"><div><b>Barista drink kit</b><div class="hint">${(state.settings.barista_kit || []).length ? esc(plural(state.settings.barista_kit.length, 'item')) + ' in the daily calibration kit.' : 'Not set yet: the counter\'s Barista drink button opens an empty form.'}</div></div>
+        <button class="btn btn-outline btn-sm" type="button" id="set-barista-kit">Set the kit</button></div>
+      <div class="set-extra-row"><div><b>Count at closing</b><div class="hint">${countAtCloseList().length ? esc(plural(countAtCloseList().length, 'item')) + ' counted before Close shift.' : 'No item is counted at closing.'}</div></div>
+        <button class="btn btn-outline btn-sm" type="button" id="set-count-items">Choose items</button></div>
+      <div class="hint count-tick-hint">${icon('alert', {size: 14})} ${esc(COUNT_TICK_WARNING)}</div>
+    </div>` : ''}`;
   if(tab === 'branding') html = `
     <div class="card">
       <div class="form-grid">
@@ -784,6 +793,8 @@ function renderSettings(){
   const $ = (id) => content.querySelector('#' + id);
 
   if(tab === 'general'){
+    if($('set-barista-kit')) $('set-barista-kit').onclick = openBaristaKitForm;
+    if($('set-count-items')) $('set-count-items').onclick = openCountItemsPicker;
     $('save-general').onclick = (e) => busy(e.currentTarget, async () => {
       const ch = {costing_method: $('set-costing').value, low_stock_default_threshold: Math.max(0, num($('set-lowstock').value)),
         food_cost_warning_pct: Math.max(0, num($('set-foodcost').value)) || 35};

@@ -515,10 +515,11 @@ async function loadTransactions(force){
   try{
     if(txFilter.review){
       // every flagged sale, whatever its date
-      const [sales, payouts, flaggedRefunds] = await Promise.all([
+      const [sales, payouts, flaggedRefunds, flaggedCounts] = await Promise.all([
         cloud.select('sales', {eq: {needs_review: true}, order: 'transaction_date.desc', limit: 500}),
         loadPayoutsToReview(),
         loadRefundsToReview(),
+        loadCountsToReview(),        // 1.5 (B9): stock counts the server flagged
       ]);
       const ids = (sales || []).map(s => s.id);
       const payments = [];
@@ -527,9 +528,9 @@ async function loadTransactions(force){
       const rSaleIds = [...new Set((flaggedRefunds || []).map(r => r.sale_id).filter(Boolean))];
       const refundSales = [];
       for(let i = 0; i < rSaleIds.length; i += 80){ refundSales.push(...(await cloud.select('sales', {select: 'id,transaction_number,cashier_name', in: {id: rSaleIds.slice(i, i + 80)}}) || [])); }
-      TX_DATA = {sales: sales || [], payments, saleItems: [], refunds: [], payouts: payouts || [], flaggedRefunds: flaggedRefunds || [], refundSales, review: true};
-      BO.reviewSales = TX_DATA.sales.length; BO.reviewPayouts = TX_DATA.payouts.length; BO.reviewRefunds = TX_DATA.flaggedRefunds.length;
-      BO.counts.needs_review = BO.reviewSales + BO.reviewRefunds + BO.reviewPayouts; updateNavBadges();
+      TX_DATA = {sales: sales || [], payments, saleItems: [], refunds: [], payouts: payouts || [], flaggedRefunds: flaggedRefunds || [], refundSales, flaggedCounts: flaggedCounts || [], review: true};
+      BO.reviewSales = TX_DATA.sales.length; BO.reviewPayouts = TX_DATA.payouts.length; BO.reviewRefunds = TX_DATA.flaggedRefunds.length; BO.reviewCounts = TX_DATA.flaggedCounts.length;
+      BO.counts.needs_review = BO.reviewSales + BO.reviewRefunds + BO.reviewPayouts + BO.reviewCounts; updateNavBadges();
     } else {
       const [a, b] = presetKeys(txFilter.preset, txFilter);
       TX_DATA = await salesForRange(dayRange(a, b), force);
@@ -567,7 +568,7 @@ function drawTransactions(){
   const counted = list.filter(COUNTED);
   const total = counted.reduce((s, x) => s + num(x.grand_total), 0);
   document.getElementById('tx-count').textContent = `${plural(list.length, 'transaction')} · ${fmtMoney(total)} (voided not counted)`;
-  const payoutsHtml = ds.review ? reviewPayoutsHtml(ds.payouts || []) + reviewRefundsHtml(ds) : '';
+  const payoutsHtml = ds.review ? reviewPayoutsHtml(ds.payouts || []) + reviewRefundsHtml(ds) + reviewCountsHtml(ds) : '';
   if(!list.length){
     wrap.innerHTML = payoutsHtml + (ds.review ? (payoutsHtml ? '' : emptyBlock('Nothing needs review.')) : emptyBlock('No transactions match. Try other dates or filters.'));
     wireReviewPayouts(wrap);
@@ -612,7 +613,20 @@ function reviewRefundsHtml(ds){
       <td><button class="btn btn-sm btn-outline" data-refund-reviewed="${esc(r.id)}">Mark as reviewed</button></td></tr>`).join('')}
     </tbody></table></div>`;
 }
+// Stock counts the server flagged (1.5, B9): extra stock, items not counted, a large shortage...
+function reviewCountsHtml(ds){
+  const list = ds.flaggedCounts || [];
+  if(!list.length) return '';
+  const top = !(ds.payouts || []).length && !(ds.flaggedRefunds || []).length;
+  return `<div class="section-title" style="font-size:16px;${top ? 'margin-top:0;' : ''}">Stock counts to review</div>
+    <div class="table-wrap" id="tx-flagged-counts"><table><thead><tr><th>Counted</th><th>Staff</th><th>Why</th><th class="num">Missing value</th><th></th></tr></thead><tbody>
+    ${list.map(c => `<tr data-flagged-count="${esc(c.id)}"><td>${esc(fmtShopDateTime(c.counted_at))}</td><td>${esc(c.staff_name || '')}</td>
+      <td>${esc(countReviewText(c.review_reason) || 'Flagged by the server')}</td><td class="num">${fmtMoney(c.shortage_cost)}</td>
+      <td><button class="btn btn-sm btn-outline" data-count-review="${esc(c.id)}">Open count</button></td></tr>`).join('')}
+    </tbody></table></div>`;
+}
 function wireReviewPayouts(root){
+  root.querySelectorAll('[data-count-review]').forEach(b => b.onclick = () => openCountModal(b.dataset.countReview, () => loadTransactions(true)));
   root.querySelectorAll('[data-open-sale]').forEach(a => a.onclick = () => openSaleModal(a.dataset.openSale));
   root.querySelectorAll('[data-refund-reviewed]').forEach(b => b.onclick = () => busy(b, async () => {
     const r = ((TX_DATA && TX_DATA.flaggedRefunds) || []).find(x => x.id === b.dataset.refundReviewed);
@@ -891,7 +905,7 @@ function openQrOrderModal(o){
 }
 
 /* ================= Customers ================= */
-const custFilter = {search: '', sort: 'last'};
+const custFilter = {search: '', sort: 'last', archived: false};
 let CUSTOMERS = null;
 function normPhone(raw){
   const d = String(raw || '').replace(/\D/g, '');
@@ -906,6 +920,10 @@ function formatPhone(p){
   return m ? `0${m[1]} ${m[2]} ${m[3]}` : s;
 }
 let REDEMPTIONS = [];
+// Release 1.5 (B16): the stamp card of each customer comes from the SERVER (bo_customer_loyalty), the same
+// card the counter and the QR page show (next card only after the last reward is used, saved stamps, history).
+// customer id -> the server's summary. An older database without that function: the 1.2 card maths below.
+let CUST_LOYALTY = new Map(), CUST_LOYALTY_OLD = false, CUST_LOYALTY_BUSY = null;
 async function loadCustomers(){
   const [list, red] = await Promise.all([
     cloud.selectAll('customers', {is: {merged_into: null}, order: 'last_seen_at.desc'}),
@@ -914,14 +932,28 @@ async function loadCustomers(){
   ]);
   CUSTOMERS = list;
   REDEMPTIONS = red || [];
+  CUST_LOYALTY = new Map();
   BO.counts.customer_count = CUSTOMERS.length;
   return CUSTOMERS;
 }
-/* Stamp card of one customer for the Back Office lists, from the copies the server keeps on
-   customers (stamps = drink + food stamps) and the rewards used (loyalty_redemptions), with the
-   card maths of the database contract (card_no = max(ceil(T/S), 1), reward m of card c reached
-   when T >= (c-1)S + m). Shaped like the server's summary, so loyaltyCardView() reads it. */
-function customerLoyalty(c){
+// B6: a customer without a mobile number is "archived" (hidden from the main list, data kept).
+function isArchivedCustomer(c){ return !c.phone; }
+// Fetches the server's cards of these customers (500 at a time) into CUST_LOYALTY. Resolves to true when new ones came.
+async function fetchCustomerLoyalty(ids){
+  ids = [...new Set((ids || []).filter(id => id && !CUST_LOYALTY.has(id)))];
+  if(!ids.length || CUST_LOYALTY_OLD) return false;
+  try{
+    const out = await cloud.customerLoyalty(ids);
+    ids.forEach(id => CUST_LOYALTY.set(id, out && out[id] ? out[id] : null));
+    return true;
+  }catch(e){
+    if(/bo_customer_loyalty|PGRST202|404|function/i.test(String(e && (e.message || e.code || e.status) || ''))){ CUST_LOYALTY_OLD = true; return true; }
+    throw e;
+  }
+}
+/* 1.2 card maths, ONLY for a database without bo_customer_loyalty (before 012): from the copies the server
+   keeps on customers (stamps) and the rewards used. Shaped like the server's summary for loyaltyCardView(). */
+function customerLoyaltyOld(c){
   const cfg = loyaltyConfig();
   const S = cfg.card_size, T = Math.max(0, Math.round(num(c.stamps)));
   const cardNo = Math.max(Math.ceil(T / S), 1);
@@ -931,6 +963,27 @@ function customerLoyalty(c){
   for(let k = 1; k <= cardNo; k++) cfg.rewards.forEach(r => { if(T >= (k - 1) * S + r.stamp && !used.has(k + ':' + r.stamp)) ready.push(Object.assign({card_no: k}, r)); });
   return loyaltyCardView({total_stamps: T, card: {card_size: S, card_no: cardNo, stamps_on_card: T - (cardNo - 1) * S, milestones}, ready_rewards: ready}, cfg);
 }
+// The card view of one customer, or null while the server's card is still loading.
+function customerLoyalty(c){
+  if(CUST_LOYALTY_OLD) return customerLoyaltyOld(c);
+  if(!CUST_LOYALTY.has(c.id)) return null;
+  const sum = CUST_LOYALTY.get(c.id);
+  if(sum === 'ERR') return null;
+  return loyaltyCardView(sum || {total_stamps: 0}, loyaltyConfig());
+}
+function lastRewardLabel(L){ const m = L && L.milestones.find(x => x.stamp === L.last_reward_stamp) || (L && L.milestones[L.milestones.length - 1]); return m ? m.label : 'last reward'; }
+// "Card 1 · 15/15 · 5 stamps saved for the next card. Use the Free drink to start card 2."
+function savedStampsText(L){
+  if(!L || !(L.saved_stamps > 0)) return '';
+  return `${plural(L.saved_stamps, 'stamp')} saved for the next card. Card ${L.card_no + 1} starts when the ${ordinal(L.last_reward_stamp)}-stamp reward (${lastRewardLabel(L)}) is used.`;
+}
+function pastCardsHtml(L){
+  const h = (L && L.history) || [];
+  if(!h.length) return '';
+  return `<div class="past-cards"><b>Past cards</b>
+    <ul>${h.slice().reverse().map(x => `<li><b>Card ${esc(x.card_no)}</b> · ${x.filled_at ? 'filled ' + esc(fmtShopDate(x.filled_at)) : 'not filled'} · ${x.completed_at ? 'completed ' + esc(fmtShopDate(x.completed_at)) : 'not completed'}
+      ${(x.rewards || []).length ? `<div class="hint">Rewards used: ${x.rewards.map(r => `${esc(r.label || rewardLabel(r))} (${esc(ordinal(r.stamp))} stamp${r.used_at ? ', ' + esc(fmtShopDate(r.used_at)) : ''}${num(r.amount) ? ', ' + fmtMoney(r.amount) : ''})`).join('; ')}</div>` : ''}</li>`).join('')}</ul></div>`;
+}
 async function renderCustomers(){
   if(state.route !== 'customers') return;      // a save finished after the owner moved on
   const bar = setTopbarActions(`<button class="btn btn-outline" id="cust-csv">Download CSV</button>`);
@@ -939,17 +992,18 @@ async function renderCustomers(){
   content.innerHTML = `<div class="loading-line">Loading customers…</div>`;
   try{ await loadCustomers(); }catch(e){ content.innerHTML = emptyBlock(esc(friendlyError(e))); return; }
   if(state.route !== 'customers') return;
-  const list = CUSTOMERS;
+  const all = CUSTOMERS, list = all.filter(c => !isArchivedCustomer(c)), archived = all.length - list.length;
   const loyalty = !!state.settings.loyalty_enabled;
   content.innerHTML = `
     <div class="grid grid-4 kpi-sans" style="margin-bottom:16px;">
-      ${statCard('Customers', list.length, 'from QR sign-ups or added at the counter')}
+      ${statCard('Customers', list.length, 'with a mobile number')}
       ${statCard('Returning', list.filter(c => num(c.visit_count) >= 2).length, '2 or more visits')}
-      ${statCard('With mobile number', list.filter(c => c.phone).length, 'can find their account again')}
-      ${statCard('Spent by customers', fmtMoney(list.reduce((s, c) => s + num(c.total_spent), 0)), 'after refunds')}
+      ${statCard('Archived', archived, archived ? '<a class="linklike" id="cust-see-archived">no mobile number</a>' : 'no mobile number')}
+      ${statCard('Spent by customers', fmtMoney(all.reduce((s, c) => s + num(c.total_spent), 0)), 'after refunds, archived too')}
     </div>
     <div class="toolbar"><div class="toolbar-left">
-      <div class="search-box"><input type="text" id="cust-search" placeholder="Nickname or mobile…" value="${esc(custFilter.search)}" aria-label="Search customers"></div>
+      <div class="search-box"><input type="text" id="cust-search" placeholder="Nickname, username or mobile…" value="${esc(custFilter.search)}" aria-label="Search customers"></div>
+      <select class="filter" id="cust-list" aria-label="Which customers"><option value="">Customers</option><option value="archived" ${custFilter.archived ? 'selected' : ''}>Archived (no mobile number)</option></select>
       <select class="filter" id="cust-sort" aria-label="Sort">
         ${[['last', 'Sort: last seen'], ['visits', 'Sort: most visits'], ['spent', 'Sort: most spent'], ['new', 'Sort: newest']].map(([v, l]) => `<option value="${v}" ${custFilter.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
@@ -957,14 +1011,17 @@ async function renderCustomers(){
     <div id="cust-wrap"></div>`;
   content.querySelector('#cust-search').oninput = debounce((e) => { custFilter.search = e.target.value; drawCustomers(); }, 120);
   content.querySelector('#cust-sort').onchange = (e) => { custFilter.sort = e.target.value; drawCustomers(); };
+  content.querySelector('#cust-list').onchange = (e) => { custFilter.archived = e.target.value === 'archived'; drawCustomers(); };
+  const sa = content.querySelector('#cust-see-archived');
+  if(sa) sa.onclick = () => { custFilter.archived = true; content.querySelector('#cust-list').value = 'archived'; drawCustomers(); };
   drawCustomers();
 }
 function drawCustomers(){
   const wrap = document.getElementById('cust-wrap'); if(!wrap || !CUSTOMERS) return;
-  let list = CUSTOMERS.slice();
+  let list = CUSTOMERS.filter(c => isArchivedCustomer(c) === !!custFilter.archived);
   if(custFilter.search){
     const q = custFilter.search.toLowerCase().trim(), digits = custFilter.search.replace(/\D/g, '');
-    list = list.filter(c => (c.nickname || '').toLowerCase().includes(q) || (digits.length >= 3 && (String(c.phone || '').includes(digits) || formatPhone(c.phone).replace(/\D/g, '').includes(digits))));
+    list = list.filter(c => (c.nickname || '').toLowerCase().includes(q) || (c.username || '').toLowerCase().includes(q) || (digits.length >= 3 && (String(c.phone || '').includes(digits) || formatPhone(c.phone).replace(/\D/g, '').includes(digits))));
   }
   const sorters = {
     last: (a, b) => String(b.last_seen_at || b.created_at).localeCompare(String(a.last_seen_at || a.created_at)),
@@ -972,22 +1029,39 @@ function drawCustomers(){
     new: (a, b) => String(b.created_at).localeCompare(String(a.created_at)),
   };
   list.sort(sorters[custFilter.sort] || sorters.last);
-  if(!list.length){ wrap.innerHTML = emptyBlock(CUSTOMERS.length ? 'No customer matches that search.' : 'No customers yet. They appear here when someone enters a nickname on the QR order page, or is added at the counter.'); return; }
+  if(!list.length){
+    const anyHere = CUSTOMERS.some(c => isArchivedCustomer(c) === !!custFilter.archived);
+    wrap.innerHTML = emptyBlock(anyHere ? 'No customer matches that search.' : custFilter.archived ? 'No archived customers. Customers without a mobile number show here.' : 'No customers with a mobile number yet. They appear here when someone signs up on the QR order page with their number, or is added at the counter.');
+    return;
+  }
   const loyalty = !!state.settings.loyalty_enabled;
-  wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Nickname</th><th>Mobile</th><th class="num" title="Days with a paid order">Visits (days)</th>${loyalty ? '<th class="num">Stamps on card</th><th>Ready rewards</th>' : ''}<th class="num">Total spent</th><th>Last order</th><th>Joined</th><th>From</th></tr></thead><tbody>
-    ${list.slice(0, 600).map(c => { const L = loyalty ? customerLoyalty(c) : null; return `<tr class="clickable" data-cust="${esc(c.id)}"><td><b>${esc(c.nickname)}</b></td><td class="nowrap">${c.phone ? esc(formatPhone(c.phone)) : '<span class="text-light">—</span>'}</td>
-      <td class="num">${num(c.visit_count)}</td>${L ? `<td class="num">${L.stamps_on_card} / ${L.card_size}${L.card_no > 1 ? `<div class="sub-line">card ${L.card_no}</div>` : ''}</td><td>${L.ready.length ? L.ready.map(r => `<span class="ready-pill">${esc(r.label)}</span>`).join('') : '<span class="text-light">—</span>'}</td>` : ''}<td class="num">${fmtMoney(c.total_spent)}</td>
-      <td>${c.last_order_at ? esc(fmtShopDate(c.last_order_at)) : '—'}</td><td>${esc(fmtShopDate(c.first_seen_at || c.created_at))}</td><td>${esc(c.source === 'COUNTER' ? 'Counter' : 'QR')}</td></tr>`; }).join('')}
+  const shown = list.slice(0, 600);
+  const waiting = loyalty && !CUST_LOYALTY_OLD ? shown.filter(c => !CUST_LOYALTY.has(c.id)).map(c => c.id) : [];
+  const cardCells = (c) => {
+    const L = customerLoyalty(c);
+    if(!L){ const t = CUST_LOYALTY.get(c.id) === 'ERR' ? '—' : '…'; return `<td class="num text-light">${t}</td><td class="text-light">${t}</td>`; }
+    return `<td class="num">${L.stamps_on_card} / ${L.card_size}${L.card_no > 1 ? `<div class="sub-line">card ${L.card_no}</div>` : ''}${L.saved_stamps > 0 ? `<div class="sub-line">+${L.saved_stamps} saved</div>` : ''}</td><td>${L.ready.length ? L.ready.map(r => `<span class="ready-pill">${esc(r.label)}</span>`).join('') : '<span class="text-light">—</span>'}</td>`;
+  };
+  wrap.innerHTML = `${custFilter.archived ? '<p class="hint" style="margin-top:0;">Archived = no mobile number. They are hidden from the main list and the counter\'s list; their data is kept. Adding a number brings a customer back to the main list.</p>' : ''}
+    <div class="table-wrap"><table><thead><tr><th>Nickname</th><th>Mobile</th><th class="num" title="Days with a paid order">Visits (days)</th>${loyalty ? '<th class="num">Stamps on card</th><th>Ready rewards</th>' : ''}<th class="num">Total spent</th><th>Last order</th><th>Joined</th><th>From</th></tr></thead><tbody>
+    ${shown.map(c => `<tr class="clickable" data-cust="${esc(c.id)}"><td><b>${esc(c.nickname)}</b>${c.username ? `<div class="sub-line cust-username">${esc(c.username)}</div>` : ''}</td><td class="nowrap">${c.phone ? esc(formatPhone(c.phone)) : '<span class="text-light">—</span>'}</td>
+      <td class="num">${num(c.visit_count)}</td>${loyalty ? cardCells(c) : ''}<td class="num">${fmtMoney(c.total_spent)}</td>
+      <td>${c.last_order_at ? esc(fmtShopDate(c.last_order_at)) : '—'}</td><td>${esc(fmtShopDate(c.first_seen_at || c.created_at))}</td><td>${esc(c.source === 'COUNTER' ? 'Counter' : 'QR')}</td></tr>`).join('')}
   </tbody></table></div>${list.length > 600 ? '<p class="hint">Showing the first 600. Search to find others.</p>' : ''}`;
   wrap.querySelectorAll('[data-cust]').forEach(tr => tr.onclick = () => openCustomerModal(tr.dataset.cust));
+  if(waiting.length && !CUST_LOYALTY_BUSY){
+    CUST_LOYALTY_BUSY = fetchCustomerLoyalty(waiting)
+      .then(changed => { CUST_LOYALTY_BUSY = null; if(changed && state.route === 'customers') drawCustomers(); })
+      .catch(e => { CUST_LOYALTY_BUSY = null; console.warn('stamp cards not loaded', e); waiting.forEach(id => CUST_LOYALTY.set(id, 'ERR')); toast('Stamp cards could not be loaded: ' + friendlyError(e), 'error'); });
+  }
 }
 async function exportCustomersCSV(){
   const ok = await confirmDialog('The file has customers\' names and mobile numbers. Keep it private and delete it when you are done with it.', 'Download');
   if(!ok) return;
   try{
     const list = CUSTOMERS || await loadCustomers();
-    downloadFile(`${fileNameSlug()}-customers-${shopTodayKey()}.csv`, toCSV(['Nickname', 'Mobile', 'Visits', 'Stamps', 'Total spent', 'First seen', 'Last order', 'Source', 'Notes'],
-      list.map(c => [c.nickname, c.phone ? formatPhone(c.phone) : '', num(c.visit_count), num(c.stamps), num(c.total_spent).toFixed(2), dayKeyOf(c.first_seen_at || c.created_at), c.last_order_at ? dayKeyOf(c.last_order_at) : '', c.source || '', c.notes || ''])), 'text/csv');
+    downloadFile(`${fileNameSlug()}-customers-${shopTodayKey()}.csv`, toCSV(['Nickname', 'Username', 'Mobile', 'List', 'Visits', 'Stamps', 'Total spent', 'First seen', 'Last order', 'Source', 'Notes'],
+      list.map(c => [c.nickname, c.username || '', c.phone ? formatPhone(c.phone) : '', isArchivedCustomer(c) ? 'Archived' : '', num(c.visit_count), num(c.stamps), num(c.total_spent).toFixed(2), dayKeyOf(c.first_seen_at || c.created_at), c.last_order_at ? dayKeyOf(c.last_order_at) : '', c.source || '', c.notes || ''])), 'text/csv');
     applyChanges([Ops.audit('Customer list downloaded', `${list.length} customers`)]).catch(() => {});
   }catch(e){ toast(friendlyError(e), 'error'); }
 }
@@ -1011,19 +1085,26 @@ async function openCustomerModal(id){
   sales = (sales || []).filter(s => s.status !== 'HELD');
   const others = (CUSTOMERS || []).filter(x => x.id !== id).sort((a, b) => String(a.nickname).localeCompare(String(b.nickname)));
   const loyalty = !!state.settings.loyalty_enabled;
+  // 1.5 (B16): this customer's card fresh from the server (saved stamps, past cards)
+  if(loyalty && !CUST_LOYALTY_OLD){ CUST_LOYALTY.delete(id); try{ await fetchCustomerLoyalty([id]); }catch(e){ CUST_LOYALTY.set(id, 'ERR'); toast('The stamp card could not be loaded: ' + friendlyError(e), 'error'); } }
   const L = loyalty ? customerLoyalty(c) : null;
   const myRed = REDEMPTIONS.filter(r => r.customer_id === id || r.merged_from === id);
   openModal({title: esc(c.nickname), wide: true, body: `
     <div class="grid grid-4 kpi-sans" style="margin-bottom:14px;">${statCard('Visits', num(c.visit_count), 'days with a paid order')}${statCard('Total spent', fmtMoney(c.total_spent), 'after refunds')}${L ? statCard('Stamps', `${L.stamps_on_card} / ${L.card_size}`, `card ${L.card_no} · ${num(c.drink_stamps)} drink, ${num(c.food_stamps)} food stamps in all`) : statCard('QR orders', (orders || []).length, 'latest 50')}${statCard('Customer since', esc(fmtShopDate(c.first_seen_at || c.created_at)), c.source === 'COUNTER' ? 'added at the counter' : 'signed up by QR')}</div>
     ${L ? `<div class="card soft-card" style="margin-bottom:14px;"><div class="section-title" style="font-size:22px;margin:0 0 4px;">Stamp card</div>
       <p class="hint" style="margin:0 0 4px;">Card ${L.card_no} · ${L.stamps_on_card} of ${L.card_size}. One stamp for a drink and one for food, each day.</p>
+      ${L.saved_stamps > 0 ? `<p class="saved-stamps"><b>${esc(savedStampsText(L))}</b></p>` : ''}
       ${stampCardHtml(loyaltyConfig(), L.stamps_on_card)}
       <div class="rw-list">${L.milestones.map(m => `<div><span class="rtag ${m.status}">${m.status === 'ready' ? 'Ready' : m.status === 'redeemed' ? 'Used' : esc(m.to_go) + ' to go'}</span>${esc(ordinal(m.stamp))} stamp: ${esc(m.label)}</div>`).join('')}</div>
-      ${L.ready.length ? `<p style="margin:10px 0 0;font-size:14px;"><b>Ready to use:</b> ${L.ready.map(r => `<span class="ready-pill">${esc(r.label)}${r.card_no !== L.card_no ? ' (card ' + esc(r.card_no) + ')' : ''}</span>`).join('')}</p>` : ''}</div>` : ''}
+      ${L.ready.length ? `<p style="margin:10px 0 0;font-size:14px;"><b>Ready to use:</b> ${L.ready.map(r => `<span class="ready-pill">${esc(r.label)}${r.card_no !== L.card_no ? ' (card ' + esc(r.card_no) + ')' : ''}</span>`).join('')}</p>` : ''}
+      ${pastCardsHtml(L)}</div>` : ''}
     <div class="form-grid">
       <div class="form-row"><label for="cu-nick">Nickname</label><input id="cu-nick" maxlength="30" value="${esc(c.nickname)}"></div>
-      <div class="form-row"><label for="cu-phone">Mobile number</label><input id="cu-phone" inputmode="tel" maxlength="20" value="${esc(c.phone ? formatPhone(c.phone) : '')}" placeholder="0917 123 4567"></div>
+      <div class="form-row"><label for="cu-phone">Mobile number</label><input id="cu-phone" inputmode="tel" maxlength="20" value="${esc(c.phone ? formatPhone(c.phone) : '')}" placeholder="0917 123 4567">
+        ${isArchivedCustomer(c) ? '<div class="hint">No number, so this customer is archived (hidden from the main lists). Adding a number brings them back.</div>' : ''}</div>
     </div>
+    ${BO.has15 ? `<div class="form-row"><label for="cu-username">Username</label><input id="cu-username" maxlength="50" value="${esc(c.username || '')}" placeholder="e.g. Mika the Coffee Devourer" autocomplete="off">
+      <div class="hint">Shown on the customer's QR page. 3 to 50 letters, numbers (at most 4), spaces, dots, dashes or apostrophes; no staff or shop words. Must be unique.</div></div>` : ''}
     <div class="form-row"><label for="cu-notes">Notes (staff only)</label><textarea id="cu-notes" rows="2" placeholder="e.g. Likes oat milk">${esc(c.notes || '')}</textarea></div>
     <div class="section-title" style="font-size:15px;">Purchases</div>
     ${sales.length ? `<div class="table-wrap" style="box-shadow:none;max-height:240px;"><table><thead><tr><th>Date</th><th>Receipt #</th><th class="num">Total</th><th>Status</th></tr></thead><tbody>${sales.map(s => `<tr class="clickable" data-sale="${esc(s.id)}"><td>${esc(fmtShopDateTime(s.transaction_date))}</td><td>${esc(s.transaction_number || '')}</td><td class="num">${fmtMoney(s.grand_total)}</td><td>${saleStatusBadge(s.status)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">No purchases linked yet.</p>'}
@@ -1048,7 +1129,17 @@ async function openCustomerModal(id){
         if(!nick){ toast('Enter a nickname', 'error'); return; }
         if(raw && !phone){ toast('Enter a Philippine mobile number, e.g. 0917 123 4567', 'error'); return; }
         if(phone && CUSTOMERS.some(x => x.id !== c.id && x.phone === phone)){ toast('Another customer already has that number — merge them instead.', 'error'); return; }
-        if(await boSave([Ops.update('customers', {id: c.id, nickname: nick, phone, notes: root.querySelector('#cu-notes').value.trim(), updated_at: nowISO()}), Ops.audit('Customer updated', nick, c.id)], {reload: false, success: 'Customer saved'})){
+        const row = {id: c.id, nickname: nick, phone, notes: root.querySelector('#cu-notes').value.trim(), updated_at: nowISO()};
+        // 1.5 (Q2): the username, checked by the server (BAD_USERNAME / USERNAME_TAKEN); only sent when changed
+        const un = root.querySelector('#cu-username');
+        if(un){
+          const v = un.value.normalize('NFKC').replace(/\s+/g, ' ').trim();
+          if(v !== (c.username || '')){
+            if(v.length < 3 || v.length > 50){ toast(friendlyError('BAD_USERNAME'), 'error'); un.focus(); return; }
+            row.username = v;
+          }
+        }
+        if(await boSave([Ops.update('customers', row), Ops.audit('Customer updated', nick + ('username' in row ? ' (username changed)' : ''), c.id)], {reload: false, success: 'Customer saved'})){
           closeModal(); renderCustomers();
         }
       });

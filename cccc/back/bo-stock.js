@@ -13,10 +13,11 @@ const YIELD_UNITS = ['g','kg','ml','L','pcs'];
 
 function txnTypeBadge(type){
   const colors = {PURCHASE:'badge-green', INITIAL_STOCK:'badge-gray', USAGE:'badge-yellow', WASTE:'badge-red', ADJUSTMENT:'badge-gray',
-    PRODUCTION:'badge-green', PRODUCTION_USE:'badge-yellow', SALE_USAGE:'badge-yellow', SALE_REVERSAL:'badge-green'};
+    PRODUCTION:'badge-green', PRODUCTION_USE:'badge-yellow', SALE_USAGE:'badge-yellow', SALE_REVERSAL:'badge-green', PARTNER_RETURN:'badge-yellow'};
   const label = {PURCHASE:'Purchase', INITIAL_STOCK:'Starting stock', USAGE:'Usage', WASTE:'Waste', ADJUSTMENT:'Adjustment',
     PRODUCTION:'Produced', PRODUCTION_USE:'Used in production', SALE_USAGE:'Sold', SALE_REVERSAL:'Refund / void'};
-  return `<span class="badge ${colors[type] || 'badge-gray'}">${esc(label[type] || String(type || '').replace(/_/g, ' '))}</span>`;
+  // other types (e.g. 1.5 PARTNER_RETURN "Returned to partner") use the shared words
+  return `<span class="badge ${colors[type] || 'badge-gray'}">${esc(label[type] || (typeof txnTypeLabel === 'function' ? txnTypeLabel(type) : String(type || '').replace(/_/g, ' ')))}</span>`;
 }
 /* ---- typing a quantity in the unit the owner wants (owner request #3, 2026-10-25) ----
    The number is typed in any unit of the ingredient's family (g/kg, mL/L); what is SAVED is always the
@@ -363,7 +364,8 @@ function openIngredientForm(id){
     </div>` : ''}
     ${!editing ? `<div class="form-grid"><div class="form-row"><label for="f-initial">Starting stock (optional)</label>${qtyWithUnitHtml('f-initial', 'f-initial-unit', UNITS[0], 'min="0" value="0"', 'Starting stock unit')}<div class="hint" id="f-initial-hint">Recorded as starting stock in the inventory history</div></div>
       <div class="form-row"><label for="f-initial-brand">Brand of this stock (optional)</label><input id="f-initial-brand" maxlength="60" placeholder="e.g. Laciate" autocomplete="off"><div class="hint">Adds the brand to this ingredient. More brands can be added on its page.</div></div></div>` : ''}
-    <div class="form-row"><label for="f-notes">Notes</label><textarea id="f-notes" rows="2">${esc(editing ? (editing.notes || '') : '')}</textarea></div>`;
+    <div class="form-row"><label for="f-notes">Notes</label><textarea id="f-notes" rows="2">${esc(editing ? (editing.notes || '') : '')}</textarea></div>
+    ${editing && (isMergedIngredient(editing) || isExpenseIngredient(editing)) ? '' : countTickFieldHtml('f-count-close', editing && editing.count_at_close)}`;
   const foot = `
     ${editing ? (isMergedIngredient(editing) ? '<span style="margin-right:auto;"></span>' : editing.active === false
       ? `<button class="btn btn-outline" id="btn-reactivate-ing" style="margin-right:auto;">Make active again</button>`
@@ -439,6 +441,9 @@ function openIngredientForm(id){
         reorder_level: num(root.querySelector('#f-reorder').value),
         notes: root.querySelector('#f-notes').value, updated_at: now,
       };
+      // 1.5 (B9): "Count at closing" (only sent when this database has it and the tick changed / is set)
+      const tick = root.querySelector('#f-count-close');
+      if(tick && (editing ? !!editing.count_at_close !== tick.checked : tick.checked)) fields.count_at_close = tick.checked;
       if(produced){
         fields.shelf_life_days = Number(root.querySelector('#f-shelflife').value) || null;
         fields.storage_notes = root.querySelector('#f-storage').value;
@@ -451,6 +456,7 @@ function openIngredientForm(id){
       if(editing){
         ops.push(Ops.update('ingredients', Object.assign({id: editing.id}, fields)));
         if(editing.base_unit !== fields.base_unit) ops.push(Ops.audit('Ingredient unit changed', `${name}: ${editing.base_unit} → ${fields.base_unit}`, editing.id));
+        if('count_at_close' in fields) ops.push(Ops.audit('Count at closing changed', `${fields.count_at_close ? 'Ticked' : 'Unticked'}: ${name}`, editing.id));
         if('weight_g_per_ml' in fields && num(fields.weight_g_per_ml) !== num(editing.weight_g_per_ml))
           ops.push(Ops.audit('Weighs changed', `${name}: ${weighsText(editing) || 'not set'} → ${weighsText(Object.assign({}, editing, fields)) || 'not set'}`, editing.id));
       } else {
@@ -1131,6 +1137,7 @@ function renderProduction(){
         <button class="btn btn-sm btn-amber" style="margin-top:8px;" data-produce-recipe="${esc(i.source_recipe_id || '')}">+ Produce</button>
       </div>`;
     }).join('')}</div>` : emptyBlock('No production recipes yet. Mark a recipe (e.g. a sauce or syrup) as "produces an inventory item" to get started.')}
+    <div id="prod-to-return"></div>
     <div class="toolbar" style="margin-top:28px;">
       <div class="toolbar-left">
         <div class="search-box"><input type="text" placeholder="Search batch # or product…" id="prod-search" value="${esc(prodFilter.search)}" aria-label="Search production"></div>
@@ -1146,6 +1153,7 @@ function renderProduction(){
   document.getElementById('prod-recipe-filter').onchange = e => { prodFilter.recipe = e.target.value; renderProductionHistory(); };
   document.getElementById('prod-type-filter').onchange = e => { prodFilter.type = e.target.value; renderProductionHistory(); };
   renderProductionHistory();
+  if(BO.has15) drawToReturn(document.getElementById('prod-to-return'));    // 1.5 (B15): what we owe partner branches
 }
 function renderProductionHistory(){
   const wrap = document.getElementById('prod-history-wrap');
@@ -1165,8 +1173,9 @@ function renderProductionHistory(){
       const recipe = state.recipes.find(r => r.id === b.recipe_id);
       const shortfall = num(b.expected_yield) - num(b.actual_yield);
       const status = shortfall > 0.0001 ? `<span class="badge badge-yellow">Short ${fmtNum(shortfall, 1)} ${esc(b.yield_unit || '')}</span>` : '<span class="badge badge-green">On target</span>';
+      const partner = b.source === 'PARTNER';
       return `<tr><td>${fmtDay(b.production_date)}</td><td>${esc(b.batch_number || '—')}</td>
-        <td><a class="linklike" data-ing="${esc(b.produced_ingredient_id)}">${esc(ingName(b.produced_ingredient_id))}</a></td>
+        <td><a class="linklike" data-ing="${esc(b.produced_ingredient_id)}">${esc(ingName(b.produced_ingredient_id))}</a>${partner ? ` <span class="badge badge-yellow" title="Made from their ingredients; ours were not taken">Made by ${esc(partnerName(b.partner_supplier_id))}</span>` : ''}${num(b.scale) > 0 && Math.abs(num(b.scale) - 1) > 1e-9 ? ` <span class="badge badge-gray">${esc(scaleText(b.scale))} batch</span>` : ''}</td>
         <td>${recipe ? esc(recipeTypeLabel(recipeTypeOf(recipe))) : '—'}</td>
         <td class="num">${fmtNum(b.actual_yield, 2)}</td><td>${esc(b.yield_unit || '')}</td>
         <td class="num">${fmtMoney(b.raw_cost_total)}</td><td class="num mono">${fmtMoney(b.actual_cost_per_unit)}</td><td>${status}</td></tr>`;
@@ -1179,13 +1188,35 @@ function nextBatchNumber(recipe){
   const todaysCount = state.productionBatches.filter(b => b.recipe_id === recipe.id && b.batch_number && b.batch_number.includes(datePart)).length;
   return `${prefix}-${datePart}-${String(todaysCount + 1).padStart(3, '0')}`;
 }
+// Release 1.5 (B15): batch size buttons (½×, 1×, 2×, a custom size), "Max I can make" (maxBatchFromStock) and
+// "Made by a partner branch" (TCO: partner_batch_preview / produce_partner_batch, bo-partner.js).
+// One rule for the ingredient lines: scaleProduction(recipe, scale) from ../shared/logic.js. The batch cost is the
+// recipe's cost at today's prices × the size (as before); our own batches send `scale` too.
 function openProductionForm(prefillRecipeId){
   const recipes = productionRecipesList().sort(byName);
   if(!recipes.length){ toast('No production recipes yet — mark a recipe as "produces an inventory item" first.', 'warn'); return; }
+  const partners = BO.has15 ? partnerSuppliers() : [];
   const body = `
     <div class="form-row"><label for="pr-recipe">Product / recipe</label><select id="pr-recipe">${recipes.map(r => `<option value="${esc(r.id)}" ${prefillRecipeId === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
+    ${BO.has15 ? `<div class="form-row"><label>Made by</label>
+      <div class="seg" role="radiogroup" aria-label="Made by"><button class="seg-btn active" type="button" data-src="OWN" role="radio" aria-checked="true">Made here</button><button class="seg-btn" type="button" data-src="PARTNER" role="radio" aria-checked="false" ${partners.length ? '' : 'disabled title="Tick Partner branch on TCO in Suppliers first"'}>Made by ${esc(partners.length === 1 ? partners[0].name : 'a partner branch')}</button></div>
+      ${partners.length ? '' : '<div class="hint">To record batches made by TCO, tick "Partner branch" on TCO in Suppliers.</div>'}</div>
+    <div id="pr-partner-box" class="card soft-card" style="display:none;margin-bottom:12px;">
+      ${partners.length > 1 ? `<div class="form-row"><label for="pr-partner">Partner branch</label><select id="pr-partner">${selectOptions(partners, partners[0].id)}</select></div>` : `<input type="hidden" id="pr-partner" value="${esc(partners.length ? partners[0].id : '')}">`}
+      <div class="form-row mb-0"><label>What we owe for this batch</label>
+        <div class="chk-row" role="radiogroup" aria-label="What we owe">
+          <label class="chk"><input type="radio" name="pr-debt" value="INGREDIENTS" checked> Same ingredients back</label>
+          <label class="chk"><input type="radio" name="pr-debt" value="PESOS"> Pesos (the value at our ingredient costs)</label></div>
+        <div class="hint">Their ingredients made it, so ours are not taken out of stock. The batch goes on the "To return" list.</div></div>
+    </div>` : ''}
+    <div class="form-row"><label>Batch size</label>
+      <div class="field-inline pr-scale-row">
+        <div class="seg" role="group" aria-label="Batch size">${PRODUCTION_SCALES.map(x => `<button class="seg-btn" type="button" data-scale="${x}">${esc(scaleText(x))}</button>`).join('')}</div>
+        <label class="sr-only" for="pr-scale">Custom size</label><input type="number" id="pr-scale" step="0.05" min="0.05" max="${PRODUCTION_MAX_SCALE}" style="width:90px;" aria-describedby="pr-scale-hint"><span class="text-light">×</span>
+        <button class="btn btn-sm btn-outline" type="button" id="pr-max">Max I can make</button></div>
+      <div class="hint" id="pr-scale-hint" role="status"></div></div>
     <div class="form-grid">
-      <div class="form-row"><label for="pr-date">Production date</label><input type="date" id="pr-date" value="${shopTodayKey()}"></div>
+      <div class="form-row"><label for="pr-date">Production date</label><input type="date" id="pr-date" value="${shopTodayKey()}" max="${keyAddDays(shopTodayKey(), 1)}"></div>
       <div class="form-row"><label for="pr-batch">Batch number</label><input id="pr-batch" maxlength="40"></div>
     </div>
     <div class="form-grid">
@@ -1196,90 +1227,178 @@ function openProductionForm(prefillRecipeId){
     <div class="form-row"><label for="pr-notes">Notes</label><textarea id="pr-notes" rows="2"></textarea></div>
     <div class="card soft-card">
       <div class="grid grid-2">
-        <div><div class="text-light" style="font-size:11px;text-transform:uppercase;font-weight:700;">Estimated batch cost</div><div id="pr-est-cost" style="font-size:20px;font-weight:650;">—</div></div>
+        <div><div class="text-light" style="font-size:11px;text-transform:uppercase;font-weight:700;" id="pr-cost-label">Estimated batch cost</div><div id="pr-est-cost" style="font-size:20px;font-weight:650;">—</div></div>
         <div><div class="text-light" style="font-size:11px;text-transform:uppercase;font-weight:700;">Estimated cost / unit</div><div id="pr-est-unit-cost" style="font-size:20px;font-weight:650;">—</div></div>
       </div>
       <div id="pr-uses" class="hint" style="margin-top:8px;"></div>
-      <p class="hint mb-0">Ingredients are scaled from the recipe by expected yield ÷ the recipe's normal yield, then taken out of stock. Cost per unit uses the actual yield.</p>
+      <p class="hint mb-0" id="pr-how">Ingredients follow the batch size (the recipe × the size), then are taken out of stock. Cost per unit uses the actual yield.</p>
     </div>`;
   const foot = `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="btn-save-prod">Produce batch</button>`;
   openModal({title: 'New production', wide: true, body, foot, onMount: (root) => {
     root.querySelector('[data-cancel]').onclick = closeModal;
-    const recipeSel = root.querySelector('#pr-recipe'), expectedInput = root.querySelector('#pr-expected');
-    const actualInput = root.querySelector('#pr-actual'), batchInput = root.querySelector('#pr-batch');
-    const expUnit = root.querySelector('#pr-expected-unit'), actUnit = root.querySelector('#pr-actual-unit');
+    const q = (sel) => root.querySelector(sel);
+    const recipeSel = q('#pr-recipe'), expectedInput = q('#pr-expected');
+    const actualInput = q('#pr-actual'), batchInput = q('#pr-batch'), scaleInput = q('#pr-scale');
+    const expUnit = q('#pr-expected-unit'), actUnit = q('#pr-actual-unit');
     const currentRecipe = () => state.recipes.find(r => r.id === recipeSel.value);
+    let source = 'OWN', scale = 1, maxNote = '', previewSeq = 0, preview = null;
+    const debtKind = () => { const r = root.querySelector('input[name="pr-debt"]:checked'); return r ? r.value : 'INGREDIENTS'; };
     // Yields are typed in any unit of the recipe's yield unit family and saved in the recipe's yield unit
     // (= the produced item's base unit), like every other stored quantity.
     const yUnit = () => { const r = currentRecipe(); return (r && r.yield_unit) || ''; };
     const inYieldUnit = (input, sel) => { const v = typedToBase(input.value, sel.value, yUnit()); return v == null ? 0 : v; };
+    const shownYield = (v) => { const c = convertQuantity(v, yUnit(), expUnit.value); return String(Number(Number(c == null ? v : c).toFixed(6))); };
+    // the size buttons / box -> expected yield (and back: typing the expected yield sets the size)
+    function setScale(x, fromYield){
+      const recipe = currentRecipe();
+      scale = cleanProductionScale(x);
+      if(!fromYield){
+        expectedInput.value = scale && recipe ? shownYield(productionYield(recipe, scale)) : '';
+        markFilled(expectedInput);
+      }
+      scaleInput.value = scale ? String(Number(scale.toFixed(4))) : '';
+      root.querySelectorAll('[data-scale]').forEach(b => b.classList.toggle('active', scale != null && Math.abs(Number(b.dataset.scale) - scale) < 1e-9));
+      updatePreview();
+    }
     function loadDefaults(){
       const recipe = currentRecipe(); if(!recipe) return;
       resetUnitSelect(expUnit, yUnit()); expUnit.value = yUnit(); expUnit.dataset.prev = expUnit.value;
       resetUnitSelect(actUnit, yUnit()); actUnit.value = yUnit(); actUnit.dataset.prev = actUnit.value;
       expUnit.style.display = actUnit.style.display = compatibleUnits(yUnit()).length > 1 ? '' : 'none';
-      expectedInput.value = recipe.expected_yield || ''; markFilled(expectedInput);
-      root.querySelector('#pr-yield-unit-hint').textContent = `Unit: ${recipe.yield_unit || '—'} (recipe normal yield: ${fmtNum(recipe.expected_yield, 0)} ${recipe.yield_unit || ''})`;
+      q('#pr-yield-unit-hint').textContent = `Unit: ${recipe.yield_unit || '—'} (recipe normal yield, 1×: ${fmtNum(recipe.expected_yield, 0)} ${recipe.yield_unit || ''})`;
       batchInput.value = nextBatchNumber(recipe);
+      maxNote = '';
+      setScale(1);
+    }
+    function setSource(src){
+      source = src;
+      root.querySelectorAll('[data-src]').forEach(b => { const on = b.dataset.src === src; b.classList.toggle('active', on); b.setAttribute('aria-checked', on ? 'true' : 'false'); });
+      const pb = q('#pr-partner-box'); if(pb) pb.style.display = src === 'PARTNER' ? '' : 'none';
+      q('#pr-max').style.display = src === 'PARTNER' ? 'none' : '';
+      q('#pr-cost-label').textContent = src === 'PARTNER' ? 'Value we owe (= batch cost)' : 'Estimated batch cost';
+      q('#pr-how').textContent = src === 'PARTNER'
+        ? 'The product is added to our stock; our ingredients are not taken. The batch costs what we owe, valued at our ingredient costs on the production day.'
+        : 'Ingredients follow the batch size (the recipe × the size), then are taken out of stock. Cost per unit uses the actual yield.';
+      actualInput.placeholder = src === 'PARTNER' ? 'Empty = the expected yield' : 'What you actually got';
+      q('#btn-save-prod').textContent = src === 'PARTNER' ? 'Record batch from ' + partnerName((q('#pr-partner') || {}).value) : 'Produce batch';
+      maxNote = '';
       updatePreview();
     }
+    function partnerInput(){
+      const recipe = currentRecipe(), actual = inYieldUnit(actualInput, actUnit);
+      return {recipe_id: recipe && recipe.id, supplier_id: (q('#pr-partner') || {}).value || null, debt_kind: debtKind(), scale,
+        actual_yield: actual > 0 ? actual : undefined, production_date: q('#pr-date').value || shopTodayKey()};
+    }
+    const askPreview = debounce(async () => {
+      const my = ++previewSeq;
+      const box = q('#pr-uses'); if(!box) return;
+      if(!scale){ preview = null; return; }
+      try{
+        const r = await cloud.rpc('partner_batch_preview', {p: partnerInput()});
+        if(my !== previewSeq || !box.isConnected || source !== 'PARTNER') return;
+        preview = r;
+        q('#pr-est-cost').textContent = fmtMoney(r.value);
+        q('#pr-est-unit-cost').textContent = num(r.actual_yield) > 0 ? fmtMoney(r.cost_per_unit) + '/' + unitLabel(r.yield_unit || '') : '—';
+        box.innerHTML = (r.debt_kind === 'PESOS' ? `We owe <b>${fmtMoney(r.amount_owed)}</b>, the value of: ` : 'We give back: ')
+          + (r.lines || []).map(l => `${esc(l.name)} ${esc(formatQuantity(num(l.quantity), l.unit, l.unit, 3))} <span class="text-light">(${fmtMoney(l.value)})</span>`).join(' · ');
+      }catch(e){
+        if(my !== previewSeq || !box.isConnected) return;
+        preview = null;
+        q('#pr-est-cost').textContent = '—'; q('#pr-est-unit-cost').textContent = '—';
+        box.innerHTML = `<span class="text-red">${esc(friendlyError(e))}</span>`;
+      }
+    }, 250);
     function updatePreview(){
       const recipe = currentRecipe(); if(!recipe) return;
-      const expected = inYieldUnit(expectedInput, expUnit), actual = inYieldUnit(actualInput, actUnit), baseYield = num(recipe.expected_yield);
-      const multiplier = baseYield > 0 ? expected / baseYield : 0;
+      const expected = inYieldUnit(expectedInput, expUnit), actual = inYieldUnit(actualInput, actUnit);
       const yu = yUnit();
-      root.querySelector('#pr-actual-hint').textContent = [expUnit.value !== yu && expected > 0 ? `Expected: ${formatQuantity(expected, yu, yu)}` : '',
+      q('#pr-scale-hint').innerHTML = (scale ? `This batch is ${esc(scaleText(scale))} the recipe.` : '<span class="text-red">Choose a size above 0 (at most 100×).</span>') + (maxNote ? ' ' + maxNote : '');
+      q('#pr-actual-hint').textContent = [expUnit.value !== yu && expected > 0 ? `Expected: ${formatQuantity(expected, yu, yu)}` : '',
         actUnit.value !== yu && actual > 0 ? `Actual: ${formatQuantity(actual, yu, yu)}` : ''].filter(Boolean).join(' · ');
-      const rc = recipeCost(recipe.id);
-      const estCost = rc.total * multiplier;
-      root.querySelector('#pr-est-cost').textContent = expected > 0 ? fmtMoney(estCost) : '—';
-      root.querySelector('#pr-est-unit-cost').textContent = actual > 0 ? fmtMoney(estCost / actual) + '/' + unitLabel(recipe.yield_unit || '') : '—';
-      root.querySelector('#pr-waste-row').style.display = (expected > 0 && actual > 0 && actual < expected) ? 'block' : 'none';
-      const short = rc.lines.filter(l => num(l.quantity) * multiplier > ingredientStock(l.ingredient_id) + 1e-9);
-      root.querySelector('#pr-uses').innerHTML = multiplier > 0 ? 'Uses: ' + rc.lines.map(l => `${esc(ingName(l.ingredient_id))} ${fmtNum(num(l.quantity) * multiplier, 2)} ${esc((ingredientById(l.ingredient_id) || {}).base_unit || '')}`).join(' · ')
-        + (short.length ? `<br><span class="text-red">Not enough stock recorded for: ${short.map(l => esc(ingName(l.ingredient_id))).join(', ')} (it will go below zero).</span>` : '') : '';
+      q('#pr-waste-row').style.display = (expected > 0 && actual > 0 && actual < expected) ? 'block' : 'none';
+      if(source === 'PARTNER'){ q('#pr-uses').innerHTML = '<span class="text-light">Working out what we owe…</span>'; askPreview(); return; }
+      const estCost = recipeCost(recipe.id).total * (scale || 0);
+      q('#pr-est-cost').textContent = scale ? fmtMoney(estCost) : '—';
+      q('#pr-est-unit-cost').textContent = scale && actual > 0 ? fmtMoney(estCost / actual) + '/' + unitLabel(recipe.yield_unit || '') : '—';
+      const lines = scale ? scaleProduction(recipe, scale) : [];
+      const short = lines.filter(l => l.quantity > ingredientStock(l.ingredient_id) + 1e-9);
+      q('#pr-uses').innerHTML = lines.length ? 'Uses: ' + lines.map(l => `${esc(l.name)} ${esc(formatQuantity(l.quantity, l.unit, l.unit, 2))}`).join(' · ')
+        + (short.length ? `<br><span class="text-red">Not enough stock recorded for: ${short.map(l => esc(l.name)).join(', ')} (it will go below zero).</span>` : '') : '';
     }
     recipeSel.onchange = loadDefaults;
-    expectedInput.oninput = updatePreview; actualInput.oninput = updatePreview;
+    expectedInput.oninput = () => { const recipe = currentRecipe(); const s2 = productionScaleFromYield(recipe, inYieldUnit(expectedInput, expUnit)); maxNote = ''; setScale(s2, true); };
+    actualInput.oninput = updatePreview;
     wireUnitConvert(expectedInput, expUnit, updatePreview); wireUnitConvert(actualInput, actUnit, updatePreview);
+    root.querySelectorAll('[data-scale]').forEach(b => b.onclick = () => { maxNote = ''; setScale(Number(b.dataset.scale)); });
+    scaleInput.oninput = () => { maxNote = ''; const v = scaleInput.value; scale = cleanProductionScale(v); if(scale){ expectedInput.value = shownYield(productionYield(currentRecipe(), scale)); markFilled(expectedInput); } root.querySelectorAll('[data-scale]').forEach(b => b.classList.toggle('active', scale != null && Math.abs(Number(b.dataset.scale) - scale) < 1e-9)); updatePreview(); };
+    q('#pr-max').onclick = () => {
+      const recipe = currentRecipe(); if(!recipe) return;
+      const m = maxBatchFromStock(recipe);
+      if(m.scale == null){ maxNote = 'This recipe has no stock items to check.'; updatePreview(); return; }
+      const lim = ingredientById(m.limiting_ingredient_id), line = scaleProduction(recipe, 1).find(l => l.ingredient_id === m.limiting_ingredient_id);
+      const have = lim ? formatQuantity(ingredientStock(lim.id), lim.base_unit, lim.base_unit, 2) : '';
+      const why = lim ? `limited by <b>${esc(lim.name)}</b> (${esc(have)} in stock, ${esc(line ? formatQuantity(line.quantity, line.unit, line.unit, 2) : '')} per 1×)` : '';
+      if(!(m.scale > 0)){ maxNote = `<span class="text-red">Stock is too low for even a small batch: ${why}.</span>`; updatePreview(); return; }
+      maxNote = `Max I can make: <b>${esc(scaleText(m.scale))}</b>, ${why}.`;
+      setScale(m.scale);
+    };
+    root.querySelectorAll('[data-src]').forEach(b => b.onclick = () => { if(!b.disabled) setSource(b.dataset.src); });
+    root.querySelectorAll('input[name="pr-debt"]').forEach(r => r.onchange = updatePreview);
+    const ps = q('select#pr-partner'); if(ps) ps.onchange = () => setSource('PARTNER');
+    q('#pr-date').onchange = updatePreview;
     loadDefaults();
-    const save = root.querySelector('#btn-save-prod');
+    const save = q('#btn-save-prod');
     save.onclick = () => busy(save, async () => {
       const recipe = currentRecipe();
       if(!recipe){ toast('Select a product / recipe', 'error'); return; }
       const producedIng = ingredientById(recipe.produced_ingredient_id);
       if(!producedIng){ toast('This recipe is not linked to an inventory item — edit the recipe first.', 'error'); return; }
-      const baseYield = num(recipe.expected_yield), expected = inYieldUnit(expectedInput, expUnit), actual = inYieldUnit(actualInput, actUnit);
+      const baseYield = num(recipe.expected_yield), expected = inYieldUnit(expectedInput, expUnit);
+      // a partner batch with no actual yield typed: what was expected (the server does the same)
+      const actual = source === 'PARTNER' && actualInput.value.trim() === '' ? expected : inYieldUnit(actualInput, actUnit);
       if(baseYield <= 0){ toast('This recipe has no expected yield — edit the recipe first.', 'error'); return; }
-      if(expected <= 0){ toast('Enter an expected yield for this batch', 'error'); return; }
+      if(!scale || expected <= 0){ toast('Choose a batch size (or type the expected yield)', 'error'); return; }
       if(actual <= 0){ toast('Enter the actual yield produced', 'error'); return; }
-      const multiplier = expected / baseYield;
+      const prodDate = q('#pr-date').value || shopTodayKey();
+      const batchNo = batchInput.value.trim() || nextBatchNumber(recipe);
+      const actualText = typedQtyText(actual, recipe.yield_unit || '', actualInput.value.trim() === '' ? (recipe.yield_unit || '') : actUnit.value);
+      if(source === 'PARTNER'){
+        const p = Object.assign(partnerInput(), {id: uid(), actual_yield: actual, batch_number: batchNo, notes: q('#pr-notes').value.trim().slice(0, 500) || null});
+        if(!p.supplier_id){ toast(friendlyError('NOT_A_PARTNER'), 'error'); return; }
+        const seq = BO_MODAL_SEQ;
+        let r;
+        try{ r = await cloud.rpc('produce_partner_batch', {p}); }
+        catch(e){ toast(friendlyError(e), 'error'); return; }
+        try{ await boLoad(); }catch(e){ console.warn(e); }
+        boGuardLateClose(seq);
+        toast(`${actualText} of ${producedIng.name} added from ${partnerName(p.supplier_id)}. On the "To return" list: ${r && r.debt_kind === 'PESOS' ? fmtMoney(r.amount_owed) : 'the ingredients'}.`);
+        closeModal();
+        if(state.route === 'production') rerender(); else navigate('production');
+        return;
+      }
       const rc = recipeCost(recipe.id);               // today's live ingredient costs, locked into this batch
-      const rawCostTotal = rc.total * multiplier;
+      const rawCostTotal = rc.total * scale;
       const now = nowISO();
-      const prodDate = root.querySelector('#pr-date').value || shopTodayKey();
       const batch = {
         id: uid(), recipe_id: recipe.id, produced_ingredient_id: producedIng.id,
-        batch_number: batchInput.value.trim() || nextBatchNumber(recipe),
+        batch_number: batchNo,
         production_date: prodDate, expected_yield: expected, actual_yield: actual, yield_unit: recipe.yield_unit,
         raw_cost_total: rawCostTotal, actual_cost_per_unit: rawCostTotal / actual,
-        waste_reason: actual < expected ? (root.querySelector('#pr-waste-reason').value || '') : '',
-        notes: root.querySelector('#pr-notes').value, created_at: now,
+        waste_reason: actual < expected ? (q('#pr-waste-reason').value || '') : '',
+        notes: q('#pr-notes').value, created_at: now,
       };
+      if(BO.has15) batch.scale = scale;          // 012: the batch size (½× = 0.5), our own batches too
       const ops = [Ops.upsert('production_batches', batch)];
-      rc.lines.forEach(line => {
-        const usedQty = num(line.quantity) * multiplier;
-        if(usedQty <= 0) return;
-        ops.push(Ops.upsert('inventory_transactions', {id: uid(), ingredient_id: line.ingredient_id, transaction_type: 'PRODUCTION_USE', quantity: usedQty,
+      scaleProduction(recipe, scale).forEach(line => {
+        ops.push(Ops.upsert('inventory_transactions', {id: uid(), ingredient_id: line.ingredient_id, transaction_type: 'PRODUCTION_USE', quantity: line.quantity,
           reference_id: batch.id, transaction_date: prodDate, notes: `Used in production batch ${batch.batch_number} (${recipe.name})`, created_at: now}));
       });
       // stock is in the produced item's base unit (normally the same as the recipe's yield unit)
       const producedQty = producedIng.base_unit && recipe.yield_unit && producedIng.base_unit !== recipe.yield_unit
-        ? (convertQuantity(actual, recipe.yield_unit, producedIng.base_unit) ?? actual) : actual;
+        ? (convertQuantity(actual, recipe.yield_unit, producedIng.base_unit, producedIng.weight_g_per_ml) ?? actual) : actual;
       ops.push(Ops.upsert('inventory_transactions', {id: uid(), ingredient_id: producedIng.id, transaction_type: 'PRODUCTION', quantity: producedQty,
         reference_id: batch.id, transaction_date: prodDate, notes: `Batch ${batch.batch_number}`, created_at: now}));
-      const actualText = typedQtyText(actual, recipe.yield_unit || '', actUnit.value);
-      ops.push(Ops.audit('Batch produced', `${batch.batch_number}: ${actualText} of ${producedIng.name}`, batch.id));
+      ops.push(Ops.audit('Batch produced', `${batch.batch_number}: ${actualText} of ${producedIng.name}${Math.abs(scale - 1) > 1e-9 ? ' (' + scaleText(scale) + ' batch)' : ''}`, batch.id));
       if(await boSave(ops, {success: `Produced ${actualText} of ${producedIng.name} — stock updated`})){
         closeModal();
         if(state.route === 'production') rerender(); else navigate('production');
@@ -1518,7 +1637,7 @@ function renderSuppliers(){
     const avg = sp.length ? total / sp.length : 0;
     const ingCount = new Set(sp.map(p => p.ingredient_id)).size;
     return `<div class="card">
-      <div style="display:flex;justify-content:space-between;gap:8px;"><b style="font-size:16px;">${esc(s.name)}</b><button class="btn btn-sm btn-ghost" data-edit="${esc(s.id)}">Edit</button></div>
+      <div style="display:flex;justify-content:space-between;gap:8px;"><b style="font-size:16px;">${esc(s.name)}${s.is_partner_branch ? ' <span class="badge badge-yellow">Partner branch</span>' : ''}</b><button class="btn btn-sm btn-ghost" data-edit="${esc(s.id)}">Edit</button></div>
       <div class="text-light" style="font-size:13px;margin:6px 0;">${esc(s.contact || '')}${s.phone ? ' · ' + esc(s.phone) : ''}${s.email ? ' · ' + esc(s.email) : ''}</div>
       <div style="margin-top:10px;font-size:13.5px;">
         <div>Total purchases: <b>${fmtMoney(total)}</b> (${plural(sp.length, 'order')})</div>
@@ -1541,7 +1660,9 @@ function openSupplierForm(id){
       <div class="form-row"><label for="s-email">Email</label><input id="s-email" type="email" maxlength="120" value="${v('email')}"></div>
       <div class="form-row"><label for="s-address">Address</label><input id="s-address" maxlength="200" value="${v('address')}"></div>
     </div>
-    <div class="form-row"><label for="s-notes">Notes</label><textarea id="s-notes" rows="2">${v('notes')}</textarea></div>`;
+    <div class="form-row"><label for="s-notes">Notes</label><textarea id="s-notes" rows="2">${v('notes')}</textarea></div>
+    ${BO.has15 ? `<div class="card soft-card"><label class="chk" style="margin:0;"><input type="checkbox" id="s-partner" ${editing && editing.is_partner_branch ? 'checked' : ''}> <b>Partner branch</b></label>
+      <div class="hint">For your own other shop (for example TCO) that makes products for this shop from its own ingredients. Its batches go on the "To return" list in Production.</div></div>` : ''}`;
   const foot = `${editing ? '<button class="btn btn-danger" id="s-delete" style="margin-right:auto;">Delete</button>' : ''}<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="s-save">${editing ? 'Save' : 'Add supplier'}</button>`;
   openModal({title: editing ? 'Edit supplier' : 'Add supplier', body, foot, onMount: (root) => {
     root.querySelector('[data-cancel]').onclick = closeModal;
@@ -1561,6 +1682,8 @@ function openSupplierForm(id){
         contact: root.querySelector('#s-contact').value.trim(), phone: root.querySelector('#s-phone').value.trim(),
         email: root.querySelector('#s-email').value.trim(), address: root.querySelector('#s-address').value.trim(),
         notes: root.querySelector('#s-notes').value};
+      const pt = root.querySelector('#s-partner');
+      if(pt) row.is_partner_branch = pt.checked;
       if(await boSave([editing ? Ops.update('suppliers', row) : Ops.upsert('suppliers', row), Ops.audit(editing ? 'Supplier updated' : 'Supplier added', name, row.id)], {success: editing ? 'Supplier updated' : 'Supplier added'})){ closeModal(); renderSuppliers(); }
     });
   }});

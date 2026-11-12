@@ -13,6 +13,10 @@ insert into ingredients(id,business_id,name,base_unit) values
  ('22222222-0000-0000-0000-0000000000b3',b,'Dome lid','pcs'),
  ('22222222-0000-0000-0000-0000000000b4',b,'Caramel syrup','ml')
  on conflict (id) do nothing;
+-- 1.5 (owner item B12): the QR page lists a swap only while its milk is in stock, so the oat milk gets stock here
+insert into inventory_transactions(business_id, ingredient_id, transaction_type, quantity, transaction_date)
+  select b, '22222222-0000-0000-0000-0000000000b1', 'INITIAL_STOCK', 5000, current_date
+  where not exists (select 1 from inventory_transactions where ingredient_id = '22222222-0000-0000-0000-0000000000b1');
 -- Matcha uses milk too, so the swap shows there
 insert into recipe_ingredients(business_id,recipe_id,ingredient_id,quantity) values (b,'33333333-0000-0000-0000-0000000000a2','22222222-0000-0000-0000-000000000002',150) on conflict do nothing;
 insert into option_groups(id,business_id,name,required,multi_select,sort_order,applies_to,options) values

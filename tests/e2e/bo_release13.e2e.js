@@ -160,7 +160,8 @@ function seed(){
         text: document.body.innerText}));
       const urls = await page.evaluate(() => sortedTables().filter(t => t.active).map(t => tableOrderUrl(t)));
       ok(info.cards === 2 && info.svgs === 2 && info.sheets === Math.ceil(2 / Number(per)) && info.wm && info.mark, `QR printout ${per}/page: 2 cards, images loaded`, info);
-      ok(/Scan to order/i.test(info.text) && /Bienvenido na Kapihan!/i.test(info.text) && /Pay & pick up at the counter/i.test(info.text), 'card texts', info.text.slice(0, 300));
+      // 1.5 (owner decision B12, 2026-11-09): "Bienvenido na Kapihan!" is no longer on the printed table cards
+      ok(/Scan to order/i.test(info.text) && !/Bienvenido na Kapihan/i.test(info.text) && /Pay & pick up at the counter/i.test(info.text), 'card texts (1.5: without the dropped tagline)', info.text.slice(0, 300));
       ok(urls.every(u => /\/cccc\/order\/\?t=[0-9a-z]+$/.test(u)) && urls.includes(H.BASE + '/cccc/order/?t=tabletoken5'), 'QR links unchanged', urls);
       await pop.screenshot({path: SH + `qr-print-${per}up.png`, fullPage: true});
       await pop.emulateMedia({media: 'print'}); await pop.screenshot({path: SH + `qr-print-${per}up-print.png`, fullPage: true});

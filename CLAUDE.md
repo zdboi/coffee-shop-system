@@ -1,6 +1,11 @@
 # Cavite City Coffee Club (CCCC) — POS + Inventory + QR Ordering
 
-The rulebook for everyone working in this repository: the lead (C) and every subagent.
+The rulebook for everyone working in this repository: the lead (C) and the independent checker (Z).
+
+**Team model (owner decision 2026-11-11):** C builds everything itself (database, shared core, counter,
+Back Office, QR page, docs). **Z** (`.claude/agents/z.md`) is the one independent agent: security reviewer
+and final QA tester, who counter-checks everything C does. The earlier specialist agents are retired
+(`.claude/agents-retired/`).
 Read this file fully before touching anything.
 
 ## What this is
@@ -28,23 +33,23 @@ plain-language, step-by-step instructions.
   It is now **frozen**: every database change goes in a new numbered script, per golden rule 6.
 - The owner also ran **`005_live_fixes.sql`** and **`006_live_fix_sync_operations.sql`** on live (2026-10-20); both
   are frozen too. **`007_batch1.sql`** (release 1.1, run 2026-10-29) and **`008_release_1_2.sql`** (release 1.2, run 2026-11-02)
-  and **`009_release_1_3.sql`** (release 1.3, run 2026-11-02) and **`010_release_1_4.sql`** (release 1.4, run 2026-11-09) and **`011_release_1_4_1.sql`** (release 1.4.1, run 2026-11-09) are frozen. The next script is **`012_…sql`** (release 1.5); it may be edited until the owner runs it. The live database has older CHECK rules than our reconstruction:
+  and **`009_release_1_3.sql`** (release 1.3, run 2026-11-02) and **`010_release_1_4.sql`** (release 1.4, run 2026-11-09) and **`011_release_1_4_1.sql`** (release 1.4.1, run 2026-11-09) and **`012_release_1_5.sql`** (release 1.5, run 2026-11-12) are frozen. The next script is **`013_…sql`**; it may be edited until the owner runs it. The live database has older CHECK rules than our reconstruction:
   any new value written to a live column must be checked against the live rule list first.
 
 ## Golden rules (everyone)
-1. **Own only your files.** Each file has exactly one owner (table below). Need a change in
-   someone else's file? Stop and report what you need to the lead.
+1. **Own only your files.** C owns everything except `tests/**`, which Z owns. Z never edits app code,
+   SQL or docs; it reports what needs changing and C fixes it.
 2. **Never modify** `_archive/**` (incl. the retired old apps, moved to `_archive/old-apps/` on 2026-10-20).
 3. **Never** put a Supabase `service_role` key (or any secret) in any file. The anon key in
    `cccc/shared/config.js` is public by design.
 4. **Never connect to the real Supabase project** (`qtkoxzuedxvqoktobtyg.supabase.co`), never run
    SQL against it. The owner runs database scripts themselves. Test only on the local test DB.
-5. **Never** `git commit`, `git push`, or switch branches. The lead does all git work.
+5. **Only C** does git work (commit, push, PRs). Z never commits, pushes or switches branches.
 6. **Database scripts are append-only once the owner has run one.** Changes then go in a new
    numbered file (`005_…sql`). Until then, the 004 script may be edited.
 7. Don't weaken security to make something work (RLS, grants, PIN checks, server-side prices).
-8. Don't edit tests to make them pass (only QA edits tests; expected numbers change only with
-   the lead's approval).
+8. Don't edit tests to make them pass (only Z edits tests; expected numbers change only with
+   C's approval, and C tells the owner when a change reflects an owner decision).
 
 ## Security decisions (2026-10-12, from the security review — binding)
 1. **Counters join only by pairing code** (anonymous device login + `redeem_device_pairing`).
@@ -107,8 +112,15 @@ plain-language, step-by-step instructions.
     each with its own test database) and compare test results, screenshots, speed and behaviour before release.
     Never split real customers or the live database between two versions; the live site always runs one version.
   - Remove the copy when done (`git worktree remove`).
-- At every checkpoint the lead updates `docs/RESUME.md`, the project doc, and sends the owner an
-  updated Obsidian session note ("CCCC POS — session log.md"; the owner drops it into their vault).
+- **Memory (owner decision 2026-11-11):** C's long-term memory lives in two places, kept in step:
+  1. **GitHub (this repo):** `docs/RESUME.md` (where we are + next steps), `docs/owner-feedback.md` (every request and
+     decision), `docs/PLAN_*.md`, `docs/handoff/contract-*.md`, `docs/checkpoints.md`, `docs/obsidian/`.
+  2. **The owner's Obsidian vault on their PC** (`Documents/Obsidian Vault/CCCC POS/`, written through the desktop
+     link when this session is linked): the session log, decisions and progress notes.
+  At every checkpoint, and whenever a session might end (usage limits), C updates RESUME, the project changelog doc,
+  and the Obsidian notes. A new session starts by reading `CLAUDE.md` then `docs/RESUME.md`.
+- **Skills (owner decision 2026-11-11):** use the skills available for the task (code review, testing, debugging,
+  design, docs…), install new ones when a task needs them, and check the skill catalogue now and then for better ones.
 
 ## Counter → server contract (`fo_sync` ops)
 Each op is `{op_id, type, data}`; types: `shift_open`, `shift_close`, `cash_movement`, `sale`,
@@ -140,27 +152,22 @@ The server answers per op: `ok | duplicate | skipped | error` (+ `message`).
 ## File ownership
 | Owner | Paths |
 |---|---|
-| `db-security-engineer` | `cccc/supabase/*.sql` |
-| `core-sync-engineer` | `cccc/shared/{cloud,local,logic,ui,config,printer}.js`, `cccc/shared/styles.css`, `cccc/sw.js` |
-| `front-office-dev` | `cccc/front/**` |
-| `back-office-dev` | `cccc/back/**` |
-| `customer-qr-dev` | `cccc/order/**`, `cccc/menu/**` (public menu page, 1.4.1) |
-| `qa-test-engineer` | `tests/**` |
-| `security-reviewer` | nothing (read-only) |
-| lead (C) | `CLAUDE.md`, `.claude/**`, `README.md`, `index.html`, `_config.yml`, `docs/**`, `.gitignore`, `cccc/shared/vendor/**`, `cccc/shared/brand/**` (logo images, Brunson webfont, `tokens.css`), `menu/**` (short link + social preview tags), `_archive/**` (moves only) |
+| **C** (lead, builds everything) | everything not listed below: `cccc/**` (incl. `cccc/supabase/*.sql`), `docs/**`, `CLAUDE.md`, `.claude/**`, `README.md`, `index.html`, `_config.yml`, `.gitignore`, `menu/**`, `_archive/**` (moves only) |
+| **Z** (independent security + final QA) | `tests/**` only; read-only everywhere else |
 
 ## How work flows
-1. Lead writes a brief: goal, acceptance checks, files in scope.
-2. Database changes first (`db-security-engineer`) → `security-reviewer` gate.
-3. Shared core changes, if any (`core-sync-engineer`).
-4. Screens in parallel: `front-office-dev`, `back-office-dev`, `customer-qr-dev`.
-5. `qa-test-engineer` runs the full regression + new tests; `security-reviewer` again if data,
+1. C checks the request against the changelog and existing features, settles open questions with the owner, and
+   writes the plan (`docs/PLAN_*.md`) and contract (`docs/handoff/contract-*.md`).
+2. C builds the database script first → **Z security gate** on the script.
+3. C builds the shared core and the screens (counter, Back Office, QR page), testing as it goes on its own
+   databases/ports, leaving new checks in the scratchpad for Z to port.
+4. **Z** runs the full regression + new tests + reconciliation, and a security review of the screens when data,
    logins or customer information changed.
-6. Findings go back to the file's owner; repeat until clean. Lead integrates and delivers.
+5. C fixes every finding; Z re-checks; repeat until Z says PASS. C then packages the release for the owner.
 
-Every agent ends with a short report to the lead: what changed (files), how it was checked
-(commands + results), anything left open or needing a decision. Security findings are reported
-as weakness + effect + fix, without step-by-step abuse instructions.
+Z ends every check with a short report to C: verdict, findings (most severe first), what was fine, suites run with
+counts, and any expected-value changes needing approval. Security findings are reported as weakness + effect + fix,
+without step-by-step abuse instructions.
 
 ## Testing (local only)
 ```bash
@@ -174,7 +181,8 @@ tests/run_all.sh                     # full regression (QA; uses 8787 / cccc)
   output). The 004 script must install on top of it and run twice without errors.
 - Browser tests use Playwright from `/opt/npm-tools/node_modules/playwright` (Chromium preinstalled).
 - The sandbox blocks npm and most CDNs.
-- Several agents test at the same time, each with its own database and port:
-  Front Office `db_fo` / 8790, Back Office `db_bo` / 8791, QR page `db_qr` / 8792, database work `db_sec`.
-  `cccc` and port 8787 belong to QA. Example: `tests/e2e_reset.sh db_bo && tests/restart_fake.sh 8791 db_bo`,
+- C and Z test at the same time on separate databases and ports. C uses `db_fo` / 8790 (counter),
+  `db_bo` / 8791 (Back Office), `db_qr` / 8792 (QR page) and `db_sec` (database work). Z uses `cccc` / 8787
+  and `db_rev*` for security probes. Until Z wires the newest script into the reset scripts, install it after a
+  reset: `psql -h /tmp -p 54329 -U postgres -d <db> -q -f cccc/supabase/012_release_1_5.sql`. Example: `tests/e2e_reset.sh db_bo && tests/restart_fake.sh 8791 db_bo`,
   then open `http://localhost:8791/cccc/back/`. Browser tests: `FAKE_PORT=8790 FAKE_DB=db_fo node tests/e2e/fo.e2e.js`.

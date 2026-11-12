@@ -175,7 +175,12 @@ const ERROR_TEXT = {
   // Release 1.4 (010): counter waste log (fo_sync 'waste')
   BAD_WASTE: 'This waste entry is missing information (it needs 1 to 30 items), so it was not saved. Check it and log it again.',
   BAD_WASTE_REASON: 'Choose a reason for the waste: Calibration, Spillage, Complimentary, Expired or Other.',
-  NOTE_REQUIRED: 'Add a short note saying what happened (needed when the reason is "Other").',
+  NOTE_REQUIRED: 'Add a short note saying what happened (needed for waste with the reason "Other", and when you change a stock count or edit or delete a waste entry).',
+  USE_COUNT_REVISION: 'This waste came from a closing stock count. Change it by revising that stock count (Stock counts).',
+  WASTE_NOT_LINKED: 'This old entry isn\'t linked to stock, so its amount and date can\'t be changed. Delete it and record it again, or adjust stock.',
+  ENTRY_NOTE_REQUIRED: 'Waste with the reason "Other" needs its own note saying what happened.',
+  NO_CHANGE: 'Nothing was changed, so nothing was saved.',
+  WASTE_NOT_FOUND: 'This waste entry no longer exists. Refresh the report.',
   BAD_QUANTITY: 'That quantity is not valid. Enter an amount above 0 (at most 100 of a menu item at a time).',
   BAD_UNIT: 'That unit doesn\'t fit this item (for example grams for an item counted in pieces). Choose one of the item\'s units.',
   // Release 1.4: units and "weighs" (A10)
@@ -210,6 +215,49 @@ const ERROR_TEXT = {
   FILE_NOT_FOUND: 'That file is not there any more (it may have been deleted).',
   FILE_NOT_ALLOWED: 'This login is not allowed to open or change that file. Only the owner\'s email login can.',
   STORAGE_FAILED: 'The file could not be loaded or changed on the server. Please try again.',
+  // Release 1.5 (012): QR page -- guests, usernames, one phone per account (customer-facing:
+  // never says whether a phone number is registered)
+  TABLE_FULL: 'This table already has 4 orders waiting to be paid. Please pay for one at the counter first, or ask our staff.',
+  GUEST_TABLE_BUSY: 'Someone at this table is already ordering as a guest. Register to order too, or wait until that order is paid.',
+  UNPAID_ORDERS: 'You still have unpaid orders. Do you still want to proceed?',
+  SIGN_OUT_FIRST: 'This phone is already signed in. Sign out first, then try again.',
+  USERNAME_TAKEN: 'That username is already taken (or looks too much like one that is). Try a different one.',
+  BAD_USERNAME: 'Usernames need 3 to 50 letters (spaces, . \' - _ allowed), at most 4 digits, no links, and no words like "staff", "admin" or the shop\'s name.',
+  REGISTER_FIRST: 'Tell us your name first, or order as a guest.',
+  TOO_MANY_OPEN_ORDERS: 'You already have 3 orders waiting to be paid. Please pay at the counter first.',
+  TABLE_NOT_FOUND: 'This QR code isn\'t active anymore. Please ask our staff for help.',
+  // Release 1.5: next stamp card only after the last reward is taken (B16)
+  CARD_NOT_ISSUED: 'This reward\'s stamp card isn\'t open yet: the customer must use the last reward on the full card first (for example the free drink). Remove the reward and choose another.',
+  // Release 1.5: barista calibration kit (B7)
+  BAD_BARISTA_KIT: 'The barista drink kit could not be saved. Use at most 20 items, each once, with an amount above 0 in one of the item\'s units (switched-on stock items only).',
+  // Release 1.5: count at closing (B9)
+  COUNT_REQUIRED: 'Count the ticked items before closing the shift.',
+  BAD_COUNT: 'This stock count could not be saved: count each ticked item once (only items ticked "Count at closing"). Check the list and count again.',
+  COUNT_NOT_FOUND: 'That stock count was not found (it may have been removed). Refresh and try again.',
+  // Release 1.5: R&D log (B8)
+  BAD_RND: 'This R&D entry is missing information (it needs 1 to 30 items and a note of up to 200 characters). Check it and try again.',
+  UNKNOWN_PROJECT: 'That R&D project was not found (it may have been deleted). Refresh and try again.',
+  PROJECT_CLOSED: 'This R&D project is marked done or dropped. Set it back to active to log more usage.',
+  PROJECT_NAME_TAKEN: 'Another R&D project already has that name. Choose a different name.',
+  PROJECT_HAS_USAGE: 'This R&D project has logged usage, so it can\'t be deleted. Mark it done or dropped instead.',
+  // Release 1.5: production batch size + partner branch (B15)
+  NOT_A_PRODUCTION_RECIPE: 'This recipe doesn\'t make a stock item (or has no normal yield). Edit the recipe first.',
+  NOT_A_PARTNER: 'Choose a supplier marked "Partner branch" (Suppliers → edit → Partner branch).',
+  BAD_DEBT_KIND: 'Choose what we owe for this batch: the same ingredients back, or pesos.',
+  BAD_SCALE: 'Choose a batch size above 0 and at most 100 times the recipe.',
+  BAD_YIELD: 'Enter the yield you actually got (above 0).',
+  NO_INGREDIENTS: 'This recipe has no stock ingredients to give back. Choose "pesos" instead, or add the ingredients to the recipe.',
+  DEBT_VALUE_ZERO: 'The ingredients of this recipe have no cost yet, so there is no peso amount to owe. Record a purchase or choose "ingredients back".',
+  PARTNER_BATCH_HAS_DEBT: 'A batch made by a partner branch can\'t be deleted. Settle what we owe with returns or payments instead.',
+  PARTNER_HAS_DEBTS: 'This partner branch has batches with debts recorded, so it can\'t be deleted.',
+  DEBT_NOT_FOUND: 'That debt was not found (it may have been settled on another screen). Refresh and try again.',
+  DEBT_NOT_OPEN: 'This debt is already settled.',
+  WRONG_DEBT_KIND: 'This debt is settled the other way (ingredients back, or pesos). Use the matching button.',
+  NOT_IN_DEBT: 'One of these ingredients isn\'t owed for this batch (or is listed twice). Pick only the ingredients on the list.',
+  RETURN_EXCEEDS_DEBT: 'That is more than we still owe of this ingredient. Enter at most the amount left to return.',
+  BAD_RETURN: 'This return is missing information (1 to 100 ingredients, a note of up to 200 characters). Check it and try again.',
+  PAYMENT_TOO_LARGE: 'That is more than we still owe for this batch. Enter at most the amount left to pay.',
+  BAD_PAYMENT: 'This payment is missing information. Check the amount and date and try again.',
   // Anything unexpected on the server
   SERVER_ERROR: 'Something went wrong on the server, so this wasn\'t saved. Please try again; if it keeps happening, tell the owner.',
 };
@@ -289,6 +337,23 @@ function friendlyError(e){
   return raw || 'Something went wrong.';
 }
 
+// Release 1.5: words for CUSTOMERS on their own phones where the staff wording above doesn't fit.
+// Every answer is the same whether or not a phone number is registered (security decision 7).
+const CUSTOMER_ERROR_TEXT = {
+  TOO_MANY_ATTEMPTS: 'Too many tries. Please ask our staff at the counter, or try again later.',
+  NOT_SIGNED_IN: 'Your session on this phone has ended. Reload the page and try again.',
+};
+// friendlyError for the QR page: the customer wording when there is one, else friendlyError.
+function customerFriendlyError(e){
+  if(e && !e.offline){
+    let raw = typeof e === 'string' ? e : (e.message || e.error || '');
+    if(raw && typeof raw === 'object') raw = raw.message || raw.error || '';
+    const code = (e.code && CUSTOMER_ERROR_TEXT[e.code]) ? e.code : errorCode(String(raw || ''));
+    if(code && CUSTOMER_ERROR_TEXT[code]) return CUSTOMER_ERROR_TEXT[code];
+  }
+  return friendlyError(e);
+}
+
 /* ================= Sub-category order (release 1.3, A16) =================
    Pure helpers (no shop state) so the QR page can use them too; logic.js adds
    sortSubcategories() / subcategoryRank() on top for the counter and Back Office.
@@ -329,7 +394,76 @@ function sortSubcategoryNames(names, typeOf, order){
 }
 
 function debounce(fn, ms){ let t; return function(){ const a=arguments, self=this; clearTimeout(t); t=setTimeout(()=>fn.apply(self,a), ms); }; }
-function todayISO(d){ d = d || new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+
+/* ================= Shop day (release 1.5, QA time-zone fix) =================
+   "Today" is the SHOP's calendar day (settings.timezone, Asia/Manila by default), whatever
+   time zone the device's clock is set to -- the same day the database uses (_shop_day).
+   Names chosen so they never clash with the Back Office's own shopDayStart / shopTodayKey. */
+const SHOP_DEFAULT_TZ = 'Asia/Manila';
+const _SHOP_TZ_FMT = {};
+// The shop's time zone: settings.timezone (when it is a zone this browser knows), else Asia/Manila.
+function shopTimeZone(settings){
+  const s = settings || (typeof state !== 'undefined' && state && state.settings) || {};
+  const tz = String(s.timezone || '').trim();
+  return tz && _shopTzFormatter(tz) ? tz : SHOP_DEFAULT_TZ;
+}
+function _shopTzFormatter(tz){
+  if(Object.prototype.hasOwnProperty.call(_SHOP_TZ_FMT, tz)) return _SHOP_TZ_FMT[tz];
+  let f = null;
+  try{ f = new Intl.DateTimeFormat('en-US', {timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'}); }
+  catch(e){ f = null; }
+  _SHOP_TZ_FMT[tz] = f;
+  return f;
+}
+// Wall-clock parts of a moment in the shop's zone: {y, m, d, h, mi, s}.
+// No Intl time-zone support at all (very old browser): Manila is UTC+8 all year (no daylight saving).
+function _shopParts(date, tz){
+  const f = _shopTzFormatter(tz || shopTimeZone());
+  if(f){
+    const p = {};
+    f.formatToParts(date).forEach(x => { p[x.type] = x.value; });
+    return {y: +p.year, m: +p.month, d: +p.day, h: (+p.hour) % 24, mi: +p.minute, s: +p.second};
+  }
+  const t = new Date(date.getTime() + 8 * 3600000);
+  return {y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate(), h: t.getUTCHours(), mi: t.getUTCMinutes(), s: t.getUTCSeconds()};
+}
+function _shopKeyOf(p){ return p.y + '-' + String(p.m).padStart(2, '0') + '-' + String(p.d).padStart(2, '0'); }
+// shopDayKey(d?, settings?) -> 'YYYY-MM-DD': the shop's calendar day of moment d (default now).
+// d: a Date, an ISO string or a number (ms). An unreadable d -> today.
+function shopDayKey(d, settings){
+  let dt = d == null ? new Date() : (d instanceof Date ? d : new Date(d));
+  if(isNaN(dt)) dt = new Date();
+  return _shopKeyOf(_shopParts(dt, shopTimeZone(settings)));
+}
+// todayISO(d?) -> 'YYYY-MM-DD' of the SHOP's day (release 1.5; before 1.5 it was the device's own day).
+// Used for stock-line dates (transaction_date), file names, "today" filters.
+function todayISO(d){ return shopDayKey(d); }
+// Adds n days to a 'YYYY-MM-DD' key (calendar maths, no time zone involved).
+function shopKeyAddDays(key, n){
+  const [y, m, dd] = String(key).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, dd + (Number(n) || 0))).toISOString().slice(0, 10);
+}
+// shopDayStartOf(key?, settings?) -> Date: the moment the shop day 'YYYY-MM-DD' begins (shop midnight).
+// key missing -> today. Works for any zone (offset looked up for that very day).
+function shopDayStartOf(key, settings){
+  const tz = shopTimeZone(settings);
+  const k = key ? String(key).slice(0, 10) : shopDayKey(null, settings);
+  const [y, m, dd] = k.split('-').map(Number);
+  const utc = Date.UTC(y, m - 1, dd);
+  const off = (t) => { const p = _shopParts(new Date(t), tz); return Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi, p.s) - Math.floor(t / 1000) * 1000; };
+  let t = utc - off(utc);
+  const o2 = off(t);
+  if(utc - o2 !== t) t = utc - o2;
+  return new Date(t);
+}
+// shopMidnight(d?, settings?) -> Date: the start of the shop day that moment d (default now) falls in.
+// "Today · all counters": sales with transaction_date >= shopMidnight().toISOString().
+function shopMidnight(d, settings){ return shopDayStartOf(shopDayKey(d, settings), settings); }
+// shopDayRange(key?, settings?) -> {from, to} Dates: [shop midnight of key, shop midnight of the next day).
+function shopDayRange(key, settings){
+  const k = key ? String(key).slice(0, 10) : shopDayKey(null, settings);
+  return {from: shopDayStartOf(k, settings), to: shopDayStartOf(shopKeyAddDays(k, 1), settings)};
+}
 function fmtTime(d){ if(!d) return '—'; const dt = new Date(d); return isNaN(dt) ? '—' : dt.toLocaleTimeString('en-PH', {hour:'numeric', minute:'2-digit'}); }
 function fmtDateTime(d){ if(!d) return '—'; return fmtDate(d)+' '+fmtTime(d); }
 function timeAgo(d){

@@ -286,14 +286,24 @@ reset role;
 delete from recipes where name like 'Big %';
 -- HIGH 1: get_qr_menu gives the same answer as 009's version (open shop, hide option on and off)
 \ir 41a_old_get_qr_menu.sql
+-- 1.5 (012, owner items B11 + B12): get_qr_menu adds "highlight" and a display-only "available" flag per option.
+-- The comparison with 009's answer is made with those two additions taken out; everything else must be equal.
+create or replace function test.strip15(j jsonb) returns jsonb language sql as $$
+  select (j - 'highlight') || case when j ? 'items' then jsonb_build_object('items', coalesce((
+    select jsonb_agg(case when jsonb_typeof(i->'modifier_groups') = 'array' then i || jsonb_build_object('modifier_groups', coalesce((
+        select jsonb_agg(case when jsonb_typeof(g->'options') = 'array' then g || jsonb_build_object('options', coalesce((select jsonb_agg(o - 'available' order by n) from jsonb_array_elements(g->'options') with ordinality x(o, n)), '[]'::jsonb)) else g end order by gn)
+        from jsonb_array_elements(i->'modifier_groups') with ordinality y(g, gn)), '[]'::jsonb)) else i end order by inn)
+    from jsonb_array_elements(j->'items') with ordinality z(i, inn)), '[]'::jsonb)) else '{}'::jsonb end
+$$;
 insert into shifts (business_id, status, opened_at) values (:'biz', 'ACTIVE', now());
 update recipes set sold_out = true where name = 'Banana bread';
 select qr_token as tok from dining_tables where business_id = :'biz' and active limit 1 \gset
-select test.chk(public.get_qr_menu(:'tok') = test.old_get_qr_menu(:'tok') and jsonb_array_length(public.get_qr_menu(:'tok')->'items') > 0, 'HIGH1: get_qr_menu same as 009 (hide off)');
+select test.chk(test.strip15(public.get_qr_menu(:'tok')) = test.old_get_qr_menu(:'tok') and jsonb_array_length(public.get_qr_menu(:'tok')->'items') > 0
+  and public.get_qr_menu(:'tok') ? 'highlight', 'HIGH1: get_qr_menu same as 009 (hide off), apart from 1.5''s highlight + option available');
 update settings set qr_hide_out_of_stock = true where business_id = :'biz';
 insert into recipes (id, business_id, name, recipe_type, selling_price) values ('c3000000-0000-0000-0000-0000000000a1', :'biz', 'Flour cake', 'PASTRY', 60);
 insert into recipe_ingredients (id, business_id, recipe_id, ingredient_id, quantity, unit) values (gen_random_uuid(), :'biz', 'c3000000-0000-0000-0000-0000000000a1', 'c1000000-0000-0000-0000-000000000014', 50, 'g');
-select test.chk(public.get_qr_menu(:'tok') = test.old_get_qr_menu(:'tok'), 'HIGH1: get_qr_menu same as 009 (hide on)');
+select test.chk(test.strip15(public.get_qr_menu(:'tok')) = test.old_get_qr_menu(:'tok'), 'HIGH1: get_qr_menu same as 009 (hide on), apart from 1.5''s highlight + option available');
 select test.chk((select not (i->>'available')::boolean from jsonb_array_elements(public.get_qr_menu(:'tok')->'items') i where i->>'name' = 'Flour cake'), 'HIGH1: no-stock item unavailable (hide on)');
 set role anon;
 select test.chk((select (i->>'sold_out')::boolean from jsonb_array_elements(public.public_menu('cccc')->'items') i where i->>'name' = 'Flour cake'), 'HIGH1: public_menu agrees (sold out)');
