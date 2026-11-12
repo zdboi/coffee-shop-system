@@ -43,6 +43,14 @@ Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"
 - **Open, waiting for the owner:** the GitHub move and nicer address (business account / own domain).
 - **Usage note:** the weekly limit hit agents on 2026-11-11; it resets Nov 15, 8 PM (Manila).
 
+### Z gate on 1.5: status 2026-11-12 12:45
+- Z stopped twice on the 5-hour limit (next reset 14:30). Its test work is committed (253c2cf). **Z's security findings (B17 SQL + 1.5 screens) have NOT been delivered yet**: ask for them first when resuming Z.
+- C ran `tests/run_all.sh --runs 1` at 12:00: **82 suites, 5,395 checks, 3 failing**, all three old expectations that Z must update (C never edits tests):
+  1. `sql/38` "R: merge moves rewards; a reward both used is kept as history" → approved change (security Low 1: the clashing reward moves to the kept record's next free card and counts).
+  2. `e2e/order_extra` "D: relink -> TOO_MANY_ATTEMPTS (relink wording)" → approved: new wording "Too many tries. Please ask our staff at the counter, or try again later." (L3).
+  3. `e2e/captcha` step 6 '"Not me?": the new sign-in carries its own fresh token' → **C decision: approved.** In 1.5 a phone keeps its anonymous login when signing out (one phone per account, Q5), so there is no new sign-up and no CAPTCHA at that point. The check should assert that no new sign-up happens and the name form shows.
+- After Z: fix findings → Z re-check → `docs/RELEASE_1.5.md`, checkpoint, changelog, Obsidian, PR.
+
 ## Earlier:  1.4.2 is LIVE (PR #7 merged 2026-11-10 10:54, 8b522f2 = last working version, checkpoint 19). **Wave 3 (1.5) STARTED** on the owner's go (11:06): plan `docs/PLAN_1.5.md`, DB script `012_release_1_5.sql`, contract `docs/handoff/contract-1.5.md`. Step 1 = database (db-security-engineer).
 
 ## Earlier: 1.4.2 was READY (checkpoint 18). It's a PR only, no DB; owner steps are in `docs/RELEASE_1.4.2.md` (merge → reload → check). QA: 70/70 suites, 4,283 checks, 0 failing. After the merge: checkpoint 19 "1.4.2 live" = last working version, then mark it live in the changelog. Wave 3 is still waiting for the owner's go; it includes B15 (partial/multiple production + TCO "to return" list, decided 2026-11-10) and the counter time-zone fix (QA).
