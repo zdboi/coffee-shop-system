@@ -150,3 +150,8 @@ Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs
 - Start PostgreSQL with `tests/start_pg.sh` after a restart.
 - **Test PINs:** cashier 1111, manager 222222, owner 999999.
 - Brand source files (logo prototype zip, Brunson font) came from the owner's Downloads; the shipped copies are in `cccc/shared/brand/`.
+
+## 2026-11-12 17:09: owner ran 012 on live ("Success")
+- 012 is now frozen (CLAUDE.md updated); next script is 013.
+- Still to do: owner merges PR #8 → then checkpoint 21 "Release 1.5 live", changelog doc, Obsidian notes.
+- Note for owner guides: Supabase can't rename/save a snippet this big ("request entity too large"); harmless, the script lives on GitHub.
