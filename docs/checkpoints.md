@@ -44,6 +44,7 @@ Older working versions stay in the table below, so you can go back further if ne
 | 17 | **Release 1.4.1 live** | 2026-11-09 | You ran `011_release_1_4_1.sql` and merged pull request #6. This is now the last working version. |
 | 18 | **Release 1.4.2 ready** | 2026-11-10 | QR code for the menu link (Download PNG/SVG, branded "Scan for our menu" print card) and swipeable sub-category tabs on the menu page. No database script. Final test run 70 suites / 4,283 checks, 0 failing. Waiting for you to merge (`docs/RELEASE_1.4.2.md`). |
 | 19 | **Release 1.4.2 live** | 2026-11-10 10:54 | You merged pull request #7 (no database script). This is now the last working version (merge commit `8b522f2`). |
+| 20 | **Release 1.5 ready** (Wave 3) | 2026-11-12 | QR guest/registered and usernames, table limits, one phone per account, stamp card cycling with history, Barista drink, blind stock count, R&D log, half/double production, TCO batches with a "To return" list, waste edit/delete, archived customers. Database script 012. Z (independent security + QA): PASS; 82 suites / 5,396 checks, 0 failing. Waiting for you: `docs/RELEASE_1.5.md`. |
 
 ## Look at or download a checkpoint
 

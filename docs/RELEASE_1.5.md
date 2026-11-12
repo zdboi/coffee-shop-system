@@ -63,7 +63,7 @@ On each counter, your computer and your phone: open the app and reload the page 
 ### 5. Set up the new features (10 min)
 1. **Barista drink kit:** Back Office → **Waste report** → **Barista drink kit**. Add the ingredients and amounts of one daily calibration, then save.
 2. **TCO:** Back Office → **Suppliers** → add or open "TCO" → tick **Partner branch** → save.
-3. **Count at closing:** Back Office → **Ingredients** → open an item → tick **Count at closing** → save. Start with 3–5 important items.
+3. **Count at closing:** Back Office → **Stock counts** → **Count at closing** → tick the items → **Save ticks**. Start with 3–5 important items.
    - **Only tick items after every counter is reloaded** (step 4). An old counter can't close its shift once items are ticked.
 
 ### 6. Quick check (5 min)
