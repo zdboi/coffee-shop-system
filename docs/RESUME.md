@@ -161,3 +161,6 @@ Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs
 - Owner still to do on the shop side (docs/RELEASE_1.5.md): reload devices twice, Barista kit, TCO "Partner branch" tick, "Count at closing" ticks after all counters reloaded.
 - Next: Wave 4 (1.6 "Money & owners": B1, B2, B4, B5, B18 sales calendar) only when the owner says go. Next DB script: 013.
 - Z's written verdict on the final Low fixes is still outstanding (last run: 82 suites, 0 failing).
+
+## 2026-11-12 17:24: Wave 4 scope changed (owner)
+- Wave 4 (1.6) = B1 Accounting overview, B4 editable payment methods, B5 payment-method charges, B18 Sales calendar overhaul, **B19 Senior/PWD discount (owner-set %)**. **B2 investor equity moved to later.** Details: docs/owner-feedback.md. Not started; wait for the owner's go.

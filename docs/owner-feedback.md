@@ -251,3 +251,11 @@ Owner: **don't start 1.3 until I say so.**
   - Net income (monthly) and the Waste report exist (1.4).
   - Wave 4's B1 Accounting overview already plans "any date range" with voids, waste and net income. B18 puts the same numbers on the calendar; both should read one shared server report so they always agree.
 - Not started. Build with Wave 4.
+
+## Wave 4 scope change (owner, 2026-11-12 17:24)
+- Owner: "dont include B2 yet. Include the Senior/PWD discount but allow us to change the percentage."
+- **B2 Investor equity: taken out of Wave 4** (later, not dropped).
+- **B19. Senior/PWD discount: added to Wave 4**, with a percentage the owner can change (default 20%).
+  - **Overlap (lead):** today a manager can already type any % or ₱ discount at the counter (the box even suggests "20 (Senior/PWD)"). That is a general discount with a manager PIN. B19 adds a dedicated Senior/PWD button with the owner's set %, and keeps the general discount as it is.
+  - To settle at planning: manager PIN or not; whether to record the ID number and name (and who may see them); VAT exemption on top of the 20% (PH law, RA 9994 / RA 10754); per item vs whole order (group orders where only some diners are senior/PWD); how it shows on the receipt and in reports.
+- **Wave 4 (1.6) "Money" now = B1 Accounting overview, B4 editable payment methods, B5 payment-method charges, B18 Sales calendar overhaul, B19 Senior/PWD discount.**
