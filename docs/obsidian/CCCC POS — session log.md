@@ -14,7 +14,19 @@ It has three apps on one Supabase database:
 - **Back Office:** the owner's email login only.
 - **QR order page:** customers order from their phones and pay at the counter.
 
-## Where things stand (Nov 11): Wave 3 (1.5) being built
+## Where things stand (Nov 12, afternoon): release 1.5 ready for me
+- **1.4.2 is live**: the last working version (checkpoint 19).
+- **1.5 = Wave 3** (checkpoint 20). Pull request #8. Steps are in `docs/RELEASE_1.5.md`: shop closed → backup → run script 012 (business Supabase account) → merge → reload every device → set up the Barista drink kit, TCO as partner branch and "Count at closing" ticks.
+  - QR page: guest or registered, usernames, table limits, one phone per account, highlight, lactose prompt.
+  - Stamp cards: the next card starts after the last reward; saved stamps; past cards.
+  - Counter: Barista drink, blind count before Close shift, Archived customers.
+  - Back Office: Stock counts, R&D log, half/double/"Max I can make" production, TCO batches and "To return to TCO", waste Edit/Delete.
+  - Z (independent security + QA) passed it: 82 suites / 5,406 checks, 0 failing.
+- **How we work now (Nov 11):** C builds everything; Z checks everything. Memory lives in GitHub (`docs/`) and this vault.
+- **Next wave (1.6):** accounting overview, investor equity, editable payment methods with extra charges, and the **Sales calendar overhaul** (voids/refunds, net income, waste, fixed calendar, click a start and end date, Net sales in place of Average sale, Items sold split into Drinks and Food/pastries).
+- Supabase project moved to the business account (Nov 10). GitHub move / nicer web address: still to decide.
+
+## Earlier: Where things stand (Nov 11): Wave 3 (1.5) being built
 - **1.4.2 is live** (menu QR + swipe tabs) = last working version (checkpoint 19).
 - **Supabase** is now under the business account (cavitecitycoffeeclub@gmail.com); same address, nothing changed in the app.
 - **New way of working:** C builds everything itself; **Z** is the one independent checker (security + final testing).
