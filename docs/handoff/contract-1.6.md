@@ -14,6 +14,7 @@ unless marked "screens".
 | `sales.senior_items_amount`, `vat_exempt_amount`, `senior_discount`, `payment_charge`, `payment_fee` numeric, default 0 | | All locked on a finished sale (`_lock_finished_sale`). |
 | `sale_items.senior_discount` numeric, default 0 | VAT taken out + discount of that line | A Senior/PWD line is entirely the customer's (the counter splits lines). |
 | `senior_discount_records` (new table) | one row per Senior/PWD sale: kind, holder_name, id_number, pct, amounts, cashier | RLS on, no API access at all (`revoke all`). Written only by `fo_sync`; read only through `senior_report` (owner). Deleted with its sale (FK cascade: Start fresh). |
+| `inventory_transactions.received_at` timestamptz | when the SERVER got the line | Set by a trigger on insert, can't be changed. Old lines: their `created_at`. Used by the smart count (a counter's own clock is not trusted, and offline sales arrive late). |
 | `payments.method` rule | word list → format rule `^[A-Z][A-Z0-9_]{1,19}$` | Live rule replaced (owner can add methods). Every stored word already fits. |
 
 ### `settings.payment_methods`
@@ -47,6 +48,7 @@ sale_items.senior_discount: (V + Ds) shared over the Senior/PWD lines by line to
 **Refused** (`fo_sync` answers `error`):
 - `SALE_TOTALS_MISMATCH`: as before, plus: `grand_total` ≠ `S − D − R − V − Ds + tax + svc + chg` (2 centavos); a negative new amount; `chg` neither 0 nor `fee`.
 - `BAD_SENIOR` (new): `V + Ds > 0` and any of: `D > 0` or `R > 0` (not combined); `senior_kind` not SENIOR/PWD; `data.senior` missing or its `holder_name` (2..80) / `id_number` (3..40) empty; no Senior/PWD line; `A` ≠ the Senior/PWD lines' total; lines' `senior_discount` don't add up to `V + Ds`, or one is above its line total. Also: a Senior/PWD line or kind on a sale with `V + Ds = 0`.
+- The name / ID and the "not combined" rule are checked before anything else of the sale (so a Senior/PWD sale with a manager discount answers `BAD_SENIOR`, not `APPROVAL_REQUIRED`).
 - Senior/PWD needs **no** approval token. A manager discount still does.
 
 **Flagged for review** (saved, `needs_review`):
@@ -63,7 +65,7 @@ share = returned value × `grand_total` / (`S − V − Ds`). Same as before for
 
 ## C. Smart stock count (B20)
 - `_count_due(biz, shift)`: ticked items (`_count_items`) that are due, ignoring counts of `shift`:
-  never counted before; or a stock line arrived (server `created_at`) after the item's last count was received (count-made lines don't count); or its last count day is `count_recheck_days` or more shop days ago.
+  never counted before; or a stock line reached the server (`received_at`) after the item's last count was received (count-made lines don't count); or its last count day is `count_recheck_days` or more shop days ago.
 - `fo_count_due(p_shift_id)` (paired counter): `{server_time, recheck_days, items: [ingredient_id]}`. Ids only (blind).
 - `bo_count_status()` (owner): `[{ingredient_id, name, last_counted_at, due, why: NEVER|MOVED|RECHECK|null}]`.
 - `stock_count` op: lines may be any ticked items (not only due ones). Flag `COUNT_INCOMPLETE` = a due item has no line in any count of this shift.
@@ -76,7 +78,7 @@ share = returned value × `grand_total` / (`S − V − Ds`). Same as before for
   - `days`: one row per shop day with `day, sale_count, sales, refunds, net_sales, void_count, voids, waste, expenses, net_income, drinks, food, other`.
   - `payment_methods`: `[{method, label, count, total, charges, fees, waived}]`. `waived_list` (latest 200): `[{date, transaction_number, method, amount, cashier_name}]`.
   - Rules: counted sales = COMPLETED / PARTIALLY_REFUNDED / REFUNDED by sale day; refunds and voids by the day they were made; `net_sales = sales − refunds`; `tax_owed` = tax minus the refunded share; `net_income = net_sales − tax_owed − payment_fees − ingredients_sold − ingredients_wasted − expenses`. Costs as of `p_to` (same as `net_income_report`, so a calendar month gives the same net income apart from payment fees, which are new).
-  - Day rows add up to the totals to the centavo (the last day takes rounding rest only through unrounded sums: all sums are rounded once, at the end; tests allow 1 centavo per column).
+  - Every day value is rounded to centavos first and the totals are the sums of the day rows, so the day rows add up to the totals exactly. (Ingredient costs can therefore differ by a few centavos from the old month-only `net_income_report`.)
 - `senior_report(p_from date, p_to date)` (owner): `[{date, transaction_number, status, kind, holder_name, id_number, items_amount, vat_exempt, discount, pct, grand_total, cashier_name}]`, voided sales left out.
 
 ## E. Rights
