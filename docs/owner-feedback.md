@@ -237,3 +237,17 @@ Owner: **don't start 1.3 until I say so.**
   - "Missing at count" waste is changed by revising its stock count, not edited directly (one source of truth).
   - Complimentary waste keeps its manager approval record.
   - Finished sales stay unchangeable; this is waste only.
+
+## B18. Sales calendar overhaul (owner, 2026-11-12 16:51), **next wave (Wave 4 / 1.6)**
+- Owner: "I want a more thorough overview of the Sales Calendar: I want to see voids/refunds. I want to see the net income. the wastages. Fixate the calendar so I always see it. Also, I want to be able to check all the collective data from a span of days by clicking an initial date and an ending date. You can check the calendar logic of the Infusion Gem app. I don't need the average sales so you can put the Net sales there. In the Items Sold, separate the Drinks from Food/Pastries."
+- **What it means:**
+  - Per day and per selected range: voids/refunds, net income, waste.
+  - The calendar stays fixed on screen (always visible while the details scroll).
+  - Range selection: click a start date, then an end date (across months, like the owner's Infusion Gem app calendar); totals for the whole span.
+  - Replace "Average sale" with **Net sales**.
+  - Items sold split into **Drinks** and **Food / pastries**.
+- **Overlap (lead):**
+  - The Sales calendar exists (day, week, month views; 1.0).
+  - Net income (monthly) and the Waste report exist (1.4).
+  - Wave 4's B1 Accounting overview already plans "any date range" with voids, waste and net income. B18 puts the same numbers on the calendar; both should read one shared server report so they always agree.
+- Not started. Build with Wave 4.

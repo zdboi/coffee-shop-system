@@ -43,6 +43,10 @@ Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"
 - **Open, waiting for the owner:** the GitHub move and nicer address (business account / own domain).
 - **Usage note:** the weekly limit hit agents on 2026-11-11; it resets Nov 15, 8 PM (Manila).
 
+### Z final run 2026-11-12 ~14:10: 82 suites, 5,406 checks, 0 failing (`scratchpad/z15/run3.out`)
+- It includes Z's new checks for the gate fixes (sql/42, conc15, fo_release15). Z hit the usage limit before writing its verdict on the fixes; ask for it when it can resume (no code depends on it).
+- **Wave 4 addition recorded:** B18 Sales calendar overhaul (see owner-feedback.md).
+
 ### 1.5 READY for the owner (2026-11-12 ~13:30, checkpoint 20)
 - Z verdict: PASS WITH FIXES (5 Lows). C fixed Lows 1–4 (012 waste audit/`WASTE_NOT_LINKED`/cost; counter one recount round + no stock amount for counted items); Low 5 (`PHONE_TAKEN` on register) is unchanged 1.4 behaviour allowed by decision 7. After the fixes C re-ran: 012 twice, sql/42 361/0, `fo_release15` 40/0, `fo_release13` 68/0, `bo_waste_edit15` 18/0, `money15` 45/0.
 - **Still to do:** Z re-check of the four fixes (42, conc15, bo_waste_edit15, money15, fo_release15) and a final full run; then PR `wip/cccc-online-qr` → main. Owner guide: `docs/RELEASE_1.5.md`. After the owner runs 012 + merges: mark 012 frozen in CLAUDE.md (next 013), checkpoint 21 = last working version, changelog, Obsidian.
