@@ -1,0 +1,31 @@
+# Release 1.6 plan: Wave 4 "Money"
+
+Owner go-ahead: 2026-11-12 17:37 ("You can now start with wave 4").
+- Item details and owner decisions: `docs/owner-feedback.md` (B1, B4, B5, B18, B19, B20 and the "Wave 4" sections).
+- Live = 1.5 (976a61f, checkpoint 21). Next database script: `cccc/supabase/013_release_1_6.sql`.
+- Not in this wave: B2 investor equity (later), B3 referrals + RPG loyalty (later).
+- Live CHECK rules are older than our reconstruction. Every new value written to a live column is checked against `tests/sql/01_existing_schema.sql` + 004–012 first. 013 replaces one live rule: `payments.method` (word list → a format rule, so the owner can add methods).
+
+## Items
+
+| Item | What | Decided |
+|---|---|---|
+| B4 | **Editable payment methods.** Back Office → Settings → Payment methods: add, rename, reorder, switch off; "ask for a reference number" per method. Starting list: Cash, GCash, QR payment, Card, Bank transfer. Maya and Other are switched off; old sales keep their method and its name. Cash can't be removed or switched off (the cash drawer depends on it). | Owner. |
+| B5 | **Extra charge per payment method.** Per method: none, a % or a peso amount, and whether it is added by default. At checkout the charge shows as its own line with an **"Add to bill"** tick; unticking waives it (any cashier). The charge is worked out on the bill after discounts, tax and service charge. **Money rule (owner: "it covers the provider's fee"):** every sale by that method counts the charge amount as a **payment fee** (a cost). When the charge is added, the customer's payment cancels it out; when it is waived, income is lower by that amount. Shown on the receipt, in the Accounting overview (collected, fees, waived, and the list of waived charges with who waived them). The owner should not also log these fees under Expenses. | Owner. DTI DAO 21-03 risk accepted by the owner (2026-11-09). |
+| B19 | **Senior/PWD discount.** Counter button: choose Senior citizen or PWD, type the name and ID number, tick the customer's own items (a line with several pieces is split). The % comes from Settings (default 20%, owner can change). **VAT exemption:** when the shop's prices include VAT, the VAT is taken out of the ticked items first and the % comes off the rest; when tax is added on top, no tax is charged on the ticked items; with no tax, only the % applies. Any cashier can apply it, no manager PIN, but the name and ID number are required. **Not combined** with a manager discount or a stamp reward on the same sale. Receipt shows the discount, the VAT-exempt amount, the name, the ID (partly hidden) and a signature line. **Senior/PWD report** (Back Office, owner only): date, receipt no., name, full ID number, amounts; CSV. Counters never read ID numbers back from the server. The general manual discount stays as it is. | Owner. |
+| B20 | **Smart stock count.** At Close shift the counter asks only the ticked items that are **due**: any stock change since the item was last counted (sales, production, waste, R&D, purchases, deliveries, corrections, TCO), or never counted, or not counted for 7 days (number editable in Back Office → Stock counts). Nothing due = no count step. The server decides the list (the counter asks it when online; offline it uses its last list plus what it sold or wasted itself). Close shift is refused only when items are due and the shift has no count at all; a count that misses due items is saved and flagged for review ("Count incomplete"), and those items stay due. Back Office → Stock counts shows each ticked item's last count and whether it is due. Still blind. | Owner. |
+| B1 | **Accounting overview** (replaces the Net income page; same numbers for a month). Any date range, presets, compare with the period before. Lines: item sales, discounts (manager, stamp rewards, Senior/PWD, VAT exempt), tax, service charge, payment charges collected, sales, refunds, net sales, voids (count and amount, for information), tax owed, payment fees, ingredients used for sales, waste (by reason, incl. R&D and missing at count), expenses by category, net income. Also: payment methods table, waived charges list, cash over/short of the shifts closed in the range, items sold (drinks, food/pastries). CSV. | Owner + lead. |
+| B18 | **Sales calendar overhaul.** The month calendar stays fixed on screen while details scroll. Tap a start date then an end date (across months) for a span; one tap = one day. Cards: Sales, **Net sales** (replaces Average sale), Net income, Transactions, Items sold split into **Drinks** and **Food / pastries**, Refunds, Voids, Waste. A daily table for the span with the same columns. Hour-by-hour charts and the shift view stay. Money numbers come from the same server report as the Accounting overview, so the two always agree. | Owner. |
+
+## One shared report
+`accounting_report(p_from date, p_to date)` (owner only). Totals, one row per shop day, payment methods, waived charges, cash over/short, items sold by kind. The Accounting overview and the Sales calendar both read it. Ingredient costs use the shop's costing method as of the last day of the range (same rule as the 1.4 Net income page), so a month here equals the old Net income for that month.
+
+"Net sales" means **sales minus refunds** everywhere (calendar, shift reports, Accounting overview). Tax owed is its own line after it.
+
+## Build order
+1. **Plan + contract** (this file, `docs/handoff/contract-1.6.md`).
+2. **Database** `013_release_1_6.sql` → **Z security gate**.
+3. **Shared core** (`logic.js`, `ui.js`, `cloud.js`, `printer.js`): totals with Senior/PWD + payment charge, payment method list from settings, refund share, due-count helpers, receipt lines.
+4. **Counter**: checkout (methods, charge tick, reference), Senior/PWD dialog, smart count, receipts, shift summary by method.
+5. **Back Office**: Settings → Payment methods and Senior/PWD %; Accounting overview; Sales calendar; Senior/PWD report; Stock counts (last counted, due, recheck days); sale detail; backup/import of new fields.
+6. **Z**: full regression, new suites, money reconciliation (charges, fees, Senior/PWD, VAT exempt, calendar = overview), security review of screens. Fix, re-check, package (`docs/RELEASE_1.6.md`).
