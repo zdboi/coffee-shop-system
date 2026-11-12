@@ -268,3 +268,8 @@ Owner: **don't start 1.3 until I say so.**
 ## B19 question (owner, 2026-11-12 17:30)
 - Owner asked why the Senior/PWD perk keeps being suggested if a manual discount already exists.
 - Lead answer: the manual % discount already gives the 20% off. A dedicated button would only add the legal record-keeping (VAT exemption, ID number/name log, a Senior/PWD report). It sat in the "optional extras" list because of that overlap. Waiting for the owner: keep B19 (with those legal parts) or drop it and keep using the manual discount.
+
+## B19 decision (owner, 2026-11-12 17:32)
+- Owner: "okay we keep the modification on that discount for the POS to be more proper documentation."
+- **B19 stays in Wave 4**: a Senior/PWD button with the owner's set % (default 20%), VAT exemption, a record of name + ID number per sale (owner-only to read in full), and a Senior/PWD report for the accountant. The general manual discount stays as it is.
+- Still to settle at planning: manager PIN or not; group orders (only the senior/PWD's own items); receipt wording.
