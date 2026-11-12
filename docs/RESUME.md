@@ -165,3 +165,4 @@ Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs
 ## 2026-11-12 17:24: Wave 4 scope changed (owner)
 - Wave 4 (1.6) = B1 Accounting overview, B4 editable payment methods, B5 payment-method charges, B18 Sales calendar overhaul, **B19 Senior/PWD discount (owner-set %)**. **B2 investor equity moved to later.** Details: docs/owner-feedback.md. Not started; wait for the owner's go.
 - 17:32: owner kept B19 (Senior/PWD with VAT exemption, ID log, report). B5 gets an add-or-waive tick (waived = shop cost in Accounting overview).
+- 17:4x: added **B20 smart stock count** to Wave 4 (ask only items with any stock change since last counted; unmoved items weekly).

@@ -273,3 +273,13 @@ Owner: **don't start 1.3 until I say so.**
 - Owner: "okay we keep the modification on that discount for the POS to be more proper documentation."
 - **B19 stays in Wave 4**: a Senior/PWD button with the owner's set % (default 20%), VAT exemption, a record of name + ID number per sale (owner-only to read in full), and a Senior/PWD report for the accountant. The general manual discount stays as it is.
 - Still to settle at planning: manager PIN or not; group orders (only the senior/PWD's own items); receipt wording.
+
+## B20. Smart stock count (owner, 2026-11-12 17:35), Wave 4 (1.6)
+- Owner: "I also want the new stock checklist to be a smart stock checklist. Only ask for the current count of stocks that have moved. I don't want to count daily even the stocks or ingredients that has not moved."
+- **Overlap (lead):** the 1.5 blind count asks every item ticked "Count at closing" at every Close shift (client `countAtCloseIngredients`, server `COUNT_REQUIRED`). B20 changes which ticked items are asked; nothing else repeats.
+- **Owner decisions (17:3x):**
+  - "Moved" = **any change at all** since the item was last counted (sales, production, waste, R&D, purchases, deliveries, corrections, TCO).
+  - Items that haven't moved are still asked **once a week** (safety check for stock that goes missing unlogged).
+  - Build **with Wave 4 (1.6)**, not as a separate update.
+- Lead notes: the server must decide which items are due (same rule on counter and server; offline counters use the last list they downloaded plus their own sales). Count stays blind.
+- **Wave 4 (1.6) now = B1, B4, B5 (add-or-waive), B18, B19 Senior/PWD, B20 smart stock count.**
