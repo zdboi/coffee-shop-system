@@ -18,7 +18,7 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 
 | Suite | What | Size |
 |---|---|---|
-| 004..011 install (x2) | the live order `004_cccc_online_qr.sql` → `005_live_fixes.sql` → `006_live_fix_sync_operations.sql` → `007_batch1.sql` → `008_release_1_2.sql` → `009_release_1_3.sql`, → `010_release_1_4.sql`, then `011_release_1_4_1.sql` (release 1.4.1, not yet on live), installs on the live-schema copy (`sql/01`, incl. the live CHECK rules) and again on top of itself | — |
+| 004..012 install (x2) | the live order `004_cccc_online_qr.sql` → `005_live_fixes.sql` → `006_live_fix_sync_operations.sql` → `007_batch1.sql` → `008_release_1_2.sql` → `009_release_1_3.sql`, → `010_release_1_4.sql`, `011_release_1_4_1.sql`, then `012_release_1_5.sql` (release 1.5, not yet on live), installs on the live-schema copy (`sql/01`, incl. the live CHECK rules) and again on top of itself | — |
 | `sql/36_live_rules_tests.sql` | after the install: every CHECK rule matches the owner's live list (one rule per column; 005 replaced the stand-in device_type rule, 006 the sync_operations rule; `cash_movements.amount > 0` kept) (17) | — |
 | `sql/10_behaviour_tests.sql` | sign-up trigger, menu via `apply_changes`, pairing, PIN logins (no rank from a PIN), lockout, `fo_sync` sale / duplicate / discount refusal / void with approval token | — |
 | `sql/11_qr_tests.sql` | QR menu, register / relink / forget, server-side prices, counter accept → pay → ready → complete, customers, `sales_report`, merge, legacy PIN, device removal | — |
@@ -32,6 +32,8 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 | `sql/39_release_1_3_tests.sql` | 009 / release 1.3 wave 1 (fresh database → 10 → 11 → 39, like 38): `settings.subcategory_order` checks; QR menu `is_open` (shop open = any ACTIVE shift; closed → no items, `qr_place_order` → `SHOP_CLOSED`, stamp card still works, `ORDERING_OFF` first), colours / order / `recipe_type`; counter customers sort; `OUT_OF_STOCK` review flag; `start_fresh_preview` / `start_fresh` (85) | — |
 | `sql/40_release_1_4_tests.sql` | 010 / release 1.4 (fresh database → 10 → 11 → 40, like 39; adopted from the database engineer) (123) | — |
 | `sql/41_release_1_4_1_tests.sql` | 011 / release 1.4.1 public menu link (fresh database → 10 → 11 → 41, like 40; adopted from the database engineer; includes `41a_old_get_qr_menu.sql`): `public_menu(text)`, menu link settings (92) | — |
+| `sql/42_release_1_5_tests.sql` | 012 / release 1.5 (fresh database → 10 → 11 → 42, like 41; adopted from the database work's 348 checks + Z's 13 B17 checks): live rules widened, guests / usernames / table limits / account switch / relink limits, archived customers, stamp card cycling + history, barista kit, R&D, count at closing, partner batches / returns / payments, waste edit + delete, reports, rights (361); includes `41a_old_get_qr_menu.sql`. `42a_relink_c1.sql` is a set-up helper for suites 39 and 40 (puts Zed back on phone c1 after suite 11) | — |
+| `conc15_checks.sh` | 1.5, two sessions at once (on the data 42 leaves): two phones opening one QR account -> one phone; two owner edits + a delete of one waste entry -> one after the other, stock exactly back (7) | — |
 | `conc_checks.sh` | two sessions at the same moment (on the data 32 leaves): two owner refunds of one sale, two counters paying one QR order -> only one passes | — |
 | `unit/core_check.js` | `friendlyError` / `ERROR_TEXT`, `parseAuthRedirect`, `sessionFromUrl`, `updatePassword`, `resetPassword` (node, mocked fetch) | — |
 | `unit/error_codes_check.js` | every error code the database can send to an app has a plain-language text in that app (1.4: the Back Office row also covers the new 010 functions, from core's `bo14_error_codes_check`) | — |
@@ -44,6 +46,9 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 | `unit/printer_usb_check.js` | 1.4 printing (core-sync-engineer): USB printer (fake WebUSB), barista ticket and X / Z report goldens at 58 + 80 mm (`unit/printer_usb_goldens.json`), print queue, no print screen unless `fallback === true`, Brave / Safari / Chrome detection and help text | — |
 | `unit/menu_stock_check.js` | 1.3 (core-sync-engineer): sub-category order helpers in `ui.js` / `logic.js` (drinks first, `settings.subcategory_order`), `cartStockProblems` (45) | — |
 | `unit/core14_check.js` | 1.4 shared core (core-sync-engineer): one unit converter (weighs), recipe lines in other units, options (extras, swaps, cups / lids, library groups, required groups), merged ingredients + operating supplies, supplied items, waste op data, error texts (103) | — |
+| `unit/core15_check.js` | 1.5 shared core: shop day in Manila whatever the device zone (also run with TZ=America/Los_Angeles and Pacific/Kiritimati), `PARTNER_RETURN`, stock_count op data, blind-count differences, production scale / "max I can make" / partner debt maths, error texts (92 ×3) | — |
+| `unit/partner_parity_check.js` | 1.5: `scaleProduction` + `partnerDebtPlan` vs the 012 server's `_partner_batch_plan` on 57 batches (seeded db; loads `unit/parity15/fixture.sql`) (229) | — |
+| `unit/count_parity_check.js` | 1.5: `buildStockCountData` + `countDifferences` vs the server's `stock_count`; count then close in one upload; close alone → `COUNT_REQUIRED`; duplicate / skipped (14) | — |
 | `unit/storage_check.js` | 1.4 (core-sync-engineer): `cloud.download` / `cloud.remove` / upload path checks with a fake fetch (27) | — |
 | `unit/stock_parity_check.js` | 1.4: `inventoryLinesForSaleLine` / `cleanStockLines` / `toBaseQty` vs the 010 server's `_recipe_stock_lines` / `_clean_stock_lines` / `_to_base_qty` on random sale lines (seeded db, rolled back) (18) | — |
 | `unit/refund_parity_check.js` | 500 random refunds: `logic.js` and the database's `_refund_items_cap` give the same amount (seeded db, rolled back) | — |
@@ -71,6 +76,11 @@ A full run with two browser rounds takes about 25 minutes (2026-10-19: 39 suites
 | `e2e/bo_menulink.e2e.js` | 1.4.1 Back Office menu link settings (back-office-dev): link + copy, switch, texts, highlight, shop code, safe import mapping; then a backup import brings in the menu texts only (switch, code, highlight, unsafe links untouched) | 1280 / 768 / 390 |
 | `e2e/bo_menuqr.e2e.js` | 1.4.2 Back Office menu link QR code (back-office-dev): PNG / SVG downloads, on-screen and printed card QR all decode (OpenCV, `tools/qr_decode.py`) to the exact link; quiet zone; short and `?shop=` links; disabled while the menu is off; 390 px | 1280 / 390 |
 | `e2e/menu_tabs.e2e.js` | 1.4.2 public menu sub-category tabs + swipe panels (customer-qr-dev; seed `sql/24_seed_menu.sql`) | 390 / 360 / 1280 |
+| `e2e/fo_release15.e2e.js` | 1.5 counter (applies `sql/21_seed_release12_fo.sql`): Barista drink, blind count before Close shift (offline, count queued before the close), archived customers, saved stamps + past cards, Guest on QR orders, Manila day on a Los Angeles tablet (40) | 1280 |
+| `e2e/bo_release15.e2e.js` | 1.5 Back Office: count ticks, Stock counts + revise, barista kit, R&D log, batch size / "Max I can make" / TCO batches + "To return", archived customers, usernames, server stamp cards (48) | 1280 / 390 |
+| `e2e/bo_waste_edit15.e2e.js` | 1.5 (B17) Back Office: edit / delete Waste report entries ("Why?" required, Edited mark, stock follows, escaping) (18) | 1280 / 390 |
+| `e2e/order_release15.e2e.js` | 1.5 QR page: register or guest, greyed stamp card, usernames, 4 tickets / 1 guest per table, account switch with unpaid orders, signed out elsewhere, saved stamps + past cards, highlight, "Lactose intolerant?" prompt (66) | 390 / 360 |
+| `e2e/money15.e2e.js` | 1.5 reconciliation (Z): ½× and 2× own batches, TCO batches (ingredients / pesos), a return and a payment, R&D usage, waste edit + delete, blind count with a shortage and an extra, close shift; stock, waste report, net income and "To return" vs hand math to the centavo, nothing counted twice (45) | 1280 |
 | `e2e/bo.e2e.js` | Back Office parts 0–6 in order (`e2e/bo/`): every screen, stock / menu / options / photos / production, staff + PINs, pairing, tables + QR sheet, sales vs counter, owner refund + void, customers, settings, reports, importer, password reset, new shop, suppliers, escaping; part 5 old-app refunds in the importer (`fixtures/old-refunds.json`); part 6 `SALE_LOCKED` + "Mark as reviewed" | 1280 and 768 |
 | `e2e/bo_calendar_tips.e2e.js` | calendar day view: the hover label sits over the hour it describes | 1280 and 768 |
 | `e2e/money.e2e.js` | one shift across all three apps: sale with options, QR order paid at the counter, manager-approved discount, void, counter partial refund (pro-rated ₱244.00), owner refund in the Back Office (₱107.36); X-report = calendar day + shift view = `sales_report` = closed shift, to the centavo; stock = start − deducted + returned (incl. option extras) | 1280 / 390×844 |
@@ -97,8 +107,8 @@ refusal the test provokes on purpose (allowed with `net.allow(...)` around that 
 ## Pieces
 - `sql/00_supabase_stub.sql` — stand-in for Supabase internals (auth schema, roles, storage).
 - `sql/01_existing_schema.sql` — reconstruction of the **live** schema incl. the CHECK rules live had before our scripts
-  (`devices.device_type in ('POS','KDS')` is a stand-in: the real live list is unknown). `reset_db.sh` installs 004, 005, 006 on it
-  (the live order), then 007 (batch 1); every suite runs on that.
+  (`devices.device_type in ('POS','KDS')` is a stand-in: the real live list is unknown). `reset_db.sh` installs 004 … 011 on it
+  (the live order), then 012 (release 1.5); every suite runs on that.
 - `sql/20_seed_e2e.sql` — browser-test seed: owner `owner@example.com` / `secret123`, Cathy (cashier, PIN 1111),
   Manny (manager, 2222), owner PIN 9999, Iced Latte / Americano / Ensaymada, beans 1000 g, milk 5000 ml,
   Table 5 (`tabletoken5`), pairing code `TESTAB`.

@@ -112,7 +112,12 @@ H.openShopForQr();   // 1.3: QR ordering needs an open shift (see lib/h.js)
   await page.locator('#stamp-card').screenshot({path: path.join(SHOTS, '390-03-stamps-15.png')});
   addStamps(1); await page.reload(); await page.waitForSelector('#stamp-card'); await sleep(250);
   console.log('     16 line: ' + await line() + '  |  head: ' + await page.textContent('.stampcard-head'));
-  ok(/^1 of 15 · 2 rewards are ready/.test(await line()) && /Card 2/.test(await page.textContent('.stampcard-head')), '16: card 2, earlier rewards still ready', await line());
+  // 1.5 (owner decision B16, 2026-11-10): the next card opens only after the last reward (the free drink) is used. With 16 stamps
+  // and the free drink unused the card stays card 1 at 15 of 15, the 16th stamp is saved for card 2, both rewards stay ready.
+  // (Before 1.5: "1 of 15" on "Card 2". Expected value changed 2026-11-12 with C's approval.)
+  const saved16 = await page.textContent('.stamp-saved').catch(() => '');
+  ok(/^15 of 15 · 2 rewards are ready/.test(await line()) && !/Card 2/.test(await page.textContent('.stampcard-head'))
+    && /1 stamp saved for your next card\. Use your free drink or food to start card 2\./.test(saved16 || ''), '16: still card 1 at 15 of 15, 1 stamp saved for card 2, both rewards still ready (1.5, B16)', (await line()) + ' | ' + saved16);
   await page.locator('#stamp-card').screenshot({path: path.join(SHOTS, '390-03-stamps-16-card2.png')});
 
   // ---- item options, cart, order status

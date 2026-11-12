@@ -289,7 +289,12 @@ async function refuseOnce(page, glob){
       await page.waitForSelector('#not-me', {timeout: 10000});
       await page.click('#not-me');
       await page.click('#nm-go');
+      // 1.5 (owner decision Q5): this phone has an unpaid order, so the page asks first; "Yes" signs out
+      await page.waitForSelector('#sw-yes', {timeout: 10000});
+      await page.click('#sw-yes');
       await page.waitForSelector('#w-name', {timeout: 10000});
+      // Z 2026-11-12: NOT changed, waiting for C's decision. The 1.5 page keeps the phone's anonymous login on sign-out,
+      // so there is no new sign-up and no new CAPTCHA token here; the two lines below still expect the 1.4 behaviour.
       await H.until(() => signups().length === su0 + 1, 10000);
       const t3 = capTok(signups()[su0]);
       H.ok(/^tok-/.test(t3 || '') && !toks.includes(t3), '"Not me?": the new sign-in carries its own fresh token', t3);

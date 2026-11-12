@@ -345,7 +345,11 @@ function fakeBluetooth(){
       await page.waitForTimeout(500);
       const f = await page.$$eval('.cust-row', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim()));
       ok(/Rico/.test(f[0]) && /15 visits/.test(f[0]), 'A17: Most frequent -> Rico first with visit count', f);
-      ok(f.some(t => /Zed <b>x<\/b>/.test(t)), 'A17: HTML nickname shown as text', f);
+      // 1.5 (owner decision B6): 'Zed <b>x</b>' has no phone number, so it is under "Archived"
+      await page.click('#cust-which [data-arch="1"]'); await page.waitForTimeout(900);
+      const fa = await page.$$eval('.cust-row', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim()));
+      ok(!f.some(t => /Zed/.test(t)) && fa.some(t => /Zed <b>x<\/b>/.test(t)), 'A17: HTML nickname shown as text (1.5: in the Archived list, not the main one)', {f, fa});
+      await page.click('#cust-which [data-arch="0"]'); await page.waitForTimeout(900);
       await shots('customers-sort');
       await page.reload();
       await page.waitForFunction(() => document.getElementById('app').style.display !== 'none' || document.getElementById('pin-gate').style.display !== 'none');

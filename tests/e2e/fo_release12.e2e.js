@@ -81,7 +81,12 @@ execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U', 'postgres', '-d', H.DB,
   await page.waitForSelector('.cust-row');
   const list = await page.$$eval('.cust-row', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim()));
   ok(list.some(t => /Mika ?0917 ••• 4567 · last visit (yesterday|2 days ago)/.test(t)), 'list: nickname, masked phone, last visit', list);
-  ok(list.some(t => t.includes('Zed <b>x</b>')) && !(await page.$('.cust-row b b')), 'nickname with HTML shown as text');
+  // 1.5 (owner decision B6): 'Zed <b>x</b>' has no phone number, so it is under "Archived", not in the main list
+  ok(!list.some(t => t.includes('Zed')), '1.5: the customer without a phone is not in the main list', list);
+  await page.click('#cust-which [data-arch="1"]'); await page.waitForTimeout(900);
+  const archList = await page.$$eval('.cust-row', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim()));
+  ok(archList.some(t => t.includes('Zed <b>x</b>')) && !(await page.$('.cust-row b b')), 'nickname with HTML shown as text (Archived list)', archList);
+  await page.click('#cust-which [data-arch="0"]'); await page.waitForTimeout(900);
   const lastList = rpc.filter(r => r.name === 'fo_customer_list').pop();
   ok(lastList && JSON.parse(lastList.body).p_staff_token === null, 'cashier: no staff token sent');
   await page.click(`.cust-row[data-cust="${RICO}"]`);
@@ -106,7 +111,7 @@ execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U', 'postgres', '-d', H.DB,
   const box = await page.textContent('.cart-customer');
   ok(/Mika/.test(box) && /0917 ••• 4567/.test(box) && /7 \/ 15/.test(box) && /₱10 off ready/.test(box), 'cart customer box: name, masked phone, 7 / 15, "₱10 off ready"', box.replace(/\s+/g, ' '));
   ok(await cartTotal() === 175, 'cart 110 + 65 = 175');
-  await page.click('.reward-chip');
+  await page.click('.reward-chip'); await page.waitForFunction(() => !document.querySelector('.reward-chip[disabled]'), null, {timeout: 9000}).catch(() => {}); await page.waitForTimeout(300);   // 1.5 (B16): the counter re-checks the card with the server before applying
   ok(await cartTotal() === 165 && /Stamp reward/.test(await page.textContent('#reward-row')), 'reward applied: Stamp reward line, total 165');
   await page.click('[data-inc]');
   ok(await cartTotal() === 275, 'recomputed after qty change: 220 + 65 - 10 = 275');
@@ -121,7 +126,7 @@ execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U', 'postgres', '-d', H.DB,
   await page.click('.pos-product-card:has-text("Americano")');
   await page.waitForSelector('.reward-chip:has-text("free")');
   ok((await page.$$('.reward-chip')).length === 3, 'Rico: 3 rewards offered');
-  await page.click('.reward-chip:has-text("free")');
+  await page.click('.reward-chip:has-text("free")'); await page.waitForFunction(() => !document.querySelector('.reward-chip[disabled]'), null, {timeout: 9000}).catch(() => {}); await page.waitForTimeout(300);   // 1.5 (B16): the counter re-checks the card with the server before applying
   ok(await cartTotal() === 0 && /nothing to pay/.test(await page.textContent('#checkout-btn')), 'free item covers the order: total ₱0, button "Complete sale (nothing to pay)"');
   await page.click('#checkout-btn');
   await page.waitForSelector('#complete-sale-btn');
@@ -135,7 +140,7 @@ execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U', 'postgres', '-d', H.DB,
   await page.waitForSelector('.reward-chip');
   const offered = await page.$$eval('.reward-chip', cs => cs.map(c => c.textContent.trim()));
   ok(offered.length === 2 && !offered.some(t => /free/i.test(t)), 'used free-item reward no longer offered', offered);
-  await page.click('.reward-chip:has-text("₱50")');
+  await page.click('.reward-chip:has-text("₱50")'); await page.waitForFunction(() => !document.querySelector('.reward-chip[disabled]'), null, {timeout: 9000}).catch(() => {}); await page.waitForTimeout(300);   // 1.5 (B16): the counter re-checks the card with the server before applying
   ok(await cartTotal() === 15, '₱50 off 65 -> 15');
   await page.click('#hold-order-btn');
   ok(await until(async () => /Held orders don't keep a stamp reward/.test(await toasts()), 4000), 'hold: warning shown');
@@ -148,7 +153,7 @@ execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U', 'postgres', '-d', H.DB,
   await page.click('.pos-product-card:has-text("Iced Latte")'); await page.click('.mod-opt:has-text("16oz")'); await page.click('#mod-add');
   const elig = await page.evaluate(() => { posState.cart.push({lineId:'x', recipe_id:'33333333-0000-0000-0000-000000000003', name:'Americano', unit_price:110, quantity:0.5, modifiers:[]}); const n = freeItemLines().map(l => l.quantity); posState.cart.pop(); return n; });
   ok(!elig.includes(0.5), 'free item: a line with quantity 0.5 is not offered', elig);
-  await page.click('.reward-chip:has-text("₱50")');
+  await page.click('.reward-chip:has-text("₱50")'); await page.waitForFunction(() => !document.querySelector('.reward-chip[disabled]'), null, {timeout: 9000}).catch(() => {}); await page.waitForTimeout(300);   // 1.5 (B16): the counter re-checks the card with the server before applying
   ok(await cartTotal() === 65 + 170 - 50, '₱50 off 235 -> 185');
   await sellCash();
   await must(() => sql(`select count(*) from loyalty_redemptions where customer_id='${RICO}' and released_at is null`) === '2', 'Rico: 2 rewards used on the server', 20000);
@@ -163,7 +168,7 @@ execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U', 'postgres', '-d', H.DB,
   await until(async () => !!(await page.$('.reward-chip')), 10000);
   const offNote = await page.textContent('.cart-customer');
   ok(/checked when online/.test(offNote) && (await page.$$('.reward-chip')).length === 1, 'offline: only the saved ready reward (₱10), "checked when online"', offNote.replace(/\s+/g, ' '));
-  await page.click('.reward-chip');
+  await page.click('.reward-chip'); await page.waitForFunction(() => !document.querySelector('.reward-chip[disabled]'), null, {timeout: 9000}).catch(() => {}); await page.waitForTimeout(300);   // 1.5 (B16): the counter re-checks the card with the server before applying
   ok(await cartTotal() === 55, 'offline ₱10 off 65 -> 55');
   await shots('05-cart-reward-offline', ['desk']);
   await sellCash();

@@ -237,6 +237,7 @@ const SEED14 = path.join(__dirname, '..', 'sql', '23_seed_release14_qr.sql');
     // ---------- 11. B12 lactose prompt
     require('child_process').execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U', 'postgres', '-d', H.DB, '-q', '-v', 'ON_ERROR_STOP=1', '-f', SEED14], {stdio: 'ignore'});
     const G2 = 'lib_44444444-0000-0000-0000-000000000002';
+    sql(`delete from inventory_transactions where ingredient_id = '22222222-0000-0000-0000-0000000000b1'`);   // (Z: the 1.4 seed now gives the oat milk stock; start without)
     await C.page.reload(); await C.page.waitForSelector(`.item[data-item="${LATTE}"]`);
     await C.page.click(`.item[data-item="${LATTE}"]`); await C.page.waitForSelector('#it-add');
     ok(!(await C.page.$(`.group[data-group="${G2}"]`)) && !/Lactose/.test(await C.page.textContent('.sheet')), 'oat milk out of stock: no prompt, Milk group hidden');

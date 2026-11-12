@@ -151,13 +151,19 @@ async function statValue(p, label){ return p.$$eval('.stat-card', (cards, label)
   await go(page, 'customers');
   await page.waitForSelector('[data-cust]');
   await page.screenshot({path: SHOTS + 'f-customers.png'});
+  // 1.5 (owner decision B6): Ana B has no mobile number, so she is under "Archived", not in the main list
+  ok(!(await page.$('[data-cust="aaaaaaaa-0000-0000-0000-000000000002"]')), '1.5: a customer without a number is not in the main list');
+  await page.selectOption('#cust-list', 'archived'); await page.waitForSelector('[data-cust="aaaaaaaa-0000-0000-0000-000000000002"]');
   await page.click('[data-cust="aaaaaaaa-0000-0000-0000-000000000002"]'); await page.waitForSelector('#cu-phone');
   await page.fill('#cu-phone', '0917 123 4567'); await page.click('#cu-save');
   ok((await toastText(page, 'error')).includes('already has that number'), 'a mobile number already used by another customer is refused');
   await clearToasts(page);
   await page.fill('#cu-phone', '0918 555 0000'); await page.fill('#cu-nick', 'Ana Bee'); await page.click('#cu-save'); await modalGone(page);
   ok(sql(`select nickname || ' ' || phone from customers where id='aaaaaaaa-0000-0000-0000-000000000002'`) === 'Ana Bee +639185550000', 'customer edited; 0918 555 0000 stored as +639185550000');
+  // 1.5 (B6): with a number she is back in the main list
+  await page.selectOption('#cust-list', '');
   await page.waitForSelector('[data-cust="aaaaaaaa-0000-0000-0000-000000000001"]');
+  ok(!!(await page.$('[data-cust="aaaaaaaa-0000-0000-0000-000000000002"]')), '1.5: adding a number brings the customer back to the main list');
   await page.click('[data-cust="aaaaaaaa-0000-0000-0000-000000000001"]'); await page.waitForSelector('#cu-merge');
   await page.selectOption('#cu-merge', 'aaaaaaaa-0000-0000-0000-000000000002'); await page.click('#cu-merge-btn'); await confirm(page);
   await until(() => sql(`select merged_into from customers where id='aaaaaaaa-0000-0000-0000-000000000002'`) === 'aaaaaaaa-0000-0000-0000-000000000001', 'merged');
@@ -168,7 +174,7 @@ async function statValue(p, label){ return p.$$eval('.stat-card', (cards, label)
   await until(() => sql(`select count(*) from customers`) === '0', 'customer deleted');
   ok(sql(`select coalesce(customer_nickname,'(none)') || '/' || coalesce(customer_id::text,'(none)') from qr_orders where order_number='Q-001'`) === '(none)/(none)', 'delete on request also removed the name from their QR orders');
   const [cdl] = await Promise.all([page.waitForEvent('download'), (async () => { await page.click('#cust-csv'); await confirm(page); })()]);
-  ok(require('fs').readFileSync(await cdl.path(), 'utf8').startsWith('"Nickname","Mobile"'), 'customer CSV download (after a privacy reminder)');
+  ok(require('fs').readFileSync(await cdl.path(), 'utf8').startsWith('"Nickname","Username","Mobile"'), 'customer CSV download (after a privacy reminder; 1.5: with the Username column, owner item Q2)');
 
   // settings: shop name -> businesses, QR ordering, tax
   await go(page, 'settings');

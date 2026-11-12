@@ -155,7 +155,7 @@ async function manilaClock(){
     await fo.waitForSelector('#disc-value');
     await fo.selectOption('#disc-type', 'percent'); await fo.fill('#disc-value', '20'); await fo.click('#disc-apply');
     await fo.waitForSelector('.reward-chip:has-text("₱10")', {timeout: 10000});
-    await fo.click('.reward-chip:has-text("₱10")');
+    await fo.click('.reward-chip:has-text("₱10")'); await fo.waitForFunction(() => !document.querySelector('.reward-chip[disabled]'), null, {timeout: 9000}).catch(() => {}); await fo.waitForTimeout(300);   // 1.5 (B16): the counter re-checks the card with the server before applying
     ok(eq2(await cartTotal(), X.D.total) && /Stamp reward/.test(await fo.textContent('#reward-row')), `D: cart 285 - 57 - 10 = 218, + tax + service = ${peso(X.D.total)}`, await cartTotal());
     await sellCash(); await countDone(3, 'D uploaded');
     D = newestSale(); savedOk(D, X.D, 'D');
@@ -166,7 +166,7 @@ async function manilaClock(){
     await useCustomer(RICO);
     await fo.click('.pos-product-card:has-text("Americano")');
     await fo.waitForSelector('.reward-chip:has-text("free")', {timeout: 10000});
-    await fo.click('.reward-chip:has-text("free")');
+    await fo.click('.reward-chip:has-text("free")'); await fo.waitForFunction(() => !document.querySelector('.reward-chip[disabled]'), null, {timeout: 9000}).catch(() => {}); await fo.waitForTimeout(300);   // 1.5 (B16): the counter re-checks the card with the server before applying
     ok(eq2(await cartTotal(), 0) && /nothing to pay/.test(await fo.textContent('#checkout-btn')), 'F: free item covers the order: ₱0, "Complete sale (nothing to pay)"');
     await fo.click('#checkout-btn'); await fo.waitForSelector('#complete-sale-btn');
     ok(!(await fo.$('#pay-methods')), 'F: no payment step for ₱0');
@@ -180,7 +180,7 @@ async function manilaClock(){
     await fo.click('.pos-product-card:has-text("Iced Latte")'); await fo.click('.mod-opt:has-text("12oz")'); await fo.click('#mod-add');
     await fo.click('.pos-product-card:has-text("Ensaymada")');
     await fo.waitForSelector('.reward-chip:has-text("₱50")', {timeout: 10000});
-    await fo.click('.reward-chip:has-text("₱50")');
+    await fo.click('.reward-chip:has-text("₱50")'); await fo.waitForFunction(() => !document.querySelector('.reward-chip[disabled]'), null, {timeout: 9000}).catch(() => {}); await fo.waitForTimeout(300);   // 1.5 (B16): the counter re-checks the card with the server before applying
     ok(eq2(await cartTotal(), X.V.total), `V: cart 215 - 50 = 165, + tax + service = ${peso(X.V.total)}`, await cartTotal());
     await sellCash(); await countDone(5, 'V uploaded');
     V = newestSale(); savedOk(V, X.V, 'V');

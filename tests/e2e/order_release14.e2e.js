@@ -39,7 +39,11 @@ require('child_process').execFileSync('psql', ['-h', '/tmp', '-p', '54329', '-U'
     ok(JSON.stringify(names) === JSON.stringify(['Hot or iced','Milk','Take-away cup','Sweetness','Add a flavour','Size','Add-ons']), 'latte: library groups (library order) then own groups', names);
     ok(await page.$eval(`.group[data-group="${G(1)}"] .opts`, e => e.classList.contains('opts-2')), 'Hot or iced: two per row');
     const swapTxt = await page.textContent(`.opt[data-g="${G(2)}"][data-o="oat"]`);
-    ok(/Non-dairy milk \(oat\)/.test(swapTxt) && /In place of the usual/.test(swapTxt) && /\+₱30\.00/.test(swapTxt), 'swap option shows label, "in place of the usual", +₱30.00', swapTxt);
+    // 1.5 (owner decision B12, 2026-11-09): "In place of the usual" is replaced by the prompt "Lactose intolerant? Have this instead"
+    // above the swap options that are in stock now (the seed gives the oat milk stock).
+    const swapAsk = await page.textContent(`.group[data-group="${G(2)}"] .swap-ask`).catch(() => '');
+    ok(/Non-dairy milk \(oat\)/.test(swapTxt) && !/In place of the usual/.test(swapTxt) && /\+₱30\.00/.test(swapTxt) && /^Lactose intolerant\? Have this instead$/.test((swapAsk || '').trim()),
+      'swap option shows label and +₱30.00 under "Lactose intolerant? Have this instead" (1.5)', swapAsk + ' | ' + swapTxt);
     ok(/Required · choose 1/.test(await page.textContent(`.group[data-group="${G(1)}"] small`)), 'Hot or iced says Required · choose 1');
     ok(/Optional · choose any/.test(await page.textContent(`.group[data-group="${G(5)}"] small`)), 'flavours say Optional · choose any');
     await shot(page, '390-01-sheet-top');

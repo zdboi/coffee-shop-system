@@ -15,6 +15,8 @@ const URL = BASE + '/cccc/order/?t=tabletoken5';
 const TABLE = '77777777-0000-0000-0000-000000000005';
 const SIGNUPS_TEXT = 'Lots of people are joining right now. Please wait a few minutes, or order at the counter.';
 const ORDERS_TEXT = "We're getting a lot of orders right now. Please wait a few minutes or order at the counter.";
+// 1.5 (owner decision Q3): a table takes at most 4 unpaid tickets; the server now answers TABLE_FULL (was TOO_MANY_ORDERS at 10 waiting)
+const TABLE_FULL_TEXT = 'This table already has 4 orders waiting to be paid. Please pay for one at the counter, then order again.';
 
 H.openShopForQr();   // 1.3: QR ordering needs an open shift (see lib/h.js)
 (async () => {
@@ -57,7 +59,7 @@ H.openShopForQr();   // 1.3: QR ordering needs an open shift (see lib/h.js)
     ok(await until(async () => await page.isVisible('#not-me'), 10000), 'after the rush: Gina signs up');
     ok(sql(`select count(*) from customers where nickname='Gina' and source='QR'`) === '1', 'Gina saved once');
 
-    // ---- 2. TOO_MANY_ORDERS (real: 10 orders waiting at Table 5)
+    // ---- 2. the table is full (real: 10 orders waiting at Table 5; since 1.5 the limit is 4 -> TABLE_FULL), then TOO_MANY_ORDERS (intercepted)
     sql(`insert into qr_orders(business_id, order_number, order_day, table_id, table_label, status, items, total)
          select '${biz}', 'Q-9' || lpad(g::text, 2, '0'), current_date, '${TABLE}', 'Table 5', 'PENDING', '[]', 0 from generate_series(1, 10) g`);
     await page.waitForTimeout(3300);                 // let the welcome toast go
@@ -66,7 +68,7 @@ H.openShopForQr();   // 1.3: QR ordering needs an open shift (see lib/h.js)
     await page.waitForSelector('#view-cart');
     await page.click('#view-cart');
     await page.click('#c-place');
-    ok(await until(async () => (await page.textContent('#c-err')) === ORDERS_TEXT, 6000), 'server TOO_MANY_ORDERS -> "' + ORDERS_TEXT + '"', await page.textContent('#c-err'));
+    ok(await until(async () => (await page.textContent('#c-err')) === TABLE_FULL_TEXT, 6000), 'server TABLE_FULL (1.5: 4 unpaid tickets at the table) -> "' + TABLE_FULL_TEXT + '"', await page.textContent('#c-err'));
     ok(!(await page.isDisabled('#c-place')) && /Place order/.test(await page.textContent('#c-place')), 'Place order button usable again', await page.textContent('#c-place'));
     ok(sql(`select count(*) from qr_orders where customer_nickname='Gina'`) === '0', 'no order saved');
     await H.shot(page, 'qr-limits-orders');

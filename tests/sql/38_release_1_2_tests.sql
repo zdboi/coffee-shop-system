@@ -422,6 +422,8 @@ reset role;
 select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
 select public.merge_customers('c5000000-0000-0000-0000-000000000001', 'c5000000-0000-0000-0000-0000000000e1') is not null as x \gset
 reset role;
+-- Z 2026-11-12: NOT changed, waiting for C's decision. Since 012 (security re-check "Low 1", a lead decision) the clashing reward
+-- moves to Stampy's card 2 stamp 5 with merged_from null, so this 1.2 expectation (kept as history, merged_from set) fails.
 select test.chk((select count(*) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-0000000000e1') = 0
   and (select count(*) from loyalty_redemptions where customer_id = 'c5000000-0000-0000-0000-000000000001' and merged_from = 'c5000000-0000-0000-0000-0000000000e1') = 1,
   'R: merge moves rewards; a reward both used is kept as history');
