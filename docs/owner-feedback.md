@@ -283,3 +283,9 @@ Owner: **don't start 1.3 until I say so.**
   - Build **with Wave 4 (1.6)**, not as a separate update.
 - Lead notes: the server must decide which items are due (same rule on counter and server; offline counters use the last list they downloaded plus their own sales). Count stays blind.
 - **Wave 4 (1.6) now = B1, B4, B5 (add-or-waive), B18, B19 Senior/PWD, B20 smart stock count.**
+
+## Wave 4 go-ahead and decisions (owner, 2026-11-12 17:37)
+- Owner: "You can now start with wave 4".
+- **B19 Senior/PWD:** any cashier can apply it, no manager PIN; the name and ID number are required; every use shows in the Senior/PWD report. On a group order it applies **only to the items the cashier ticks**.
+- **B5 waive:** any cashier can tick "waive" on a sale; waived charges are listed in the Accounting overview with who waived them.
+- **B4 starting list:** Cash, GCash, QR payment, Card, Bank transfer. Maya and Other are switched off (old sales keep their method). The owner can edit the list afterwards.
