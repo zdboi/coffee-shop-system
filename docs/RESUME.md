@@ -1,4 +1,4 @@
-# Resume here (save point: 2026-11-11, checkpoint 19, release 1.4.2 LIVE, Wave 3 building)
+# Resume here (save point: 2026-11-12, checkpoint 21, release 1.5 LIVE; latest status at the bottom)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
@@ -155,3 +155,24 @@ Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs
 - 012 is now frozen (CLAUDE.md updated); next script is 013.
 - Still to do: owner merges PR #8 → then checkpoint 21 "Release 1.5 live", changelog doc, Obsidian notes.
 - Note for owner guides: Supabase can't rename/save a snippet this big ("request entity too large"); harmless, the script lives on GitHub.
+
+## 2026-11-12 17:15: RELEASE 1.5 IS LIVE
+- Owner ran 012 ("Success") and merged PR #8 at 17:10 (merge commit `976a61f`). Checkpoint 21 = last working version.
+- Owner still to do on the shop side (docs/RELEASE_1.5.md): reload devices twice, Barista kit, TCO "Partner branch" tick, "Count at closing" ticks after all counters reloaded.
+- Next: Wave 4 (1.6 "Money & owners": B1, B2, B4, B5, B18 sales calendar) only when the owner says go. Next DB script: 013.
+- Z's written verdict on the final Low fixes is still outstanding (last run: 82 suites, 0 failing).
+
+## 2026-11-12 17:24: Wave 4 scope changed (owner)
+- Wave 4 (1.6) = B1 Accounting overview, B4 editable payment methods, B5 payment-method charges, B18 Sales calendar overhaul, **B19 Senior/PWD discount (owner-set %)**. **B2 investor equity moved to later.** Details: docs/owner-feedback.md. Not started; wait for the owner's go.
+- 17:32: owner kept B19 (Senior/PWD with VAT exemption, ID log, report). B5 gets an add-or-waive tick (waived = shop cost in Accounting overview).
+- 17:4x: added **B20 smart stock count** to Wave 4 (ask only items with any stock change since last counted; unmoved items weekly).
+
+## 2026-11-13 10:xx: Wave 4 (1.6) BUILT, waiting for Z
+- Owner said go 2026-11-12 17:37. Decisions: docs/owner-feedback.md ("Wave 4 go-ahead and decisions" + Senior combining "one or the other", charge = provider's fee).
+- Plan `docs/PLAN_1.6.md`, contract `docs/handoff/contract-1.6.md`, guide `docs/RELEASE_1.6.md` (status: being checked).
+- DB: `cccc/supabase/013_release_1_6.sql` built from scratch template + 012 pieces by `scratchpad/w4/build013.py` (template `013_template.sql`). Edit the TEMPLATE/builder, then rebuild. My SQL checks: scratchpad/w4/db16-tests.sql via run16.sh (db_sec) = 90 pass.
+- Screens: counter (checkout methods + charge tick, Senior/PWD dialog, smart count), shared logic/printer/ui, Back Office bo-acct.js (Accounting overview, Senior/PWD report, Settings → Payments & discounts), span calendar in bo-sales.js, smart count box in bo-counts.js. Scratch browser checks: fo16-checks.js (15), bo16-checks.js (18), core16.js (16): all pass.
+- Z: security gate + full QA running (resumed after a usage stop). Next: fix Z findings, PR, checkpoint, owner runs 013.
+
+## 2026-11-13 15:xx: RELEASE 1.6 READY (checkpoint 22)
+- Z PASS after gate fixes (eeac8b8). PR opened for the owner; owner runs 013 then merges (docs/RELEASE_1.6.md). After that: freeze 013 (next 014), checkpoint 23 live, Project changelog, Obsidian.

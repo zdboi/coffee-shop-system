@@ -20,6 +20,7 @@ const BO = {
   profileName: '',
   counts: {open_qr_orders: 0, customer_count: 0, needs_review: 0},
   reviewSales: 0, reviewRefunds: 0, reviewPayouts: 0, reviewCounts: 0,  // parts of counts.needs_review
+  has16: false,              // the server has the 1.6 (013) columns: payment methods, Senior / PWD, smart count, accounting report
   has15: false,              // the server has the 1.5 (012) columns: counts, barista kit, R&D, partner branch
   pinUpdateNeeded: [],       // staff ids whose manager/admin PIN is shorter than 6 digits (server list)
   pinLockouts: [],           // counters locked after wrong PINs in the last 7 days (server list)
@@ -176,6 +177,8 @@ function applyBoBootstrap(d){
   BO.menuLink.menu_public = BO.menuLink.menu_public === true;
   // Release 1.5 (012): count at closing, barista kit, R&D, partner branch (TCO). Older database: hidden.
   BO.has15 = !!(d.settings && Object.prototype.hasOwnProperty.call(d.settings, 'barista_kit'));
+  // Release 1.6 (013): payment methods, extra charges, Senior / PWD, smart count, accounting report.
+  BO.has16 = !!(d.settings && Object.prototype.hasOwnProperty.call(d.settings, 'payment_methods'));
   state.staff = d.staff || [];
   state.categories = d.categories || [];
   state.suppliers = d.suppliers || [];
@@ -721,7 +724,9 @@ const BO_NAV = [
   {id: 'suppliers', label: 'Suppliers', ic: 'download'},
   {group: 'Money'},
   {id: 'expenses', label: 'Expenses', ic: 'card'},
-  {id: 'netIncome', label: 'Net income', ic: 'star'},
+  {id: 'netIncome', label: 'Accounting overview', ic: 'star'},
+  {id: 'seniorReport', label: 'Senior / PWD report', ic: 'user'},
+  {id: 'investors', label: 'Investors & start-up', ic: 'users'},
   {id: 'reports', label: 'Reports', ic: 'chart'},
   {group: 'Setup'},
   {id: 'tables', label: 'Tables & QR codes', ic: 'map'},
@@ -753,7 +758,9 @@ const BO_ROUTES = {
   optionLibrary: {title: 'Options library', nav: 'recipes', render: () => renderOptionLibrary()},     // bo-library.js (1.4, A9)
   wasteReport: {title: 'Waste report', render: () => renderWasteReport()},                          // bo-money.js (1.4, A15)
   expenses: {title: 'Expenses', render: () => renderExpenses()},                                    // bo-money.js (1.4, A11)
-  netIncome: {title: 'Net income', render: () => renderNetIncome()},                                // bo-money.js (1.4, A11)
+  netIncome: {title: 'Accounting overview', render: () => renderAccounting()},                      // bo-acct.js (1.6, B1; month-only Net income on an older database)
+  seniorReport: {title: 'Senior / PWD report', render: () => renderSeniorReport()},
+  investors: {title: 'Investors & start-up', render: () => renderInvestors()},                       // bo-acct.js (1.6, B2)                 // bo-acct.js (1.6, B19)
   inventory: {title: 'Inventory', render: () => renderInventory()},
   costing: {title: 'Recipe costing', render: () => renderCosting()},
   suppliers: {title: 'Suppliers', render: () => renderSuppliers()},

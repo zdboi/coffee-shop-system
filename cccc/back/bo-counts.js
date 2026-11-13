@@ -112,13 +112,45 @@ async function renderStockCounts(){
   content.innerHTML = `
     ${countTickWarningHtml()}
     <div class="card soft-card sc-ticked" style="margin-bottom:14px;"><b>Counted at closing:</b> ${ticked.length ? ticked.map(i => `<span class="ready-pill">${esc(i.name)}</span>`).join(' ') : '<span class="text-light">nothing ticked yet. Use "Choose items to count".</span>'}</div>
+    ${BO.has16 && ticked.length ? `<div class="card" style="margin-bottom:14px;" id="sc-due"><div class="loading-line">Checking which items are due…</div></div>` : ''}
     <div class="toolbar"><div class="toolbar-left">${rangePickerHtml(scFilter, 'sc')}
       <label class="inline-check"><input type="checkbox" id="sc-review" ${scFilter.review ? 'checked' : ''}> Needs review only</label></div>
       <div class="text-light" style="font-size:13px;" id="sc-count"></div></div>
     <div id="sc-wrap"><div class="loading-line">Loading counts…</div></div>`;
   wireRangePicker(content, scFilter, 'sc', () => drawStockCounts());
+  if(BO.has16 && ticked.length) drawCountDue();
   content.querySelector('#sc-review').onchange = (e) => { scFilter.review = e.target.checked; drawStockCounts(); };
   await drawStockCounts();
+}
+/* Smart count (release 1.6, B20): which ticked items the next Close shift will ask, and why. */
+const COUNT_DUE_WHY = {NEVER: 'never counted yet', MOVED: 'stock changed since the last count', RECHECK: 'weekly check'};
+async function drawCountDue(){
+  const box = document.getElementById('sc-due'); if(!box) return;
+  let rows;
+  try{ rows = await cloud.rpc('bo_count_status', {}); }
+  catch(e){ box.innerHTML = `<p class="text-light" style="margin:0;">${esc(friendlyError(e))}</p>`; return; }
+  if(state.route !== 'stockCounts' || !box.isConnected) return;
+  rows = Array.isArray(rows) ? rows : [];
+  const days = Number(state.settings.count_recheck_days) || 7;
+  const due = rows.filter(x => x.due);
+  box.innerHTML = `
+    <b>Smart count</b>
+    <p class="hint" style="margin:4px 0 10px;">At Close shift the counter asks only the ticked items whose stock changed since their last count (sales, waste, purchases, production, corrections…). Items that didn't change are still asked every <b>${days} day${days === 1 ? '' : 's'}</b>.</p>
+    <div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Item</th><th>Last counted</th><th>Next close</th></tr></thead><tbody>
+      ${rows.map(x => `<tr><td>${esc(x.name || '')}</td><td>${x.last_counted_at ? esc(fmtShopDateTime(x.last_counted_at)) : '<span class="text-light">never</span>'}</td>
+        <td>${x.due ? `<span class="badge badge-yellow">To count</span> <span class="text-light">${esc(COUNT_DUE_WHY[x.why] || '')}</span>` : '<span class="text-light">not asked</span>'}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="field-inline" style="margin-top:10px;align-items:flex-end;">
+      <div class="form-row" style="margin:0;max-width:240px;"><label for="sc-recheck">Ask unchanged items again every (days)</label><input type="number" id="sc-recheck" min="1" max="60" step="1" value="${days}"></div>
+      <button class="btn btn-outline btn-sm" id="sc-recheck-save">Save</button>
+      <span class="text-light" style="font-size:13px;">${due.length ? plural(due.length, 'item') + ' to count at the next close.' : 'Nothing to count at the next close.'}</span>
+    </div>`;
+  box.querySelector('#sc-recheck-save').onclick = (e) => busy(e.currentTarget, async () => {
+    const v = Math.round(Number(box.querySelector('#sc-recheck').value));
+    if(!(v >= 1 && v <= 60)){ toast(friendlyError({message: 'BAD_RECHECK_DAYS'}), 'error'); return; }
+    if(await boSave([Ops.update('settings', {count_recheck_days: v, updated_at: nowISO()}), Ops.audit('Count re-check days saved', v + ' days')],
+      {success: 'Saved. Counters use it at the next Close shift.'})) drawCountDue();
+  });
 }
 async function drawStockCounts(){
   const wrap = document.getElementById('sc-wrap'); if(!wrap) return;

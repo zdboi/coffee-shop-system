@@ -235,3 +235,20 @@ It has three apps on one Supabase database:
 
 ## To continue
 Open the project in Claude and say **"Resume from docs/RESUME.md"**.
+
+## 2026-11-12: Release 1.5 live
+- Supabase moved to the business account (same address); SQL Editor snippets stay with the personal account, the data moved. Nothing lost.
+- Owner ran 012 ("Success"). Supabase can't save/rename a snippet that big ("request entity too large"): harmless.
+- Owner merged PR #8 at 17:10 (merge commit `976a61f`). Checkpoint 21 = last working version. 012 frozen; next script 013.
+- Private changelog (Project doc) updated with everything in 1.5 and the B18 calendar plan.
+- Next: owner does the shop setup in `docs/RELEASE_1.5.md`. Wave 4 (1.6) only when the owner says go.
+
+## 2026-11-12 → 13: Wave 4 (1.6) built
+- Owner go 17:37. Scope: Accounting overview (any dates), editable payment methods, extra charge per method (add or waive; counts as the provider's fee), Senior/PWD discount (owner-set %, VAT exemption, name + ID, report; any cashier, own items only, not combined), Sales calendar with start/end span (sticky), smart stock count (only moved items, weekly re-check). Investor equity moved later.
+- Script 013 + screens built; my checks pass (SQL 90, shared 16, counter 15, Back Office 18). Z running the security gate + full QA.
+- Next: Z findings → fix → PR → owner runs 013 and merges (guide: docs/RELEASE_1.6.md).
+
+## 2026-11-13: Release 1.6 ready (PR #9)
+- Added on the owner's request during the wave: investors & start-up costs (from the owner's sheet; start-up costs kept out of monthly net income), Weighs on bought sauces/syrups.
+- Z gate found 3 medium issues (Senior/PWD bypass via odd numbers, smart count same-upload timestamps, refund share with tax on top) + small ones; all fixed. Z recheck: PASS, 9,044 checks.
+- Owner to do: run 013 (business Supabase), merge PR #9, reload devices, set up per docs/RELEASE_1.6.md, paste the investor sheet.

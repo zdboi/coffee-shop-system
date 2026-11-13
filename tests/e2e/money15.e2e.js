@@ -223,9 +223,11 @@ function seed(){
     await go('wasteReport'); await bo.waitForSelector('.wr-entries');
     const wrText = await bo.textContent('#content');
     ok(/₱46\.00/.test(wrText) && /Edited/.test(wrText) && /Missing at count/.test(wrText), 'Waste report screen: ₱46.00, Edited mark, Missing at count', wrText.slice(0, 300));
-    await go('netIncome'); await bo.waitForSelector('#ni-body'); await bo.waitForTimeout(600);
-    const niText = (await bo.textContent('#ni-body')).replace(/\s+/g, ' ');
-    ok(/46\.00/.test(niText) && /R&D/.test(niText) && /missing at count/i.test(niText), 'Net income screen: 46.00 wasted with the R&D and missing-at-count parts', niText.slice(0, 500));
+    // 1.6 (owner decision B1; changed by Z 2026-11-13, needs C's approval): the Net income page is now the Accounting overview
+    // (#ac-body, ACCT_LAST.r = accounting_report; zero lines such as "Tax collected" are not shown). Same hand-math numbers.
+    await go('netIncome'); await bo.waitForSelector('#ac-table', {timeout: 15000}); await bo.waitForTimeout(600);
+    const niText = (await bo.textContent('#ac-body')).replace(/\s+/g, ' ');
+    ok(/46\.00/.test(niText) && /R&D/.test(niText) && /missing at count/i.test(niText), 'Accounting overview: 46.00 wasted with the R&D and missing-at-count parts', niText.slice(0, 500));
     await go('production'); await bo.waitForSelector('#to-return-list');
     const trText = (await bo.textContent('#prod-to-return')).replace(/\s+/g, ' ');
     ok(/₱85\.00/.test(trText) && /₱25\.00/.test(trText), 'Production screen: "To return to TCO" worth ₱85.00, ₱25.00 of the pesos left', trText.slice(0, 300));

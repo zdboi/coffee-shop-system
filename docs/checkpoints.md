@@ -12,8 +12,8 @@ If an update goes wrong, tell C: **"Go back to the last working version."**
 
 | Apps | Live since | Browse | Download |
 |---|---|---|---|
-| Counter, Back Office, QR page, menu link (all apps), release 1.4.2 | 2026-11-10 (pull request #7; no database script) | [8b522f2](https://github.com/zdboi/coffee-shop-system/tree/8b522f22811cdec0cfd7666afc87ca77126b7b9e) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/8b522f22811cdec0cfd7666afc87ca77126b7b9e.zip) |
-| *(previous)* release 1.4.1 | 2026-11-09 (pull request #6; database script 011 run) | [caecffa](https://github.com/zdboi/coffee-shop-system/tree/caecffa8572a5ac418293a9d57b7f9d1cfdb6cde) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/caecffa8572a5ac418293a9d57b7f9d1cfdb6cde.zip) |
+| Counter, Back Office, QR page, menu link (all apps), release 1.5 | 2026-11-12 (pull request #8; database script 012 run) | [976a61f](https://github.com/zdboi/coffee-shop-system/tree/976a61f0e5b0272b760bccea1ea736dcbd3399c7) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/976a61f0e5b0272b760bccea1ea736dcbd3399c7.zip) |
+| *(previous)* release 1.4.2 | 2026-11-10 (pull request #7; no database script) | [8b522f2](https://github.com/zdboi/coffee-shop-system/tree/8b522f22811cdec0cfd7666afc87ca77126b7b9e) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/8b522f22811cdec0cfd7666afc87ca77126b7b9e.zip) |
 | *(older)* release 1.4 | 2026-11-09 (pull request #5; database script 010 run) | [651e706](https://github.com/zdboi/coffee-shop-system/tree/651e70601eddb024b03b6ae085d66dda3cea204a) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/651e70601eddb024b03b6ae085d66dda3cea204a.zip) |
 | *(older)* release 1.3 | 2026-11-02 (pull request #4; database script 009 run) | [abcff5b](https://github.com/zdboi/coffee-shop-system/tree/abcff5bd5dc57e047d9c1bb914ef2e3c8ea4c06d) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/abcff5bd5dc57e047d9c1bb914ef2e3c8ea4c06d.zip) |
 | *(older)* release 1.2 | 2026-11-02 (pull request #3; database script 008 run) | [a44a123](https://github.com/zdboi/coffee-shop-system/tree/a44a123b513e0c031fbaad9923ecc8cc6a34831b) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/a44a123b513e0c031fbaad9923ecc8cc6a34831b.zip) |
@@ -45,6 +45,8 @@ Older working versions stay in the table below, so you can go back further if ne
 | 18 | **Release 1.4.2 ready** | 2026-11-10 | QR code for the menu link (Download PNG/SVG, branded "Scan for our menu" print card) and swipeable sub-category tabs on the menu page. No database script. Final test run 70 suites / 4,283 checks, 0 failing. Waiting for you to merge (`docs/RELEASE_1.4.2.md`). |
 | 19 | **Release 1.4.2 live** | 2026-11-10 10:54 | You merged pull request #7 (no database script). This is now the last working version (merge commit `8b522f2`). |
 | 20 | **Release 1.5 ready** (Wave 3) | 2026-11-12 | QR guest/registered and usernames, table limits, one phone per account, stamp card cycling with history, Barista drink, blind stock count, R&D log, half/double production, TCO batches with a "To return" list, waste edit/delete, archived customers. Database script 012. Z (independent security + QA): PASS; 82 suites / 5,396 checks, 0 failing. Waiting for you: `docs/RELEASE_1.5.md`. |
+| 21 | **Release 1.5 live** | 2026-11-12 17:10 | You ran `012_release_1_5.sql` ("Success") and merged pull request #8. This is now the last working version (merge commit `976a61f`). |
+| 22 | **Release 1.6 ready** (Wave 4 "Money") | 2026-11-13 | Payment methods + charges (add or waive), Senior/PWD discount with report, smart stock count, Accounting overview, span Sales calendar, investors & start-up costs, Weighs on bought items. Z: PASS (140 suites, 9,044 checks, 0 failing). Database script `013_release_1_6.sql`. Waiting for you: `docs/RELEASE_1.6.md`. Last working version stays 1.5 (`976a61f`) until you merge. |
 
 ## Look at or download a checkpoint
 

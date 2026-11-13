@@ -234,17 +234,19 @@ async function manilaClock(){
     await fo.click('.nav-item[data-route="shift"]'); await fo.waitForSelector('.drawer-card .drow.total');
 
     // ---- counter shift screen + X-report
+    // 1.6 (owner decisions B4 + B18; changed by Z 2026-11-13, needs C's approval): the counter shows one card per payment method
+    // ("GCash"), the X-report / Back Office shift view say "Other methods" (was "GCash / Maya / Other"), no "Average sale" card.
     const stat = (label) => fo.$$eval('.stat-card', (cards, l) => { const c = cards.find(x => x.querySelector('.label') && x.querySelector('.label').textContent.trim() === l); return c ? c.querySelector('.value').textContent : null; }, label);
     const drawer = await fo.$$eval('.drawer-card .drow', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim()));
     ok(eq2(money(await stat('Net sales')), X.net) && Number(await stat('Transactions')) === 3 && eq2(money(await stat('Refunds')), X.refunds), `counter shift screen: net ${peso(X.net)}, 3 transactions, refunds ${peso(X.refunds)}`, [await stat('Net sales'), await stat('Transactions'), await stat('Refunds')]);
-    ok(eq2(money(await stat('Cash')), X.cash) && eq2(money(await stat('GCash / Maya / Other')), X.other) && eq2(money(await stat('Card')), 0), `counter payment breakdown: cash ${peso(X.cash)}, GCash ${peso(X.other)}`);
+    ok(eq2(money(await stat('Cash')), X.cash) && eq2(money(await stat('GCash')), X.other) && eq2(money(await stat('Card')), 0), `counter payment breakdown: cash ${peso(X.cash)}, GCash ${peso(X.other)}`);
     ok(eq2(money(drawer[drawer.length - 1]), X.expectedCash) && drawer.some(d => new RegExp('Cash Sales.*' + X.cashLessRefunds.toFixed(2).replace('.', '\\.')).test(d)) && drawer.some(d => /Pay Ins \(1\).*100\.00/.test(d)) && drawer.some(d => /Pay Outs \(1\).*50\.00/.test(d)), `counter drawer: 2000 + ${X.cashLessRefunds} (cash sales less cash refunds) + 100 - 50 = ${peso(X.expectedCash)} after restart`, drawer);
     const [xr] = await Promise.all([fctx.waitForEvent('page'), fo.click('#xreport-btn')]);
     await xr.waitForLoadState();
     const xrow = await xr.$$eval('.row', rs => Object.fromEntries(rs.map(r => [r.querySelector('span').textContent.trim(), r.querySelector('b').textContent.trim()])));
     const xv = (k) => money(xrow[k]);
     ok(eq2(xv('Net sales'), X.net) && Number(xrow['Transactions']) === 3 && eq2(-xv('Refunds'), X.refunds) && eq2(xv('Voids'), X.V.total), `X-report: net ${peso(X.net)}, 3 transactions, refunds ${peso(X.refunds)}, voids ${peso(X.V.total)}`, xrow);
-    ok(eq2(xv('Cash'), X.cash) && eq2(xv('Card'), 0) && eq2(xv('GCash / Maya / Other'), X.other) && eq2(xv('Opening Cash'), 2000) && eq2(xv('Expected Cash'), X.expectedCash), `X-report: cash ${peso(X.cash)}, GCash ${peso(X.other)}, opening ₱2,000, expected cash ${peso(X.expectedCash)}`, xrow);
+    ok(eq2(xv('Cash'), X.cash) && eq2(xv('Card'), 0) && eq2(xv('Other methods'), X.other) && eq2(xv('Opening Cash'), 2000) && eq2(xv('Expected Cash'), X.expectedCash), `X-report: cash ${peso(X.cash)}, GCash ${peso(X.other)}, opening ₱2,000, expected cash ${peso(X.expectedCash)}`, xrow);
     ok(/\+₱100\.00 \/ -₱50\.00/.test(xrow['Pay Ins / Outs'] || ''), 'X-report: pay ins / outs +₱100 / -₱50', xrow['Pay Ins / Outs']);
     ok(eq2(xv('Item sales (before discounts)'), X.grossSubtotals) && eq2(xv('Sales'), X.counted), 'X-report: Item sales 1,000.00 and Sales 1,150.46', xrow);
     await xr.close();
@@ -263,14 +265,14 @@ async function manilaClock(){
     const kp = async (l) => B.statValue(bo, l);
     const netCard = await bo.$$eval('.stat-card', cs => { const c = cs.find(x => x.querySelector('.label').textContent.trim() === 'Net sales'); return c ? c.textContent.replace(/\s+/g, ' ') : ''; });
     ok(eq2(money(await kp('Net sales')), X.net) && netCard.includes('Sales ' + peso(X.counted) + ' − refunds ' + peso(X.refunds)), `BO calendar day: net ${peso(X.net)}, sub-text "Sales ${peso(X.counted)} − refunds ${peso(X.refunds)}"`, netCard);
-    ok(Number(await kp('Transactions')) === 3 && Number(await kp('Items sold')) === X.items && eq2(money(await kp('Average sale')), r2(X.counted / 3)), `BO calendar day: 3 transactions (void left out), ${X.items} items, average ${peso(r2(X.counted / 3))}`, [await kp('Transactions'), await kp('Items sold'), await kp('Average sale')]);
+    ok(Number(await kp('Transactions')) === 3 && Number(await kp('Items sold')) === X.items && (await kp('Average sale')) === null, `BO calendar day: 3 transactions (void left out), ${X.items} items (no "Average sale" card since 1.6)`, [await kp('Transactions'), await kp('Items sold'), await kp('Average sale')]);
     const payRows = await bo.$$eval('.cal-card', cards => { const c = cards.find(x => /Payment methods/.test(x.querySelector('h3') ? x.querySelector('h3').textContent : '')); return c ? [...c.querySelectorAll('tbody tr')].map(r => [...r.children].map(td => td.textContent.trim())) : []; });
     const pay = Object.fromEntries(payRows.map(r => [r[0], r]));
     ok(pay.Cash && pay.Cash[1] === '2' && eq2(money(pay.Cash[2]), X.cash) && pay.GCash && pay.GCash[1] === '1' && eq2(money(pay.GCash[2]), X.other), `BO calendar day payments: cash 2 / ${peso(X.cash)}, GCash 1 / ${peso(X.other)}`, payRows);
     await bo.click('[data-view="shift"]'); await bo.waitForSelector('#cal-shift-pick');
     await bo.selectOption('#cal-shift-pick', shiftId); await bo.waitForTimeout(300);
     ok(eq2(money(await kp('Expected cash')), X.expectedCash), `BO calendar shift: expected cash ${peso(X.expectedCash)} (same as the counter)`, await kp('Expected cash'));
-    ok(eq2(money(await kp('Cash sales')), X.cash) && eq2(money(await kp('Card')), 0) && eq2(money(await kp('GCash / Maya / other')), X.other), `BO calendar shift: cash ${peso(X.cash)}, card ₱0, GCash ${peso(X.other)}`);
+    ok(eq2(money(await kp('Cash sales')), X.cash) && eq2(money(await kp('Card')), 0) && eq2(money(await kp('Other methods')), X.other), `BO calendar shift: cash ${peso(X.cash)}, card ₱0, GCash ${peso(X.other)}`);
     ok((await kp('Refunds / voids')).replace(/\s/g, '') === (peso(X.refunds) + '/' + peso(X.V.total)).replace(/\s/g, ''), `BO calendar shift: refunds / voids ${peso(X.refunds)} / ${peso(X.V.total)}`, await kp('Refunds / voids'));
     ok(eq2(money(await kp('Net sales')), X.net), `BO calendar shift: net ${peso(X.net)}`, await kp('Net sales'));
     // sales_report for the shop's day, read from the Back Office login

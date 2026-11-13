@@ -1,7 +1,7 @@
 /* Service worker: lets the counter (Front Office) open and run with no internet.
    Strategy: network first (so updates arrive right away), fall back to the saved copy.
    Supabase data calls are never cached here — the app keeps its own offline copy. */
-const CACHE = 'cccc-app-v5.5.0';  // 1.5: shop day in Manila time (todayISO), stock_count op, count + production maths, new error texts (shared/ui.js, logic.js); 1.4: USB receipt printer, order tickets, X/Z on paper, no print-screen prompts (shared/printer.js); 1.4: swap stock rule LINE_TOTAL; option library, swaps, waste, units (shared/logic.js, ui.js); 1.3: receipt printer; 1.2: brand look
+const CACHE = 'cccc-app-v5.6.0';  // 1.6: payment methods + charges, Senior / PWD, smart count, receipts (shared/logic.js, ui.js, printer.js); 1.5: shop day in Manila time (todayISO), stock_count op, count + production maths, new error texts (shared/ui.js, logic.js); 1.4: USB receipt printer, order tickets, X/Z on paper, no print-screen prompts (shared/printer.js); 1.4: swap stock rule LINE_TOTAL; option library, swaps, waste, units (shared/logic.js, ui.js); 1.3: receipt printer; 1.2: brand look
 const SHELL = [
   './', './index.html',
   './front/', './front/index.html', './front/front.js', './front/front.css', './front/manifest.json',

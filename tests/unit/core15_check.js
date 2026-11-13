@@ -151,10 +151,12 @@ const codes = ['TABLE_FULL','GUEST_TABLE_BUSY','UNPAID_ORDERS','SIGN_OUT_FIRST',
   'NOT_A_PRODUCTION_RECIPE','NOT_A_PARTNER','BAD_DEBT_KIND','BAD_SCALE','BAD_YIELD','NO_INGREDIENTS','DEBT_VALUE_ZERO','PARTNER_HAS_DEBTS',
   'DEBT_NOT_FOUND','DEBT_NOT_OPEN','BAD_RETURN','BAD_PAYMENT','CARD_NOT_ISSUED','REGISTER_FIRST','TOO_MANY_OPEN_ORDERS','TABLE_NOT_FOUND'];
 eq('every new code has a text', codes.filter(c => !r(`ERROR_TEXT`)[c]), []);
-eq('friendlyError of an fo_sync answer', r(`friendlyError({status:'error', message:'COUNT_REQUIRED'})`), 'Count the ticked items before closing the shift.');
+// 1.6 (owner decision B20, smart count; changed by Z 2026-11-13, needs C's approval): COUNT_REQUIRED now reads
+// "Count the items on the list before closing the shift." (was "Count the ticked items before closing the shift.")
+eq('friendlyError of an fo_sync answer', r(`friendlyError({status:'error', message:'COUNT_REQUIRED'})`), 'Count the items on the list before closing the shift.');
 eq('friendlyError of a raised owner RPC error', r(`friendlyError(new Error('RETURN_EXCEEDS_DEBT'))`), r(`ERROR_TEXT.RETURN_EXCEEDS_DEBT`));
 eq('friendlyError of a QR {error} answer', r(`friendlyError({error:'TABLE_FULL'})`), r(`ERROR_TEXT.TABLE_FULL`));
-eq('a thrown count Error reads well', (() => { try{ r(`buildStockCountData({lines:[]})`); }catch(e){ ctx.__e = e; } return r(`friendlyError(__e)`); })(), 'Count the ticked items before closing the shift.');
+eq('a thrown count Error reads well', (() => { try{ r(`buildStockCountData({lines:[]})`); }catch(e){ ctx.__e = e; } return r(`friendlyError(__e)`); })(), 'Count the items on the list before closing the shift.');
 eq('customer text for TOO_MANY_ATTEMPTS', r(`customerFriendlyError({error:'TOO_MANY_ATTEMPTS'})`), 'Too many tries. Please ask our staff at the counter, or try again later.');
 eq('customerFriendlyError falls back to friendlyError', r(`customerFriendlyError({error:'TABLE_FULL'})`), r(`ERROR_TEXT.TABLE_FULL`));
 eq('staff TOO_MANY_ATTEMPTS unchanged', r(`friendlyError('TOO_MANY_ATTEMPTS')`), 'Too many tries. Please wait a few minutes and try again.');

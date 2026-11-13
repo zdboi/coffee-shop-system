@@ -14,7 +14,7 @@ with want(tbl, col, must_have, must_not_have) as (values
   ('cash_movements','type',                 array['PAY_IN','PAY_OUT'], array[]::text[]),
   ('sales','source',                        array['COUNTER','QR'], array[]::text[]),
   ('sales','status',                        array['HELD','COMPLETED','VOIDED','REFUNDED','PARTIALLY_REFUNDED'], array[]::text[]),
-  ('payments','method',                     array['CASH','GCASH','MAYA','CARD','BANK','OTHER'], array[]::text[]),
+  -- payments.method: since 013 (release 1.6, owner decision B4: the owner can add methods) a format rule, checked below
   ('refunds','type',                        array['VOID','FULL_REFUND','PARTIAL_REFUND'], array[]::text[]),
   ('staff','role',                          array['ADMIN','MANAGER','CASHIER'], array['DEVICE']),
   ('dining_tables','kind',                  array['DINE_IN','TAKEAWAY'], array[]::text[]),
@@ -44,3 +44,10 @@ from got order by tbl, col;
 select case when exists (select 1 from pg_constraint where conrelid = 'public.cash_movements'::regclass and contype = 'c'
                           and pg_get_constraintdef(oid) like '%amount > (0)%')
        then 'ok  ' else 'FAIL ' end || 'cash_movements.amount > 0 (live rule) is still there';
+-- 013 (release 1.6, owner decision B4; changed 2026-11-13 with C's approval): payments.method was the word list
+-- CASH,GCASH,MAYA,CARD,BANK,OTHER; now ONE format rule (capitals, digits, _; 2-20 characters) that every old word fits.
+select case when (select count(*) from pg_constraint c join pg_attribute a on a.attrelid = c.conrelid and a.attnum = any(c.conkey)
+                   where c.conrelid = 'public.payments'::regclass and c.contype = 'c' and a.attname = 'method') = 1
+             and (select bool_and(w ~ '^[A-Z][A-Z0-9_]{1,19}$') from unnest(array['CASH','GCASH','MAYA','CARD','BANK','OTHER','QR']) w)
+             and (select pg_get_constraintdef(oid) from pg_constraint where conname = 'payments_method_check' and conrelid = 'public.payments'::regclass) like '%A-Z%'
+       then 'ok  ' else 'FAIL ' end || 'payments.method: one CHECK rule, the 1.6 format rule (every old word CASH,GCASH,MAYA,CARD,BANK,OTHER fits)';

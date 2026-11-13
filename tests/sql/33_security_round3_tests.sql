@@ -298,6 +298,7 @@ from pg_proc p where p.pronamespace = 'public'::regnamespace
     'start_fresh_preview','start_fresh',   -- 1.3 (009): lead-approved additions 2026-11-02 (owner-only inside)
     'merge_ingredients_preview','merge_ingredients','save_supplied_item','waste_report','net_income_report',   -- 1.4 (010): lead-approved additions 2026-11-03
     'public_menu',   -- 1.4.1 (011): lead-approved addition 2026-11-09
+    'fo_count_due','bo_count_status','accounting_report','senior_report',   -- 1.6 (013): contract-1.6 section E, added by Z 2026-11-13 (needs C's approval)
     -- 1.5 (012): lead-approved additions 2026-11-12 (contract-1.5 "Rights"): two QR functions for signed-in phones, the rest owner-only inside
     'qr_set_username','qr_switch_account','log_rnd_usage','delete_rnd_usage','revise_stock_count','partner_batch_preview','produce_partner_batch',
     'partner_return','partner_pay','bo_customer_loyalty','revise_waste','delete_waste');

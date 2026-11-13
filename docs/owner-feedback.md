@@ -251,3 +251,53 @@ Owner: **don't start 1.3 until I say so.**
   - Net income (monthly) and the Waste report exist (1.4).
   - Wave 4's B1 Accounting overview already plans "any date range" with voids, waste and net income. B18 puts the same numbers on the calendar; both should read one shared server report so they always agree.
 - Not started. Build with Wave 4.
+
+## Wave 4 scope change (owner, 2026-11-12 17:24)
+- Owner: "dont include B2 yet. Include the Senior/PWD discount but allow us to change the percentage."
+- **B2 Investor equity: taken out of Wave 4** (later, not dropped).
+- **B19. Senior/PWD discount: added to Wave 4**, with a percentage the owner can change (default 20%).
+  - **Overlap (lead):** today a manager can already type any % or ₱ discount at the counter (the box even suggests "20 (Senior/PWD)"). That is a general discount with a manager PIN. B19 adds a dedicated Senior/PWD button with the owner's set %, and keeps the general discount as it is.
+  - To settle at planning: manager PIN or not; whether to record the ID number and name (and who may see them); VAT exemption on top of the 20% (PH law, RA 9994 / RA 10754); per item vs whole order (group orders where only some diners are senior/PWD); how it shows on the receipt and in reports.
+- **Wave 4 (1.6) "Money" now = B1 Accounting overview, B4 editable payment methods, B5 payment-method charges, B18 Sales calendar overhaul, B19 Senior/PWD discount.**
+
+## B5 change: add or waive (owner, 2026-11-12 17:30)
+- Owner: "as for the extra charge per payment, allow us to tick a box whether we add it or waive it and absorb the charge."
+- Meaning: the charge can be added to the customer's bill, or waived so the shop absorbs it. Waived charges show in the Accounting overview as a shop cost (not hidden).
+- To confirm at planning: tick per sale at the counter, with a default per payment method in Settings; whether waiving needs a manager.
+
+## B19 question (owner, 2026-11-12 17:30)
+- Owner asked why the Senior/PWD perk keeps being suggested if a manual discount already exists.
+- Lead answer: the manual % discount already gives the 20% off. A dedicated button would only add the legal record-keeping (VAT exemption, ID number/name log, a Senior/PWD report). It sat in the "optional extras" list because of that overlap. Waiting for the owner: keep B19 (with those legal parts) or drop it and keep using the manual discount.
+
+## B19 decision (owner, 2026-11-12 17:32)
+- Owner: "okay we keep the modification on that discount for the POS to be more proper documentation."
+- **B19 stays in Wave 4**: a Senior/PWD button with the owner's set % (default 20%), VAT exemption, a record of name + ID number per sale (owner-only to read in full), and a Senior/PWD report for the accountant. The general manual discount stays as it is.
+- Still to settle at planning: manager PIN or not; group orders (only the senior/PWD's own items); receipt wording.
+
+## B20. Smart stock count (owner, 2026-11-12 17:35), Wave 4 (1.6)
+- Owner: "I also want the new stock checklist to be a smart stock checklist. Only ask for the current count of stocks that have moved. I don't want to count daily even the stocks or ingredients that has not moved."
+- **Overlap (lead):** the 1.5 blind count asks every item ticked "Count at closing" at every Close shift (client `countAtCloseIngredients`, server `COUNT_REQUIRED`). B20 changes which ticked items are asked; nothing else repeats.
+- **Owner decisions (17:3x):**
+  - "Moved" = **any change at all** since the item was last counted (sales, production, waste, R&D, purchases, deliveries, corrections, TCO).
+  - Items that haven't moved are still asked **once a week** (safety check for stock that goes missing unlogged).
+  - Build **with Wave 4 (1.6)**, not as a separate update.
+- Lead notes: the server must decide which items are due (same rule on counter and server; offline counters use the last list they downloaded plus their own sales). Count stays blind.
+- **Wave 4 (1.6) now = B1, B4, B5 (add-or-waive), B18, B19 Senior/PWD, B20 smart stock count.**
+
+## Wave 4 go-ahead and decisions (owner, 2026-11-12 17:37)
+- Owner: "You can now start with wave 4".
+- **B19 Senior/PWD:** any cashier can apply it, no manager PIN; the name and ID number are required; every use shows in the Senior/PWD report. On a group order it applies **only to the items the cashier ticks**.
+- **B5 waive:** any cashier can tick "waive" on a sale; waived charges are listed in the Accounting overview with who waived them.
+- **B4 starting list:** Cash, GCash, QR payment, Card, Bank transfer. Maya and Other are switched off (old sales keep their method). The owner can edit the list afterwards.
+
+## B2 back in Wave 4: investors + start-up costs (owner, 2026-11-13 10:13)
+- Owner (with the sheet "CCCC Initial Funds and Expense"): "Can I also integrate this data in the app. these are the initial investments and the initial expenses made. also make it so that I can add/remove/replace investors and their investment values."
+- Overlap (lead): this is B2 investor equity, moved out of Wave 4 on 2026-11-12; Expenses (1.4) exists but is for running costs.
+- Sheet: 5 investors = ₱200,000 (Mama Lorna 50,000; Jake 30,000; Renan 40,000; Jom 40,000; Zed 40,000; a "?" row with no amount, left out); 61 start-up costs = ₱195,871 (no dates); cash left ₱4,129.
+- **Owner decisions (10:1x):** build it **in Wave 4 now**; start-up costs are **separate "start-up costs", NOT taken off any month's net income**; ownership % **follows the amounts** (amount ÷ total, updates by itself).
+- Lead scope: Back Office → Money → Investors & start-up: investors (add / edit / remove, amount, date, note), start-up costs (add / edit / delete, date, category, note), paste rows straight from Excel (name + amount), totals: invested, start-up costs, cash left, each person's %, and each person's share of net income for any dates (information only). Payouts / payback tracking: later.
+
+## Supplied sauces / syrups (owner, 2026-11-13 10:31)
+- Owner: "Include sauces, syrups, and foods to Supplied items". Asked what for: **"Use them in drinks"**.
+- Lead: already supported, nothing to build. Food is already a supplied item type (resold per piece). Bought-ready sauces and syrups used in drinks are normal (raw) ingredients: Ingredients → + Add ingredient (category Syrups & Sauces, stock in mL or g), then Purchases, then in recipes / the Options library. Told the owner how.
+- Owner (10:32): **"I need it in grams too"** → bought sauces / syrups (counted in mL) may now have "Weighs", so drinks can use them in grams. This reverses the 1.4 owner decision of 2026-11-02 ("bought liquids stay in mL"). Built into 1.6: 013 re-makes `_ingredient_check` without WEIGHS_PRODUCED_ONLY; the Back Office shows "Weighs" when editing any item counted in g / mL.

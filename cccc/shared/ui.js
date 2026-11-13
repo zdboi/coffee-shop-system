@@ -231,7 +231,13 @@ const ERROR_TEXT = {
   // Release 1.5: barista calibration kit (B7)
   BAD_BARISTA_KIT: 'The barista drink kit could not be saved. Use at most 20 items, each once, with an amount above 0 in one of the item\'s units (switched-on stock items only).',
   // Release 1.5: count at closing (B9)
-  COUNT_REQUIRED: 'Count the ticked items before closing the shift.',
+  COUNT_REQUIRED: 'Count the items on the list before closing the shift.',
+  // release 1.6
+  BAD_SENIOR: 'The Senior / PWD discount could not be saved. It needs the customer\'s name and ID number, at least one ticked item, and no other discount or stamp reward on the same sale.',
+  BAD_PAYMENT_METHODS: 'The payment methods could not be saved. Cash must stay switched on with no charge, every method needs a name, and a charge must be above 0 (at most 25% or ₱1,000).',
+  BAD_SENIOR_PCT: 'The Senior / PWD discount must be between 0 and 100 percent.',
+  BAD_RECHECK_DAYS: 'Type a number of days between 1 and 60.',
+  BAD_RANGE: 'Choose a start date and an end date at most 400 days apart.',
   BAD_COUNT: 'This stock count could not be saved: count each ticked item once (only items ticked "Count at closing"). Check the list and count again.',
   COUNT_NOT_FOUND: 'That stock count was not found (it may have been removed). Refresh and try again.',
   // Release 1.5: R&D log (B8)
@@ -289,6 +295,10 @@ const REVIEW_REASON_TEXT = {
   BEFORE_START_FRESH: 'Dated before the shop started fresh (old test data uploaded late)',
   FUTURE_DATE: 'Dated in the future',
   OLD_DATE: 'Dated more than 7 days back',
+  // release 1.6 (013)
+  SENIOR_MISMATCH: 'Senior / PWD discount differs from your settings',
+  CHARGE_MISMATCH: 'Payment charge differs from your settings',
+  PAYMENT_METHOD_OFF: 'Paid by a method that is switched off or not in your list',
 };
 // "PRICE_BELOW_MENU, TAX_MISMATCH" -> "Sold below the menu price; Tax or service charge doesn't match your settings".
 // Unknown codes become plain lower-case words; an empty reason gives 'Flagged by the server'.
@@ -331,6 +341,12 @@ function friendlyError(e){
     if(why && OPTION_GROUP_PROBLEM_TEXT[why]) return 'The option group could not be saved. ' + OPTION_GROUP_PROBLEM_TEXT[why];
   }
   if(code && ERROR_TEXT[code]) return ERROR_TEXT[code];
+  // release 1.6 (B2): the database's own limits on investors / start-up costs, in plain words
+  if(/(investors|startup_costs)_amount_check/.test(raw)) return 'An amount must be more than ₱0 and at most ₱100,000,000.';
+  if(/(investors|startup_costs)_name_check/.test(raw)) return 'A name is missing or too long (investors: 80 characters, start-up costs: 120).';
+  if(/(investors|startup_costs)_notes_check/.test(raw)) return 'A note can be at most 500 characters.';
+  if(/investors_name_key/.test(raw)) return 'There is already an investor with that name.';
+  if(/violates check constraint/i.test(raw)) return 'Something you typed is outside what the app accepts. Check the amounts and names, then try again.';
   if(/row-level security/i.test(raw)) return 'You do not have permission to change this.';
   if(/foreign key/i.test(raw)) return 'This record is still used elsewhere (e.g. in sales history), so it cannot be deleted.';
   if(/duplicate key/i.test(raw)) return 'That already exists.';

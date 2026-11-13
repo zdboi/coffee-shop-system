@@ -281,6 +281,11 @@ function setSettingsFromServer(row){
   s.subcategory_order = cleanSubcategoryOrder(row && row.subcategory_order);
   // Release 1.5 (012, B7): the barista calibration kit ([] when the column isn't there yet).
   s.barista_kit = cleanBaristaKit(row && row.barista_kit);
+  // Release 1.6 (013): the shop's payment methods, the Senior / PWD % and the count re-check days.
+  // Kept out of DEFAULT_SETTINGS too; missing (older database) -> the defaults in the helpers.
+  if(row && Array.isArray(row.payment_methods) && row.payment_methods.length) s.payment_methods = row.payment_methods.map(m => Object.assign({}, m));
+  if(row && row.senior_discount_pct !== undefined && row.senior_discount_pct !== null) s.senior_discount_pct = Number(row.senior_discount_pct) || 0;
+  if(row && row.count_recheck_days !== undefined && row.count_recheck_days !== null) s.count_recheck_days = Number(row.count_recheck_days) || 7;
   // Optional receipt lines (only when the database has these columns): kept out of
   // DEFAULT_SETTINGS for the same reason. Missing -> '' (nothing printed).
   RECEIPT_EXTRA_KEYS.forEach(k => { s[k] = (row && typeof row[k] === 'string') ? row[k] : ''; });
@@ -300,6 +305,9 @@ function serverSettingsRow(){
   if(Array.isArray(state.settings.barista_kit) && state.settings.barista_kit.length)
     row.barista_kit = state.settings.barista_kit.map(l => Object.assign({}, l));
   RECEIPT_EXTRA_KEYS.forEach(k => { if(state.settings[k]) row[k] = state.settings[k]; });
+  if(Array.isArray(state.settings.payment_methods)) row.payment_methods = state.settings.payment_methods.map(m => Object.assign({}, m));
+  if(state.settings.senior_discount_pct !== undefined) row.senior_discount_pct = state.settings.senior_discount_pct;
+  if(state.settings.count_recheck_days !== undefined) row.count_recheck_days = state.settings.count_recheck_days;
   row.updated_at = new Date().toISOString();
   return row;
 }
@@ -955,6 +963,18 @@ function isCountAtClose(ing){ return !!(ing && ing.count_at_close) && isStockIng
 function countAtCloseIngredients(){
   return state.ingredients.filter(isCountAtClose).slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
 }
+// Smart count (release 1.6): only the ticked items that are DUE are asked. The server decides
+// (fo_count_due: stock changed since the item's last count, never counted, or not counted for
+// the re-check days); the counter passes the ids here. null = not known -> every ticked item.
+let _countDueIds = null;
+function setCountDue(ids){ _countDueIds = Array.isArray(ids) ? new Set(ids.map(String)) : null; }
+function countDueKnown(){ return _countDueIds !== null; }
+// The ticked items to count now (all of them while the due list isn't known).
+function countDueIngredients(){
+  const all = countAtCloseIngredients();
+  if(_countDueIds === null) return all;
+  return all.filter(i => _countDueIds.has(i.id) || _countDueIds.has(mergeTarget(i.id).id));
+}
 // One typed count line -> {ingredient_id (where the stock lives now), ingredient, quantity (stock unit)}
 // or null when the item is unknown / the unit doesn't convert. Unit empty = the stock unit of the item
 // named (an item merged since: converted to the general item's unit, like the server).
@@ -968,15 +988,16 @@ function countLineBase(line){
   if(q === null) return null;
   return {ingredient_id: t.id, ingredient: fin, quantity: _unitRound(q)};
 }
-// Which ticked items a count's lines leave out: {ok, missing: [{ingredient_id, name}]}.
-// (The server closes a shift only after a count with a line for EVERY ticked item.)
+// Which DUE items a count's lines leave out: {ok, missing: [{ingredient_id, name}]}.
+// (1.6: the server flags a count that misses a due item; it refuses Close shift only when
+// items are due and the shift has no count at all.)
 function stockCountCoversTicked(lines){
   const have = new Set();
   (lines || []).forEach(l => {
     if(!l || !l.ingredient_id || !_hasNum(l.quantity)) return;
     have.add(l.ingredient_id); have.add(mergeTarget(l.ingredient_id).id);
   });
-  const missing = countAtCloseIngredients().filter(i => !have.has(i.id)).map(i => ({ingredient_id: i.id, name: i.name}));
+  const missing = countDueIngredients().filter(i => !have.has(i.id)).map(i => ({ingredient_id: i.id, name: i.name}));
   return {ok: !missing.length, missing};
 }
 // buildStockCountData({id?, shift_id, staff_id, counted_at?, note?, lines: [{ingredient_id, quantity, unit?}]}, opts?)
@@ -984,7 +1005,7 @@ function stockCountCoversTicked(lines){
 //    {id, shift_id, staff_id, counted_at, note, lines: [{ingredient_id, quantity, unit}]}
 //    (quantity exactly as typed, unit as typed or null = the item's stock unit). id is made ONCE here:
 //    keep the same data for retries (same id + new op_id -> the server answers 'skipped').
-// opts.requireAll (default true): every ticked item must have a line (else COUNT_REQUIRED, e.missing).
+// opts.requireAll (default true): every DUE item (countDueIngredients) must have a line (else COUNT_REQUIRED, e.missing).
 // Throws an Error whose code friendlyError knows:
 //   BAD_COUNT (no lines / > 300 / an item twice / an item not ticked / nothing ticked),
 //   COUNT_REQUIRED (a ticked item has no amount; e.missing = [{ingredient_id, name}]),
@@ -995,8 +1016,9 @@ function buildStockCountData(input, opts){
   const ticked = countAtCloseIngredients();
   if(!ticked.length) throw _codeError('BAD_COUNT');
   const tickedIds = new Set(ticked.map(i => i.id));
+  const due = countDueIngredients();   // 1.6: only these MUST have a line (any ticked item MAY)
   const list = Array.isArray(input.lines) ? input.lines : [];
-  if(!list.length && requireAll){ const e = _codeError('COUNT_REQUIRED'); e.missing = ticked.map(i => ({ingredient_id: i.id, name: i.name})); throw e; }
+  if(!list.length && requireAll){ const e = _codeError('COUNT_REQUIRED'); e.missing = due.map(i => ({ingredient_id: i.id, name: i.name})); throw e; }
   if(list.length < 1 || list.length > STOCK_COUNT_MAX_LINES) throw _codeError('BAD_COUNT');
   const seen = new Set();
   const lines = list.map(l => {
@@ -1014,7 +1036,7 @@ function buildStockCountData(input, opts){
     return {ingredient_id: ing.id, quantity: q, unit};
   });
   if(requireAll){
-    const missing = ticked.filter(i => !seen.has(i.id)).map(i => ({ingredient_id: i.id, name: i.name}));
+    const missing = due.filter(i => !seen.has(i.id)).map(i => ({ingredient_id: i.id, name: i.name}));
     if(missing.length){ const e = _codeError('COUNT_REQUIRED'); e.missing = missing; throw e; }
   }
   const note = String(input.note == null ? '' : input.note).trim().slice(0, STOCK_COUNT_NOTE_MAX);
@@ -1056,7 +1078,7 @@ function stockCountDeltas(dataOrLines, expectedById){
 // Why the server flagged a count (stock_counts.review_reason, comma separated) in plain words.
 const COUNT_REVIEW_TEXT = {
   COUNT_EXTRA: 'More counted than expected (stock was raised to the count)',
-  COUNT_INCOMPLETE: 'Not every ticked item was counted',
+  COUNT_INCOMPLETE: 'An item that was due was not counted',
   LARGE_SHORTAGE: 'Missing stock worth more than the review limit',
   STAFF_MISMATCH: 'Counted by someone other than who was signed in',
   FUTURE_DATE: 'Dated in the future', OLD_DATE: 'Dated more than 7 days back',
@@ -1367,24 +1389,122 @@ function toCSV(headers, rows){
 // (the server's rule in _loyalty_reward_amount), base = S − D − R,
 // tax = inclusive ? 0 : base × tax%, service = base × service%, grand = base + tax + service.
 // Returns {subtotal, discountAmt, loyaltyDiscount, tax, serviceCharge, grandTotal}.
-function computeSaleTotals(lines, discount, settings, loyalty){
+// Release 1.6 (same numbers as before when not used; server twin: _check_sale_totals in 013):
+//   lines with senior:true = the Senior / PWD customer's own items (A). V = VAT taken out
+//   (prices include tax), Ds = (A − V) × the shop's %, base = S − V − Ds, no tax on those items.
+//   extra.payment = {method, waive}: fee = the method's charge on (base + tax + service);
+//   grand = that + (waive ? 0 : fee).
+//   Also returns {seniorItems, vatExempt, seniorDiscount, seniorPct, seniorLineDiscounts[],
+//   preCharge, paymentFee, paymentCharge}.
+function computeSaleTotals(lines, discount, settings, loyalty, extra){
   settings = settings || state.settings;
-  const subtotal = lines.reduce((s,l)=> s + (Number(l.unit_price||0) * Number(l.quantity||0)), 0);
-  let discountAmt = 0;
-  if(discount && discount.type==='percent') discountAmt = subtotal * (Number(discount.value)||0)/100;
-  else if(discount && discount.type==='fixed') discountAmt = Number(discount.value)||0;
-  discountAmt = Math.min(discountAmt, subtotal);
-  const afterDiscount = subtotal - discountAmt;
-  const loyaltyDiscount = capLoyaltyAmount(loyalty, afterDiscount);
-  // R is rounded to centavos, so it can be up to ₱0.005 more than S − D: base never below 0
-  // (the server refuses a negative tax / service charge; grand 0 is within its 2-centavo check).
-  const base = loyaltyDiscount ? Math.max(0, afterDiscount - loyaltyDiscount) : afterDiscount;
+  extra = extra || {};
+  const lineTotal = l => Number(l.unit_price||0) * Number(l.quantity||0);
+  const subtotal = lines.reduce((s,l)=> s + lineTotal(l), 0);
   const taxPct = Number(settings.tax_pct)||0;
   const servicePct = Number(settings.service_charge_pct)||0;
-  const tax = settings.tax_inclusive ? 0 : base * taxPct/100;
+  // Senior / PWD (release 1.6): the customer's own lines (line.senior). Never combined
+  // with a manager discount or a stamp reward (the server refuses that: BAD_SENIOR).
+  const seniorPct = seniorDiscountPct(settings);
+  const seniorItems = seniorPct > 0 ? lines.reduce((s,l)=> s + (l.senior ? lineTotal(l) : 0), 0) : 0;
+  const isSenior = seniorItems > 0;
+  let vatExempt = 0, seniorDiscount = 0;
+  if(isSenior){
+    if(settings.tax_inclusive && taxPct > 0) vatExempt = roundMoney(seniorItems - seniorItems / (1 + taxPct/100));
+    seniorDiscount = roundMoney((seniorItems - vatExempt) * seniorPct/100);
+  }
+  let discountAmt = 0;
+  if(!isSenior){
+    if(discount && discount.type==='percent') discountAmt = subtotal * (Number(discount.value)||0)/100;
+    else if(discount && discount.type==='fixed') discountAmt = Number(discount.value)||0;
+    discountAmt = Math.min(discountAmt, subtotal);
+  }
+  const afterDiscount = subtotal - discountAmt;
+  const loyaltyDiscount = isSenior ? 0 : capLoyaltyAmount(loyalty, afterDiscount);
+  // R is rounded to centavos, so it can be up to ₱0.005 more than S − D: base never below 0
+  // (the server refuses a negative tax / service charge; grand 0 is within its 2-centavo check).
+  let base = loyaltyDiscount ? Math.max(0, afterDiscount - loyaltyDiscount) : afterDiscount;
+  if(isSenior) base = Math.max(0, base - vatExempt - seniorDiscount);
+  // no tax on the Senior / PWD items
+  const taxable = isSenior ? Math.max(0, base - Math.max(0, seniorItems - vatExempt - seniorDiscount)) : base;
+  const tax = settings.tax_inclusive ? 0 : taxable * taxPct/100;
   const serviceCharge = base * servicePct/100;
-  const grandTotal = base + tax + serviceCharge;
-  return {subtotal, discountAmt, loyaltyDiscount, tax, serviceCharge, grandTotal: Math.round(grandTotal*100)/100};
+  const preCharge = base + tax + serviceCharge;
+  // Payment charge (release 1.6): the method's charge on the bill. paymentFee is always
+  // kept (the provider's fee); paymentCharge is what the customer pays (0 when waived).
+  const pay = extra.payment || null;
+  const paymentFee = pay ? paymentChargeFor(pay.method, preCharge, settings) : 0;
+  const paymentCharge = (pay && !pay.waive) ? paymentFee : 0;
+  // (VAT out + discount) shared over the Senior / PWD lines by line total; the last takes the rest
+  const seniorLineDiscounts = lines.map(()=> 0);
+  if(isSenior){
+    let left = roundMoney(vatExempt + seniorDiscount), lastIdx = -1;
+    lines.forEach((l, i)=>{ if(l.senior && lineTotal(l) > 0) lastIdx = i; });
+    lines.forEach((l, i)=>{
+      if(!l.senior || lineTotal(l) <= 0) return;
+      const share = i === lastIdx ? left : Math.min(left, roundMoney((vatExempt + seniorDiscount) * lineTotal(l) / seniorItems));
+      seniorLineDiscounts[i] = share; left = roundMoney(left - share);
+    });
+  }
+  return {subtotal, discountAmt, loyaltyDiscount, tax, serviceCharge,
+    seniorItems: isSenior ? roundMoney(seniorItems) : 0, vatExempt, seniorDiscount, seniorPct: isSenior ? seniorPct : 0, seniorLineDiscounts,
+    preCharge, paymentFee, paymentCharge,
+    grandTotal: Math.round((preCharge + paymentCharge)*100)/100};
+}
+// The shop's Senior / PWD discount % (0 = not offered). Settings saved before 1.6 have none: 20.
+function seniorDiscountPct(settings){
+  settings = settings || state.settings || {};
+  const p = settings.senior_discount_pct;
+  if(p === undefined || p === null || p === '') return 20;
+  const n = Number(p);
+  return isFinite(n) && n > 0 ? Math.min(n, 100) : 0;
+}
+
+/* ================= Payment methods (release 1.6) =================
+   settings.payment_methods: [{id, label, active, reference, charge_type NONE|PERCENT|FIXED,
+   charge_value, charge_default ADD|WAIVE}] in display order (checked by the server). */
+const DEFAULT_PAYMENT_METHODS = [
+  {id:'CASH', label:'Cash', active:true, reference:false},
+  {id:'GCASH', label:'GCash', active:true, reference:true},
+  {id:'QR', label:'QR payment', active:true, reference:true},
+  {id:'CARD', label:'Card', active:true, reference:true},
+  {id:'BANK', label:'Bank transfer', active:true, reference:true},
+  {id:'MAYA', label:'Maya', active:false, reference:true},
+  {id:'OTHER', label:'Other', active:false, reference:true},
+].map(m => Object.assign({charge_type:'NONE', charge_value:0, charge_default:'ADD'}, m));
+// The whole list (switched-off ones too), tidied. Old settings without a list: the default.
+function paymentMethodList(settings){
+  settings = settings || state.settings || {};
+  const raw = Array.isArray(settings.payment_methods) && settings.payment_methods.length ? settings.payment_methods : DEFAULT_PAYMENT_METHODS;
+  return raw.filter(m => m && m.id).map(m => ({
+    id: String(m.id), label: String(m.label || m.id), active: m.active !== false, reference: !!m.reference,
+    charge_type: ['PERCENT','FIXED'].includes(m.charge_type) ? m.charge_type : 'NONE',
+    charge_value: ['PERCENT','FIXED'].includes(m.charge_type) ? (Number(m.charge_value) || 0) : 0,
+    charge_default: m.charge_default === 'WAIVE' ? 'WAIVE' : 'ADD'}));
+}
+function activePaymentMethods(settings){ return paymentMethodList(settings).filter(m => m.active); }
+function paymentMethod(id, settings){ return paymentMethodList(settings).find(m => m.id === String(id || '').toUpperCase()) || null; }
+// A method's name for people: from the shop's list, else the id tidied ("PAYMAYA_X" -> "Paymaya x").
+function paymentMethodLabel(id, settings){
+  if(!id) return '';
+  const m = paymentMethod(id, settings);
+  if(m) return m.label;
+  const t = String(id).replace(/_/g, ' ').toLowerCase();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+// The method's charge on a bill of `pre` pesos (after discounts, tax and service charge).
+function paymentChargeFor(methodId, pre, settings){
+  const m = paymentMethod(methodId, settings);
+  pre = Number(pre) || 0;
+  if(!m || pre <= 0) return 0;
+  if(m.charge_type === 'PERCENT') return roundMoney(pre * m.charge_value / 100);
+  if(m.charge_type === 'FIXED') return roundMoney(m.charge_value);
+  return 0;
+}
+// "2%" / "₱15.00" / '' for a method's charge.
+function paymentChargeWords(m){
+  if(!m || m.charge_type === 'NONE') return '';
+  return m.charge_type === 'PERCENT' ? `${Number(m.charge_value)}%` : fmtMoney(m.charge_value);
 }
 // A reward amount (number, {amount} or {loyalty_discount}) capped at what is left after
 // the manager discount, never below 0, rounded to centavos like the server.
@@ -1461,6 +1581,12 @@ function saleItemUnitPrice(it){
 //   left = max(0, G − prior.amount)
 //   every item of the sale fully returned after this refund -> left
 //   otherwise -> min(left, round(L × G / S, 2))          (S = 0 -> 0)
+// Release 1.6: a Senior / PWD line counts at unit price − its senior_discount / quantity,
+// and S = subtotal − VAT taken out − Senior / PWD discount (same numbers as before without one).
+// Release 1.6 (Z finding 3): tax is only on the lines WITHOUT a Senior / PWD discount, so the
+// tax part is shared over those lines only: share = L × (G − T) / S + Lt × T / St, where
+// T = tax_amount, Lt = the returned value of taxed lines, St = the value of all taxed lines
+// (St = 0 -> no tax part). Without Senior / PWD lines St = S and Lt = L, so this is L × G / S.
 // So a void or a refund of everything gives back exactly what is left, and several
 // partial refunds of a sale add up to its grand total.
 function refundAmountForItems(sale, items, refundItems, prior){
@@ -1472,21 +1598,30 @@ function refundAmountForItems(sale, items, refundItems, prior){
     if(!ri || ri.sale_item_id == null) return;
     now[ri.sale_item_id] = (now[ri.sale_item_id] || 0) + Math.max(0, Number(ri.quantity) || 0);
   });
-  let returnedValue = 0, everything = true;
+  let returnedValue = 0, returnedTaxed = 0, taxedAll = 0, everything = true;
   (items || []).forEach(it => {
     if(!it) return;
     const sold = Math.max(0, Number(it.quantity) || 0);
     const before = Math.max(0, Number(priorQty[it.id]) || 0);
     const q = now[it.id] || 0;
-    returnedValue += saleItemUnitPrice(it) * Math.min(q, Math.max(0, sold - before));
+    // a Senior / PWD line counts at its price minus its own discount (1.6)
+    const sdTotal = Math.max(0, Number(it.senior_discount) || 0);
+    const sd = sold > 0 ? sdTotal / sold : 0;
+    const unit = Math.max(0, saleItemUnitPrice(it) - sd);
+    const back = unit * Math.min(q, Math.max(0, sold - before));
+    returnedValue += back;
+    if(!(sdTotal > 0)){ returnedTaxed += back; taxedAll += unit * sold; }
     if(before + q < sold - 0.0001) everything = false;
   });
   if(everything) return left;
   // S and G count in centavos: a subtotal saved as 634.3600000000001 is ₱634.36.
-  const S = roundMoney(sale && sale.subtotal);
+  const S = roundMoney((Number(sale && sale.subtotal) || 0) - (Number(sale && sale.vat_exempt_amount) || 0) - (Number(sale && sale.senior_discount) || 0));
   if(S <= 0) return 0;
   const G = Math.max(0, roundMoney(sale && sale.grand_total));
-  return Math.min(left, roundMoney(returnedValue * G / S));
+  const T = Math.min(G, Math.max(0, roundMoney(sale && sale.tax_amount)));
+  const St = roundMoney(taxedAll);
+  const share = returnedValue * (G - (St > 0 ? T : 0)) / S + (St > 0 ? returnedTaxed * T / St : 0);
+  return Math.min(left, roundMoney(share));
 }
 
 /* ================= Stamp card (release 1.2, 008) =================
@@ -1671,13 +1806,15 @@ function brandName(brandId){
 }
 function ingredientHasBrands(ingredientId){ return brandsFor(ingredientId).length > 0; }
 
-const PAYMENT_METHODS = [
-  {id:'CASH', label:'Cash', ic:'💵'},
-  {id:'GCASH', label:'GCash', ic:'📱'},
-  {id:'MAYA', label:'Maya', ic:'📲'},
-  {id:'CARD', label:'Card', ic:'💳'},
-  {id:'OTHER', label:'Other', ic:'⋯'},
-];
+// (The fixed PAYMENT_METHODS list is gone in 1.6: use paymentMethodList() / activePaymentMethods()
+// / paymentMethodLabel(), which read the shop's own list from the settings.)
+// Senior / PWD words and the ID as shown to staff and on receipts (last 4 characters only).
+function seniorKindLabel(kind){ return kind === 'PWD' ? 'PWD' : 'Senior citizen'; }
+function maskIdNumber(id){
+  const t = String(id || '').trim();
+  if(!t) return '';
+  return t.length <= 4 ? '••' + t.slice(-2) : '•••• ' + t.slice(-4);
+}
 
 /* ================= Backup folder (Chrome/Edge) & schedule ================= */
 const FS_ACCESS_SUPPORTED = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
@@ -2091,6 +2228,10 @@ function shiftMetrics(shift, data){
   const taxTotal = nonVoided.reduce((s,x)=> s + Number(x.tax_amount||0), 0);
   const serviceTotal = nonVoided.reduce((s,x)=> s + Number(x.service_charge_amount||0), 0);
   const grossGrandTotal = nonVoided.reduce((s,x)=> s + Number(x.grand_total||0), 0);
+  // release 1.6: Senior / PWD (discount + VAT taken out) and payment charges added to bills
+  const seniorDiscounts = nonVoided.reduce((s,x)=> s + Number(x.senior_discount||0) + Number(x.vat_exempt_amount||0), 0);
+  const paymentCharges = nonVoided.reduce((s,x)=> s + Number(x.payment_charge||0), 0);
+  const chargesWaived = nonVoided.reduce((s,x)=> s + Math.max(0, Number(x.payment_fee||0) - Number(x.payment_charge||0)), 0);
 
   // Reversals are attributed to the shift they were PROCESSED in.
   const shiftReversals = data.refunds.filter(r => r.shift_id === shift.id);
@@ -2099,9 +2240,11 @@ function shiftMetrics(shift, data){
   const netSales = grossGrandTotal - refundsOnly;
 
   let cashGross=0, cardGross=0, otherGross=0;
+  const methodTotals = {};   // release 1.6: every method on its own
   nonVoided.forEach(s=>{
     const m = payFor(s.id);
     const amt = Number(s.grand_total||0);
+    if(m && amt > 0){ methodTotals[m] = methodTotals[m] || {id: m, count: 0, total: 0}; methodTotals[m].count++; methodTotals[m].total += amt; }
     if(m==='CASH') cashGross += amt;
     else if(m==='CARD') cardGross += amt;
     else otherGross += amt; // GCASH, MAYA, OTHER
@@ -2134,6 +2277,13 @@ function shiftMetrics(shift, data){
     // older names, unchanged
     grossSales, discountTotal, taxTotal, serviceTotal,
     cashGross, cardGross, otherGross, netCashFromSales,
+    seniorDiscounts, paymentCharges, chargesWaived,
+    // every payment method used, in the shop's list order: [{id, label, count, total}]
+    byMethod: (() => {
+      const order = paymentMethodList(data.settings).map(x => x.id);
+      return Object.values(methodTotals).map(x => Object.assign(x, {label: paymentMethodLabel(x.id, data.settings)}))
+        .sort((a, b) => ((order.indexOf(a.id) + 1) || 99) - ((order.indexOf(b.id) + 1) || 99));
+    })(),
     refundsOnly, voidsOnly,
     payIns, payOuts, payInCount: shiftCashMovements.filter(m=>m.type==='PAY_IN').length,
     payOutCount: shiftCashMovements.filter(m=>m.type==='PAY_OUT').length,
@@ -2150,6 +2300,7 @@ function shiftMetrics(shift, data){
 // not saved on the shift, so they always come from m.
 // The "Loyalty rewards" row (after Discounts) appears only when rewards were used
 // (m.loyaltyRewards > 0), so a shift without rewards shows the same rows as before.
+// Release 1.6: "Senior / PWD discounts" and "Payment charges" rows, also only when used.
 function salesSummaryRows(m, shift){
   if(!m) return [];
   const closed = !!(shift && shift.status === 'CLOSED');
@@ -2163,16 +2314,22 @@ function salesSummaryRows(m, shift){
     itemSales: savedItems !== null ? savedItems : m.itemSales,
     discounts: m.discounts,
     loyaltyRewards: Number(m.loyaltyRewards) || 0,
+    seniorDiscounts: Number(m.seniorDiscounts) || 0,
+    paymentCharges: Number(m.paymentCharges) || 0,
     taxAndService: m.taxAndService,
     sales: (savedNet !== null && savedRefunds !== null) ? savedNet + savedRefunds : m.sales,
     refunds: savedRefunds !== null ? savedRefunds : m.refunds,
     netSales: savedNet !== null ? savedNet : m.netSales,
   };
-  const sign = {discounts: '-', loyaltyRewards: '-', taxAndService: '+', refunds: '-'};
-  const keys = ['itemSales', 'discounts'].concat(v.loyaltyRewards > 0 ? ['loyaltyRewards'] : [], ['taxAndService', 'sales', 'refunds', 'netSales']);
+  const sign = {discounts: '-', loyaltyRewards: '-', seniorDiscounts: '-', taxAndService: '+', paymentCharges: '+', refunds: '-'};
+  const keys = ['itemSales', 'discounts'].concat(v.loyaltyRewards > 0 ? ['loyaltyRewards'] : [], v.seniorDiscounts > 0 ? ['seniorDiscounts'] : [],
+    ['taxAndService'], v.paymentCharges > 0 ? ['paymentCharges'] : [], ['sales', 'refunds', 'netSales']);
+  const extraLabel = {loyaltyRewards: LOYALTY_SALES_LABEL, seniorDiscounts: 'Senior / PWD discounts', paymentCharges: 'Payment charges'};
+  const extraHint = {loyaltyRewards: LOYALTY_SALES_HINT, seniorDiscounts: 'Senior / PWD discounts given, including the VAT taken out.',
+    paymentCharges: 'Extra charges customers paid for their payment method.'};
   return keys.map(key => ({
-    key, label: key === 'loyaltyRewards' ? LOYALTY_SALES_LABEL : SALES_LABELS[key],
-    hint: key === 'loyaltyRewards' ? LOYALTY_SALES_HINT : SALES_HINTS[key], amount: Number(v[key]) || 0,
+    key, label: extraLabel[key] || SALES_LABELS[key],
+    hint: extraHint[key] || SALES_HINTS[key], amount: Number(v[key]) || 0,
     sign: sign[key] || '', total: key === 'sales' || key === 'netSales',
   }));
 }
@@ -2239,13 +2396,19 @@ function receiptHtml(sale, items, payments, opts){
     <div class="row"><span>Subtotal</span><span>${fmtMoney(sale.subtotal)}</span></div>
     ${Number(sale.discount_amount)>0?`<div class="row"><span>Discount</span><span>-${fmtMoney(sale.discount_amount)}</span></div>`:''}
     ${Number(sale.loyalty_discount)>0?`<div class="row"><span>${opts.rewardLabel?'Stamp reward: '+escapeHtml(opts.rewardLabel):'Stamp reward'}</span><span>-${fmtMoney(sale.loyalty_discount)}</span></div>`:''}
+    ${Number(sale.vat_exempt_amount)>0?`<div class="row"><span>VAT exempt (${escapeHtml(seniorKindLabel(sale.senior_kind))})</span><span>-${fmtMoney(sale.vat_exempt_amount)}</span></div>`:''}
+    ${Number(sale.senior_discount)>0?`<div class="row"><span>${escapeHtml(seniorKindLabel(sale.senior_kind))} discount</span><span>-${fmtMoney(sale.senior_discount)}</span></div>`:''}
     ${Number(sale.tax_amount)>0?`<div class="row"><span>Tax</span><span>${fmtMoney(sale.tax_amount)}</span></div>`:''}
     ${Number(sale.service_charge_amount)>0?`<div class="row"><span>Service charge</span><span>${fmtMoney(sale.service_charge_amount)}</span></div>`:''}
+    ${Number(sale.payment_charge)>0?`<div class="row"><span>${escapeHtml(paymentMethodLabel(pay.method))} charge</span><span>${fmtMoney(sale.payment_charge)}</span></div>`:''}
     <div class="row" style="font-weight:700;font-size:14px;margin-top:4px;"><span>Total</span><span>${fmtMoney(sale.grand_total)}</span></div>
     <hr>
-    <div class="row"><span>Payment (${escapeHtml((PAYMENT_METHODS.find(x=>x.id===pay.method)||{}).label||pay.method||'—')})</span><span>${fmtMoney(pay.amount||sale.grand_total)}</span></div>
+    <div class="row"><span>Payment (${escapeHtml(paymentMethodLabel(pay.method)||'—')})</span><span>${fmtMoney(pay.amount||sale.grand_total)}</span></div>
     ${pay.method==='CASH'?`<div class="row"><span>Cash received</span><span>${fmtMoney(pay.tendered)}</span></div><div class="row"><span>Change</span><span>${fmtMoney(pay.change)}</span></div>`:''}
     ${pay.reference?`<div class="row small"><span>Ref#</span><span>${escapeHtml(pay.reference)}</span></div>`:''}
+    ${Number(sale.senior_discount)>0?`<hr><div class="small">${escapeHtml(seniorKindLabel(sale.senior_kind))}${opts.senior&&opts.senior.holder_name?': '+escapeHtml(opts.senior.holder_name):''}</div>
+      <div class="small">ID no.: ${opts.senior&&opts.senior.id_number?escapeHtml(maskIdNumber(opts.senior.id_number)):'on file'}</div>
+      <div class="small" style="margin-top:14px;">Signature: ______________________</div>`:''}
     <hr>
     <div class="center small">${escapeHtml(s.receipt_footer||'Thank you!')}</div>
     ${sale.status!=='COMPLETED'?`<div class="center" style="margin-top:8px;font-weight:700;">*** ${escapeHtml(String(sale.status).replace(/_/g,' '))} ***</div>`:''}

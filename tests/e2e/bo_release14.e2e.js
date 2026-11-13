@@ -247,14 +247,16 @@ function seed(){
     ok(sql(`select count(*) from expenses where id='${rent}'`) === '0' && storeReq.filter(r => /^DELETE/.test(r)).length > nDel, 'deleting the expense removes its photo', storeReq);
     await page.click('[data-exp-edit]'); await page.waitForSelector('#ex-amount'); await page.click('[data-cancel]'); await gone(page);
     // net income
-    await go(page, 'netIncome'); await page.waitForTimeout(800);
-    const ni = await page.textContent('#ni-body');
-    ok(/Net income/.test(ni) && /Operating supplies/.test(ni) && /Tax collected/.test(ni), 'net income report shows lines', ni.replace(/\s+/g, ' ').slice(0, 300));
-    const r = await page.evaluate(() => NET_LAST);
-    ok(r && Math.abs(r.expenses.total - 150) < 0.01, 'net income: expenses 150 from the server (rent deleted above)', r && r.expenses);
+    // 1.6 (owner decision B1; changed by Z 2026-11-13, needs C's approval): the Net income page is now the Accounting overview
+    // (#ac-body, ACCT_LAST.r = accounting_report; zero lines such as "Tax collected" are not shown). Same hand-math numbers.
+    await go(page, 'netIncome'); await page.waitForSelector('#ac-table', {timeout: 15000}); await page.waitForTimeout(800);
+    const ni = await page.textContent('#ac-body');
+    ok(/Net income/.test(ni) && /Operating supplies/.test(ni) && /Net sales/.test(ni), 'accounting overview shows lines (net sales, operating supplies, net income)', ni.replace(/\s+/g, ' ').slice(0, 300));
+    const r = await page.evaluate(() => ACCT_LAST && ACCT_LAST.r);
+    ok(r && Math.abs(r.totals.expenses - 150) < 0.01, 'accounting overview: expenses 150 from the server (rent deleted above)', r && r.totals);
     await shot(page, 'netincome-1280');
-    const [dl2] = await Promise.all([page.waitForEvent('download'), page.click('#ni-csv')]);
-    ok(/Net income/.test(require('fs').readFileSync(await dl2.path(), 'utf8')), 'net income CSV downloads');
+    const [dl2] = await Promise.all([page.waitForEvent('download'), page.click('#ac-csv')]);
+    ok(/Net income/.test(require('fs').readFileSync(await dl2.path(), 'utf8')), 'accounting overview CSV downloads (with its Net income line)');
 
     /* ---- A15 waste report ---- */
     await go(page, 'wasteReport'); await page.waitForTimeout(1000);

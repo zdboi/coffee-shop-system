@@ -242,18 +242,22 @@ async function manilaClock(){
 
   // ---------- net income + waste report vs hand math ----------
   try{
-    await bgo('netIncome'); await bo.waitForTimeout(1200);
-    const r = await bo.evaluate(() => NET_LAST);
-    ok(r && eq2(r.sales.gross, X.gross) && eq2(r.sales.refunds, X.refund) && eq2(r.sales.tax, X.tax) && eq2(r.sales.net, X.net) && r.sales.count === 4,
-      `net income sales: gross ${X.gross}, refunds ${X.refund}, tax ${X.tax} (95.40 - 13.20 refund share), net ${X.net}, 4 sales`, r && r.sales);
-    ok(r && eq2(r.ingredients.sold, X.sold) && eq2(r.ingredients.wasted, X.wasted) && eq2(r.ingredients.used, X.used),
-      `net income ingredients: sold ${X.sold}, wasted ${X.wasted} (month-end costs, milk at ₱0.12 after the merge; oat 420 mL), used ${X.used}`, r && r.ingredients);
-    ok(r && eq2(r.expenses.total, X.expenses) && eq2(r.expenses.by_category.SUPPLIES, 150) && eq2(r.expenses.by_category.RENT, 5000) && eq2(r.expenses.by_category.UTILITIES, 1234.56),
-      `net income expenses ${X.expenses} by category`, r && r.expenses);
-    ok(r && eq2(r.net_income, X.netIncome), `net income = ${X.net} - ${X.used} - ${X.expenses} = ${X.netIncome}`, r && r.net_income);
-    const page = (await bo.textContent('#ni-body')).replace(/\s+/g, ' ');
+    // 1.6 (owner decision B1; changed by Z 2026-11-13, needs C's approval): the Net income page is now the Accounting overview
+    // (#ac-body, ACCT_LAST.r = accounting_report; zero lines such as "Tax collected" are not shown). Same hand-math numbers.
+    //   accounting_report: sales = X.gross, net sales = gross - refunds, tax owed = X.tax, net income = net sales - tax owed - fees (0) - used - expenses.
+    await bgo('netIncome'); await bo.waitForSelector('#ac-table', {timeout: 15000}); await bo.waitForTimeout(1200);
+    const r = await bo.evaluate(() => ACCT_LAST && ACCT_LAST.r);
+    const t = r && r.totals;
+    ok(t && eq2(t.sales, X.gross) && eq2(t.refunds, X.refund) && eq2(t.tax_owed, X.tax) && eq2(t.net_sales, r2(X.gross - X.refund)) && t.sale_count === 4 && eq2(t.payment_fees, 0),
+      `accounting sales: ${X.gross}, refunds ${X.refund}, tax owed ${X.tax} (95.40 - 13.20 refund share), net sales ${r2(X.gross - X.refund)}, 4 sales`, t);
+    ok(t && eq2(t.ingredients_sold, X.sold) && eq2(t.ingredients_wasted, X.wasted) && eq2(r2(Number(t.ingredients_sold) + Number(t.ingredients_wasted)), X.used),
+      `accounting ingredients: sold ${X.sold}, wasted ${X.wasted} (month-end costs, milk at ₱0.12 after the merge; oat 420 mL), used ${X.used}`, t);
+    ok(t && eq2(t.expenses, X.expenses) && eq2(t.expenses_by_category.SUPPLIES, 150) && eq2(t.expenses_by_category.RENT, 5000) && eq2(t.expenses_by_category.UTILITIES, 1234.56),
+      `accounting expenses ${X.expenses} by category`, t);
+    ok(t && eq2(t.net_income, X.netIncome), `net income = ${X.net} - ${X.used} - ${X.expenses} = ${X.netIncome}`, t && t.net_income);
+    const page = (await bo.textContent('#ac-body')).replace(/\s+/g, ' ');
     const fmt = (n) => Math.abs(n).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-    ok([X.gross, X.refund, X.tax, X.used, X.expenses, X.netIncome].every(n => page.includes(fmt(n))), 'net income screen shows gross, refunds, tax, ingredients used, expenses and the result', page.slice(0, 500));
+    ok([X.gross, X.refund, X.tax, X.sold, X.wasted, X.netIncome].every(n => page.includes(fmt(n))), 'accounting overview shows sales, refunds, tax owed, ingredients sold / wasted, the expenses and the result', page.slice(0, 500));
     await H.shot(bo, 'money14-net-income');
     const today = sql(`select (now() at time zone 'Asia/Manila')::date`);
     const wr = await bo.evaluate(async (d) => cloud.rpc('waste_report', {p_from: d, p_to: d}), today);

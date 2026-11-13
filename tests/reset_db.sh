@@ -1,15 +1,15 @@
 #!/bin/bash
 # Build a throw-away test database:
 #   Supabase stand-in (00) + reconstruction of the LIVE schema (01, incl. the live CHECK rules)
-#   + the scripts the owner ran on live, in the live order: 004, then 005, then 006, then 007 (batch 1, not yet on live), then 008 (release 1.2), then 009 (release 1.3), then 010 (release 1.4), then 011 (release 1.4.1), then 012 (release 1.5, not yet on live).
+#   + the scripts the owner ran on live, in the live order: 004, then 005, then 006, then 007 (batch 1, not yet on live), then 008 (release 1.2), then 009 (release 1.3), then 010 (release 1.4), then 011 (release 1.4.1), then 012 (release 1.5), then 013 (release 1.6, not yet on live).
 # Usage: tests/reset_db.sh [path/to/migration.sql] [database-name]
-#   no migration (or ""): 004 .. 011 (what live has) + 012  default database: cccc
+#   no migration (or ""): 004 .. 012 (what live has) + 013  default database: cccc
 #   a migration path:     ONLY that script on top of 01 (e.g. to try a single script)
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"; REPO="$(dirname "$DIR")"
 SUP="$REPO/cccc/supabase"
 if [ -n "${1:-}" ]; then MIGS=("$1")
-else MIGS=("$SUP/004_cccc_online_qr.sql" "$SUP/005_live_fixes.sql" "$SUP/006_live_fix_sync_operations.sql" "$SUP/007_batch1.sql" "$SUP/008_release_1_2.sql" "$SUP/009_release_1_3.sql" "$SUP/010_release_1_4.sql" "$SUP/011_release_1_4_1.sql" "$SUP/012_release_1_5.sql"); fi
+else MIGS=("$SUP/004_cccc_online_qr.sql" "$SUP/005_live_fixes.sql" "$SUP/006_live_fix_sync_operations.sql" "$SUP/007_batch1.sql" "$SUP/008_release_1_2.sql" "$SUP/009_release_1_3.sql" "$SUP/010_release_1_4.sql" "$SUP/011_release_1_4_1.sql" "$SUP/012_release_1_5.sql" "$SUP/013_release_1_6.sql"); fi
 DB="${2:-cccc}"
 if ! [[ "$DB" =~ ^[a-z_][a-z0-9_]*$ ]] || [[ "$DB" =~ ^(postgres|template0|template1)$ ]]; then
   echo "reset_db: bad database name '$DB' (lowercase letters, digits, _; not a system database)" >&2; exit 1

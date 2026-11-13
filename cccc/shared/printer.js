@@ -30,7 +30,7 @@
    same numbers receiptHtml shows. Nothing is recalculated here.
 
    Needs (loaded before this file): local.js (LocalDB), logic.js (state, receiptHtml,
-   openPrintWindow, PAYMENT_METHODS, businessName). The ESC/POS builder itself needs nothing.
+   openPrintWindow, paymentMethodLabel, businessName). The ESC/POS builder itself needs nothing.
    ===================================================================== */
 const Printer = (() => {
   const SETTINGS_KEY = 'cccc.printer.settings';   // LocalDB (this counter only, never the server)
@@ -282,8 +282,8 @@ const Printer = (() => {
     catch(e){ return dt.toISOString().slice(11, 16); }
   }
   function _methodLabel(m){
-    const list = (typeof PAYMENT_METHODS !== 'undefined' && PAYMENT_METHODS) || [];
-    return (list.find(x => x.id === m) || {}).label || m || '-';
+    if(typeof paymentMethodLabel === 'function') return paymentMethodLabel(m) || '-';
+    return m || '-';
   }
   // The receipt body (one copy) into builder b. Mirrors receiptHtml line by line.
   function _receiptBody(b, sale, items, payments, opts){
@@ -308,8 +308,12 @@ const Printer = (() => {
     b.lr('Subtotal', b.money(sale.subtotal));
     if(Number(sale.discount_amount) > 0) b.lr('Discount', '-' + b.money(sale.discount_amount));
     if(Number(sale.loyalty_discount) > 0) b.lr(opts.rewardLabel ? 'Stamp reward: ' + opts.rewardLabel : 'Stamp reward', '-' + b.money(sale.loyalty_discount));
+    const kind = sale.senior_kind === 'PWD' ? 'PWD' : 'Senior citizen';
+    if(Number(sale.vat_exempt_amount) > 0) b.lr('VAT exempt (' + kind + ')', '-' + b.money(sale.vat_exempt_amount));
+    if(Number(sale.senior_discount) > 0) b.lr(kind + ' discount', '-' + b.money(sale.senior_discount));
     if(Number(sale.tax_amount) > 0) b.lr('Tax', b.money(sale.tax_amount));
     if(Number(sale.service_charge_amount) > 0) b.lr('Service charge', b.money(sale.service_charge_amount));
+    if(Number(sale.payment_charge) > 0) b.lr(_methodLabel(((payments || [])[0] || {}).method) + ' charge', b.money(sale.payment_charge));
     b.bold(true).size(1, 2).lr('TOTAL', b.money(sale.grand_total)).size(1, 1).bold(false);
     b.sep();
     const pays = (payments && payments.length) ? payments : [{}];
@@ -318,6 +322,16 @@ const Printer = (() => {
       if(pay.method === 'CASH'){ b.lr('Cash received', b.money(pay.tendered)); b.lr('Change', b.money(pay.change)); }
       if(pay.reference) b.lr('Ref#', pay.reference);
     });
+    if(Number(sale.senior_discount) > 0){
+      // Senior / PWD: name, the ID's last 4 characters, a line to sign
+      const sn = opts.senior || {};
+      const idText = String(sn.id_number || '').trim();
+      b.sep();
+      b.line(kind + (sn.holder_name ? ': ' + sn.holder_name : ''));
+      // same masking as the screen receipt (maskIdNumber): last 4, or last 2 for a short ID; ASCII for the printer
+      b.line('ID no.: ' + (idText ? (typeof maskIdNumber === 'function' ? maskIdNumber(idText) : '**** ' + idText.slice(-4)).replace(/•/g, '*') : 'on file'));
+      b.feed(1).line('Signature: ____________________');
+    }
     b.sep();
     b.align('center').lines(s.receipt_footer || 'Thank you!');
     if(sale.status && sale.status !== 'COMPLETED') b.bold(true).line('*** ' + String(sale.status).replace(/_/g, ' ') + ' ***').bold(false);
@@ -490,7 +504,7 @@ const Printer = (() => {
     b.sep().bold(true).line('PAYMENTS').bold(false);
     b.lr('Cash', b.money(v('cash_sales', m.cashGross)));
     b.lr('Card', b.money(v('card_sales', m.cardGross)));
-    b.lr('GCash / Maya / Other', b.money(v('other_sales', m.otherGross)));
+    b.lr('Other methods', b.money(v('other_sales', m.otherGross)));
     b.sep().bold(true).line('CASH DRAWER').bold(false);
     b.lr('Opening cash', b.money(shift.opening_cash));
     b.lr('Cash sales', b.money(v('cash_sales', m.cashGross)));

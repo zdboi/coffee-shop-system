@@ -89,6 +89,8 @@ const Z_OPTS = (w) => `{paper_width: ${w}, now: new Date('2026-11-02T09:31:00Z')
 
 (async () => {
   /* ---------- goldens: ticket, X, Z at 58 + 80 mm ---------- */
+  // 1.6 (owner decision B4; changed by Z 2026-11-13, needs C's approval): the non-cash line of the X / Z goldens reads
+  // "Other methods" (was "GCash / Maya / Other"): the shop's method list is editable now.
   {
     const e = makeEnv(); e.r(SAMPLE); e.r(DATA);
     const widthOk = (d, w) => d.split('\n').every(l => { const t = l.replace(/\[[A-Z0-9 x\/]+\]/g, ''); return t.length <= w; });
@@ -128,7 +130,7 @@ const Z_OPTS = (w) => `{paper_width: ${w}, now: new Date('2026-11-02T09:31:00Z')
          state.refunds = []; state.cashMovements = [{shift_id:'sh1', type:'PAY_OUT', amount:50, at:'2026-11-02T02:00:00Z'}];`);
     const live = e.r(`Printer.describe(Printer.shiftReportBytes(SHIFT, {paper_width: 80}))`);
     const m = e.r(`shiftMetrics(SHIFT)`);
-    eq('report without metrics: figures = shiftMetrics(shift) (Sales, Cash, Other, Expected)', [/Sales +P280\.00/.test(live), /Cash +P180\.00/.test(live), /GCash \/ Maya \/ Other +P100\.00/.test(live), live.includes(e.r(`Printer.money(${m.expectedCash}, 'P')`)) && /Expected cash +P1,130\.00/.test(live), m.expectedCash], [true, true, true, true, 1130]);
+    eq('report without metrics: figures = shiftMetrics(shift) (Sales, Cash, Other, Expected)', [/Sales +P280\.00/.test(live), /Cash +P180\.00/.test(live), /Other methods +P100\.00/.test(live), live.includes(e.r(`Printer.money(${m.expectedCash}, 'P')`)) && /Expected cash +P1,130\.00/.test(live), m.expectedCash], [true, true, true, true, 1130]);
   }
 
   /* ---------- no print screen unless fallback === true ---------- */
