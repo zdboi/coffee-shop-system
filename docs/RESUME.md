@@ -166,3 +166,10 @@ Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs
 - Wave 4 (1.6) = B1 Accounting overview, B4 editable payment methods, B5 payment-method charges, B18 Sales calendar overhaul, **B19 Senior/PWD discount (owner-set %)**. **B2 investor equity moved to later.** Details: docs/owner-feedback.md. Not started; wait for the owner's go.
 - 17:32: owner kept B19 (Senior/PWD with VAT exemption, ID log, report). B5 gets an add-or-waive tick (waived = shop cost in Accounting overview).
 - 17:4x: added **B20 smart stock count** to Wave 4 (ask only items with any stock change since last counted; unmoved items weekly).
+
+## 2026-11-13 10:xx: Wave 4 (1.6) BUILT, waiting for Z
+- Owner said go 2026-11-12 17:37. Decisions: docs/owner-feedback.md ("Wave 4 go-ahead and decisions" + Senior combining "one or the other", charge = provider's fee).
+- Plan `docs/PLAN_1.6.md`, contract `docs/handoff/contract-1.6.md`, guide `docs/RELEASE_1.6.md` (status: being checked).
+- DB: `cccc/supabase/013_release_1_6.sql` built from scratch template + 012 pieces by `scratchpad/w4/build013.py` (template `013_template.sql`). Edit the TEMPLATE/builder, then rebuild. My SQL checks: scratchpad/w4/db16-tests.sql via run16.sh (db_sec) = 90 pass.
+- Screens: counter (checkout methods + charge tick, Senior/PWD dialog, smart count), shared logic/printer/ui, Back Office bo-acct.js (Accounting overview, Senior/PWD report, Settings → Payments & discounts), span calendar in bo-sales.js, smart count box in bo-counts.js. Scratch browser checks: fo16-checks.js (15), bo16-checks.js (18), core16.js (16): all pass.
+- Z: security gate + full QA running (resumed after a usage stop). Next: fix Z findings, PR, checkpoint, owner runs 013.
