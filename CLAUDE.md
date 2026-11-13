@@ -33,7 +33,7 @@ plain-language, step-by-step instructions.
   It is now **frozen**: every database change goes in a new numbered script, per golden rule 6.
 - The owner also ran **`005_live_fixes.sql`** and **`006_live_fix_sync_operations.sql`** on live (2026-10-20); both
   are frozen too. **`007_batch1.sql`** (release 1.1, run 2026-10-29) and **`008_release_1_2.sql`** (release 1.2, run 2026-11-02)
-  and **`009_release_1_3.sql`** (release 1.3, run 2026-11-02) and **`010_release_1_4.sql`** (release 1.4, run 2026-11-09) and **`011_release_1_4_1.sql`** (release 1.4.1, run 2026-11-09) and **`012_release_1_5.sql`** (release 1.5, run 2026-11-12) and **`013_release_1_6.sql`** (release 1.6, run 2026-11-13) are frozen. The next script is **`014_…sql`**; it may be edited until the owner runs it. The live database has older CHECK rules than our reconstruction:
+  and **`009_release_1_3.sql`** (release 1.3, run 2026-11-02) and **`010_release_1_4.sql`** (release 1.4, run 2026-11-09) and **`011_release_1_4_1.sql`** (release 1.4.1, run 2026-11-09) and **`012_release_1_5.sql`** (release 1.5, run 2026-11-12) and **`013_release_1_6.sql`** (release 1.6, run 2026-11-13) and **`014_release_1_6_1.sql`** (release 1.6.1, run 2026-11-14) are frozen. The next script is **`015_…sql`**; it may be edited until the owner runs it. The live database has older CHECK rules than our reconstruction:
   any new value written to a live column must be checked against the live rule list first.
 
 ## Golden rules (everyone)
@@ -184,5 +184,5 @@ tests/run_all.sh                     # full regression (QA; uses 8787 / cccc)
 - C and Z test at the same time on separate databases and ports. C uses `db_fo` / 8790 (counter),
   `db_bo` / 8791 (Back Office), `db_qr` / 8792 (QR page) and `db_sec` (database work). Z uses `cccc` / 8787
   and `db_rev*` for security probes. Until Z wires the newest script into the reset scripts, install it after a
-  reset: `psql -h /tmp -p 54329 -U postgres -d <db> -q -f cccc/supabase/013_release_1_6.sql`. Example: `tests/e2e_reset.sh db_bo && tests/restart_fake.sh 8791 db_bo`,
+  reset: `psql -h /tmp -p 54329 -U postgres -d <db> -q -f cccc/supabase/014_release_1_6_1.sql`. Example: `tests/e2e_reset.sh db_bo && tests/restart_fake.sh 8791 db_bo`,
   then open `http://localhost:8791/cccc/back/`. Browser tests: `FAKE_PORT=8790 FAKE_DB=db_fo node tests/e2e/fo.e2e.js`.

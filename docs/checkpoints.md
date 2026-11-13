@@ -12,8 +12,9 @@ If an update goes wrong, tell C: **"Go back to the last working version."**
 
 | Apps | Live since | Browse | Download |
 |---|---|---|---|
-| Counter, Back Office, QR page, menu link (all apps), release 1.6 | 2026-11-13 (pull request #9; database script 013 run) | [6cd45f9](https://github.com/zdboi/coffee-shop-system/tree/6cd45f9d774904fbc25d2e76c516b567cc49ce8b) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/6cd45f9d774904fbc25d2e76c516b567cc49ce8b.zip) |
-| *(previous)* release 1.5 | 2026-11-12 (pull request #8; database script 012 run) | [976a61f](https://github.com/zdboi/coffee-shop-system/tree/976a61f0e5b0272b760bccea1ea736dcbd3399c7) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/976a61f0e5b0272b760bccea1ea736dcbd3399c7.zip) |
+| Counter, Back Office, QR page, menu link (all apps), release 1.6.1 | 2026-11-14 (pull request #10; database script 014 run) | [0bf5bec](https://github.com/zdboi/coffee-shop-system/tree/0bf5bec5bad01da57d36bd4e74b40a3b8f5b5894) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/0bf5bec5bad01da57d36bd4e74b40a3b8f5b5894.zip) |
+| *(previous)* release 1.6 | 2026-11-13 (pull request #9; database script 013 run) | [6cd45f9](https://github.com/zdboi/coffee-shop-system/tree/6cd45f9d774904fbc25d2e76c516b567cc49ce8b) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/6cd45f9d774904fbc25d2e76c516b567cc49ce8b.zip) |
+| *(older)* release 1.5 | 2026-11-12 (pull request #8; database script 012 run) | [976a61f](https://github.com/zdboi/coffee-shop-system/tree/976a61f0e5b0272b760bccea1ea736dcbd3399c7) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/976a61f0e5b0272b760bccea1ea736dcbd3399c7.zip) |
 | *(older)* release 1.4 | 2026-11-09 (pull request #5; database script 010 run) | [651e706](https://github.com/zdboi/coffee-shop-system/tree/651e70601eddb024b03b6ae085d66dda3cea204a) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/651e70601eddb024b03b6ae085d66dda3cea204a.zip) |
 | *(older)* release 1.3 | 2026-11-02 (pull request #4; database script 009 run) | [abcff5b](https://github.com/zdboi/coffee-shop-system/tree/abcff5bd5dc57e047d9c1bb914ef2e3c8ea4c06d) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/abcff5bd5dc57e047d9c1bb914ef2e3c8ea4c06d.zip) |
 | *(older)* release 1.2 | 2026-11-02 (pull request #3; database script 008 run) | [a44a123](https://github.com/zdboi/coffee-shop-system/tree/a44a123b513e0c031fbaad9923ecc8cc6a34831b) | [ZIP](https://github.com/zdboi/coffee-shop-system/archive/a44a123b513e0c031fbaad9923ecc8cc6a34831b.zip) |
@@ -49,6 +50,7 @@ Older working versions stay in the table below, so you can go back further if ne
 | 22 | **Release 1.6 ready** (Wave 4 "Money") | 2026-11-13 | Payment methods + charges (add or waive), Senior/PWD discount with report, smart stock count, Accounting overview, span Sales calendar, investors & start-up costs, Weighs on bought items. Z: PASS (140 suites, 9,044 checks, 0 failing). Database script `013_release_1_6.sql`. Waiting for you: `docs/RELEASE_1.6.md`. Last working version stays 1.5 (`976a61f`) until you merge. |
 | 23 | **Release 1.6 live** | 2026-11-13 14:54 | You ran `013_release_1_6.sql` and merged pull request #9. This is now the last working version (merge commit `6cd45f9`). |
 | 24 | **Release 1.6.1 ready** | 2026-11-13 | Profit split (investors 30% by amount, managers 20% equally, shop 50%; editable) and the Sales calendar full width on top. Z: PASS (6,875 checks, 0 failing). Database script `014_release_1_6_1.sql`. Last working version stays 1.6 (`6cd45f9`) until you merge. |
+| 25 | **Release 1.6.1 live** | 2026-11-14 01:28 | You ran `014_release_1_6_1.sql` and merged pull request #10. This is now the last working version (merge commit `0bf5bec`). |
 
 ## Look at or download a checkpoint
 

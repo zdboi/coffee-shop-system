@@ -314,3 +314,6 @@ Owner: **don't start 1.3 until I say so.**
 - Owner asked about cloning the POS for a client restaurant (20:56): **standalone copy (option 2)**, no loyalty card, so no customer data. Three-way system: **BOH** kitchen inventory with production; **FOH** bar inventory, POS, QR ordering; **Management** overview of all + accounting. Lead answered what carries over and what is new (see RESUME "Saved ideas").
 - Owner asked (21:06): "can other people currently copy my coffee shop app?" Lead: most likely yes, the repo is public for free GitHub Pages; data is safe; options: LICENSE file, private repo + Cloudflare Pages, or private repo + GitHub Pro.
 - Owner (21:09): **"Save this Idea. I'll come back to it later."** → both ideas saved; nothing to build until the owner says so.
+
+## Release 1.6.1 live (owner, 2026-11-14 01:28)
+- Owner: "btw, 1.6.1 is live." → 014 run, PR #10 merged (`0bf5bec`). Checkpoint 25 is the last working version; next database script is 015.

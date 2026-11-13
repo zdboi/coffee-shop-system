@@ -252,3 +252,12 @@ Open the project in Claude and say **"Resume from docs/RESUME.md"**.
 - Added on the owner's request during the wave: investors & start-up costs (from the owner's sheet; start-up costs kept out of monthly net income), Weighs on bought sauces/syrups.
 - Z gate found 3 medium issues (Senior/PWD bypass via odd numbers, smart count same-upload timestamps, refund share with tax on top) + small ones; all fixed. Z recheck: PASS, 9,044 checks.
 - Owner to do: run 013 (business Supabase), merge PR #9, reload devices, set up per docs/RELEASE_1.6.md, paste the investor sheet.
+
+## 2026-11-13: Release 1.6 live, 1.6.1 built
+- Owner ran 013 and merged PR #9 (1.6 live, `6cd45f9`).
+- Owner: investors get 30% of net income (by amount), managers Jake + owner 20% (equally, on top of their investor part), shop 50%; editable. Sales calendar bigger, full width on top with the details below.
+- Built as 1.6.1 (script 014 = settings.profit_split). Z: PASS, 6,875 checks. PR #10.
+- Ideas saved for later: protect the app code (repo likely public; license / private repo), and a standalone POS for a client restaurant (BOH kitchen + production, FOH bar + POS + QR, Management + accounting).
+
+## 2026-11-14: Release 1.6.1 live
+- Owner ran 014 and merged PR #10 (`0bf5bec`). Checkpoint 25 = last working version. Scripts 004–014 frozen; next is 015.

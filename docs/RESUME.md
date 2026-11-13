@@ -1,4 +1,4 @@
-# Resume here (save point: 2026-11-12, checkpoint 21, release 1.5 LIVE; latest status at the bottom)
+# Resume here (save point: 2026-11-14, checkpoint 25, release 1.6.1 LIVE; latest status at the bottom)
 
 Owner: to continue, open this project and tell C: **"Resume from docs/RESUME.md"**.
 
@@ -183,3 +183,8 @@ Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs
 ## 2026-11-13 15:10: RELEASE 1.6 LIVE (checkpoint 23 = 6cd45f9); 013 frozen, next 014
 - Building 1.6.1: profit split (investors 30% by amount, managers 20% equal: Jake + owner, shop 50%), editable; script 014 (settings.profit_split).
 - 1.6.1 built: 014 (settings.profit_split + trigger check BAD_PROFIT_SPLIT), Back Office Profit split on the Investors page (bo-acct.js profitSplit/profitParts/openProfitSplitForm). My checks: scratchpad/w4/db161-tests.sql (14), bo161-split.js (5). Waiting for Z.
+
+## Now (2026-11-14 01:28): release 1.6.1 LIVE
+- Owner: "1.6.1 is live" (ran `014_release_1_6_1.sql`, merged PR #10, merge commit `0bf5bec`). Checkpoint 25 = **last working version**.
+- Database scripts 004–014 are frozen; the **next script is 015**.
+- Nothing is being built. Saved ideas waiting for the owner: code protection (private repo / license) and the client restaurant system (see "Saved ideas" above). Later: B3 referrals with RPG loyalty, investor payouts/payback tracking, GitHub move to the business account + nicer web address.
