@@ -591,13 +591,23 @@ tr.wr-flag-row td{background:var(--cc-warning-tint);}
 .big-num{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;margin:4px 0 6px;}
 
 /* release 1.6 (B18): the calendar stays on screen; tap a start and an end date */
-.cal-split{display:grid;grid-template-columns:minmax(300px,420px) minmax(0,1fr);gap:16px;align-items:start;}
-.cal-fixed{position:sticky;top:12px;}
+/* owner 2026-11-13 15:35: calendar on top, full width; tiles, texts and data below it */
+.cal-split{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start;}
+.cal-fixed{position:static;}
 .cal-details{min-width:0;}
 .cal-span-title{font-family:var(--cc-font-display);text-transform:var(--cc-display-case);font-weight:400;font-size:22px;margin:0 0 10px;color:var(--cc-ink);}
-.cal-split .cal-day{min-height:54px;padding:4px 6px;font-size:12px;}
+.cal-split .cal-month{gap:5px;}
+.cal-split .cal-day{min-height:84px;padding:8px 10px;font-size:13px;}
+.cal-split .cal-day .d{font-size:14px;}
+.cal-split .cal-day .v{font-size:16px;white-space:nowrap;font-variant-numeric:tabular-nums;}
+.cal-split .cal-day .n{font-size:12px;white-space:nowrap;}
 .cal-day.sel{box-shadow:inset 0 0 0 3px var(--cc-ink);}
 .cal-day.sel-end{box-shadow:inset 0 0 0 3px var(--cc-ink), 0 0 0 2px var(--cc-terracotta);}
 .cal-flag{color:var(--cc-terracotta);font-weight:800;}
 .cal-days-table td,.cal-days-table th{white-space:nowrap;}
-@media (max-width: 900px){ .cal-split{grid-template-columns:1fr;} .cal-fixed{position:sticky;top:0;z-index:5;} .cal-split .cal-day{min-height:40px;} .cal-split .cal-day .n{display:none;} }
+/* narrower screens: the calendar goes above the details, full width (too tall to stay pinned) */
+@media (max-width: 1000px){ .cal-split .cal-day{min-height:68px;padding:6px;} .cal-split .cal-day .v{font-size:14px;} }
+@media (max-width: 600px){ .cal-split .cal-day{min-height:52px;padding:4px;} .cal-split .cal-day .n{display:none;} .cal-split .cal-day .v{font-size:11px;} }
+/* the cards next to the calendar wrap to fit their column (no cut-off cards) */
+.cal-details .cal-kpis{grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));}
+.cal-details .stat-card .value, .cal-details .stat .value{white-space:nowrap;}

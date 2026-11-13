@@ -238,6 +238,8 @@ const ERROR_TEXT = {
   BAD_SENIOR_PCT: 'The Senior / PWD discount must be between 0 and 100 percent.',
   BAD_RECHECK_DAYS: 'Type a number of days between 1 and 60.',
   BAD_RANGE: 'Choose a start date and an end date at most 400 days apart.',
+  // release 1.6.1
+  BAD_PROFIT_SPLIT: 'The split could not be saved. The three parts must add up to 100%, and each manager needs a name (once).',
   BAD_COUNT: 'This stock count could not be saved: count each ticked item once (only items ticked "Count at closing"). Check the list and count again.',
   COUNT_NOT_FOUND: 'That stock count was not found (it may have been removed). Refresh and try again.',
   // Release 1.5: R&D log (B8)

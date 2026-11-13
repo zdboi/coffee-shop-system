@@ -1,6 +1,6 @@
 // Release 1.6 Back Office (browser): Settings -> Payments & discounts (charge limits, a new method with its own
 // code, audit, Senior %), Accounting overview (+ compare), Senior / PWD report (full ID, names as text, CSV that
-// can't start a spreadsheet formula: Z), span calendar (two taps, sticky, = overview), Stock counts due box.
+// can't start a spreadsheet formula: Z), span calendar (two taps, full width on top, = overview), Stock counts due box.
 // Adopted by Z 2026-11-13 from the Back Office work's scratch checks (w4/bo16-checks.js, 18 checks).
 // Needs a fresh seed:  tests/e2e_reset.sh [db] && tests/restart_fake.sh [port] [db]
 // Run:                 FAKE_PORT=8787 FAKE_DB=cccc node tests/e2e/bo16.e2e.js
@@ -88,7 +88,22 @@ sql(`insert into senior_discount_records(business_id, sale_id, kind, holder_name
     ok(/₱462\.00/.test(det) && /1 void/.test(det), 'span yesterday..today: sales 462.00 (418 + Z\'s ₱44 PWD sale), 1 void', det.slice(0, 500));
     ok(await page.$$eval('.cal-day.sel', x => x.length) === 2, 'both days marked');
     const pos = await page.evaluate(() => getComputedStyle(document.querySelector('.cal-fixed')).position);
-    ok(pos === 'sticky', 'calendar stays on screen (sticky)');
+    // 1.6.1 (owner 2026-11-13 15:35, approved by C): the calendar is full width on top with the details below, no longer pinned (was: 'sticky')
+    ok(pos === 'static', 'calendar on top, not pinned (static)', pos);
+    // Z (1.6.1, bigger calendar, owner 2026-11-13): no day box, amount or card is cut off at 1366, 1920, 1024 and 768 px;
+    // the calendar is one full-width column at every width (owner 2026-11-13 15:35)
+    const overflow = () => page.evaluate(() => [...document.querySelectorAll('.cal-split .cal-day, .cal-details .stat-card, .cal-details .stat-card .value')]
+      .filter(el => el.offsetParent && el.scrollWidth > el.clientWidth + 1).map(el => (el.className + ' ' + el.textContent.trim()).slice(0, 60)));
+    const layout = {};
+    for(const w of [1366, 1920, 1024, 768]){
+      await page.setViewportSize({width: w, height: 900}); await page.waitForTimeout(400);
+      layout[w] = {pos: await page.evaluate(() => getComputedStyle(document.querySelector('.cal-fixed')).position), over: await overflow(),
+        calTop: await page.evaluate(() => { const c = document.querySelector('.cal-fixed').getBoundingClientRect(), d = document.querySelector('.cal-details').getBoundingClientRect(); return d.top >= c.bottom - 1 && c.width >= d.width - 2; }),
+        sideways: await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)};
+    }
+    await page.setViewportSize({width: 1366, height: 900}); await page.waitForTimeout(300);
+    ok([1366, 1920, 1024, 768].every(w => layout[w].pos === 'static' && layout[w].calTop), 'Z: calendar full width on top, details below, not pinned, at 1366 / 1920 / 1024 / 768', layout);
+    ok([1366, 1920, 1024, 768].every(w => layout[w].over.length === 0 && !layout[w].sideways), 'Z: no day box, card or amount cut off and no sideways scroll at 1366 / 1920 / 1024 / 768', layout);
     await page.screenshot({path: SH + 'calendar.png', fullPage: false});
     // ---- the same totals as the overview for that span
     await page.click('#cal-go-acct'); await page.waitForSelector('#ac-table', {timeout: 15000});

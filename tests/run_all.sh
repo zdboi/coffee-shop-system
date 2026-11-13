@@ -64,16 +64,16 @@ run_cmd(){ # name command [args...]
 echo "== test database (PostgreSQL 16 on :54329)"
 "$DIR/start_pg.sh" >/dev/null || { echo "test postgres did not start"; exit 1; }
 
-echo "== database: live order 004 -> 005 -> 006 -> 007 -> 008 -> 009 -> 010 -> 011 -> 012 -> 013 on the live-schema copy (with live CHECK rules), installed twice"
+echo "== database: live order 004 -> 005 -> 006 -> 007 -> 008 -> 009 -> 010 -> 011 -> 012 -> 013 -> 014 on the live-schema copy (with live CHECK rules), installed twice"
 t0=$SECONDS
 if "$DIR/reset_db.sh" "" "$DB" > "$LOGS/install-1.log" 2>&1; then
   ok2=1; : > "$LOGS/install-2.log"
-  for m in 004_cccc_online_qr.sql 005_live_fixes.sql 006_live_fix_sync_operations.sql 007_batch1.sql 008_release_1_2.sql 009_release_1_3.sql 010_release_1_4.sql 011_release_1_4_1.sql 012_release_1_5.sql 013_release_1_6.sql; do
+  for m in 004_cccc_online_qr.sql 005_live_fixes.sql 006_live_fix_sync_operations.sql 007_batch1.sql 008_release_1_2.sql 009_release_1_3.sql 010_release_1_4.sql 011_release_1_4_1.sql 012_release_1_5.sql 013_release_1_6.sql 014_release_1_6_1.sql; do
     $PSQL -v ON_ERROR_STOP=1 -q -f "$REPO/cccc/supabase/$m" >> "$LOGS/install-2.log" 2>&1 || { ok2=0; echo "second run of $m failed" >> "$LOGS/install-2.log"; break; }
   done
-  if [ $ok2 = 1 ]; then record "004..013 install (x2)" PASS 2 0 $((SECONDS-t0)) "$LOGS/install-2.log"
-  else record "004..013 install (x2)" FAIL 2 1 $((SECONDS-t0)) "$LOGS/install-2.log"; tail -3 "$LOGS/install-2.log"; fi
-else record "004..013 install (x2)" FAIL 1 1 $((SECONDS-t0)) "$LOGS/install-1.log"; tail -3 "$LOGS/install-1.log"; fi
+  if [ $ok2 = 1 ]; then record "004..014 install (x2)" PASS 2 0 $((SECONDS-t0)) "$LOGS/install-2.log"
+  else record "004..014 install (x2)" FAIL 2 1 $((SECONDS-t0)) "$LOGS/install-2.log"; tail -3 "$LOGS/install-2.log"; fi
+else record "004..014 install (x2)" FAIL 1 1 $((SECONDS-t0)) "$LOGS/install-1.log"; tail -3 "$LOGS/install-1.log"; fi
 run_sql_lines  sql/36_live_rules_tests "$DIR/sql/36_live_rules_tests.sql"   # CHECK rules now match live
 
 echo "== database behaviour suites (on the twice-installed database)"
@@ -124,6 +124,7 @@ else record sql/42_release_1_5_tests FAIL 1 1 0 "$LOGS/sql_42_release_1_5_tests.
 if $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/10_behaviour_tests.sql" > /dev/null 2>&1 && $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/11_qr_tests.sql" > /dev/null 2>&1; then
   run_sql_lines sql/43_release_1_6_tests "$DIR/sql/43_release_1_6_tests.sql"
   run_cmd conc16_checks "$DIR/conc16_checks.sh" "$DB"          # 1.6, two sessions at once, on the data 43 left
+  run_sql_lines sql/44_release_1_6_1_tests "$DIR/sql/44_release_1_6_1_tests.sql"   # 014 profit split, on the data 43 left
 else record sql/43_release_1_6_tests FAIL 1 1 0 "$LOGS/sql_43_release_1_6_tests.log"; echo "      setup (10 + 11) failed"; fi
 
 echo "== unit checks (shared core)"
@@ -173,7 +174,7 @@ if [ "$BROWSER" = 1 ]; then
              "money14.e2e:money14.e2e.js:" "fo_print14.e2e:fo_print14.e2e.js:" "menu_public.e2e:menu_public.e2e.js:" "bo_menulink.e2e:bo_menulink.e2e.js:" "bo_menuqr.e2e:bo_menuqr.e2e.js:" "menu_tabs.e2e:menu_tabs.e2e.js:" \
              "fo_release15.e2e:fo_release15.e2e.js:" "bo_release15.e2e:bo_release15.e2e.js:" "order_release15.e2e:order_release15.e2e.js:" "bo_waste_edit15.e2e:bo_waste_edit15.e2e.js:" \
              "money15.e2e:money15.e2e.js:" \
-             "fo16.e2e:fo16.e2e.js:" "bo16.e2e:bo16.e2e.js:1366x900" "money16.e2e:money16.e2e.js:" "bo16_investors.e2e:bo16_investors.e2e.js:" "bo16_weighs.e2e:bo16_weighs.e2e.js:"; do
+             "fo16.e2e:fo16.e2e.js:" "bo16.e2e:bo16.e2e.js:1366x900" "money16.e2e:money16.e2e.js:" "bo16_investors.e2e:bo16_investors.e2e.js:" "bo16_weighs.e2e:bo16_weighs.e2e.js:" "bo161_split.e2e:bo161_split.e2e.js:"; do
       IFS=: read -r name file vp <<<"$t"
       "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1      # every browser suite starts from a fresh seed
       BO_VIEWPORT="${vp:-1280x900}" run_node "e2e/$name#$run" "$DIR/e2e/$file"

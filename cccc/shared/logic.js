@@ -286,6 +286,8 @@ function setSettingsFromServer(row){
   if(row && Array.isArray(row.payment_methods) && row.payment_methods.length) s.payment_methods = row.payment_methods.map(m => Object.assign({}, m));
   if(row && row.senior_discount_pct !== undefined && row.senior_discount_pct !== null) s.senior_discount_pct = Number(row.senior_discount_pct) || 0;
   if(row && row.count_recheck_days !== undefined && row.count_recheck_days !== null) s.count_recheck_days = Number(row.count_recheck_days) || 7;
+  // Release 1.6.1 (014): how net income is shared (investors / managers / shop).
+  if(row && row.profit_split && typeof row.profit_split === 'object') s.profit_split = JSON.parse(JSON.stringify(row.profit_split));
   // Optional receipt lines (only when the database has these columns): kept out of
   // DEFAULT_SETTINGS for the same reason. Missing -> '' (nothing printed).
   RECEIPT_EXTRA_KEYS.forEach(k => { s[k] = (row && typeof row[k] === 'string') ? row[k] : ''; });
@@ -308,6 +310,7 @@ function serverSettingsRow(){
   if(Array.isArray(state.settings.payment_methods)) row.payment_methods = state.settings.payment_methods.map(m => Object.assign({}, m));
   if(state.settings.senior_discount_pct !== undefined) row.senior_discount_pct = state.settings.senior_discount_pct;
   if(state.settings.count_recheck_days !== undefined) row.count_recheck_days = state.settings.count_recheck_days;
+  if(state.settings.profit_split && typeof state.settings.profit_split === 'object') row.profit_split = JSON.parse(JSON.stringify(state.settings.profit_split));
   row.updated_at = new Date().toISOString();
   return row;
 }

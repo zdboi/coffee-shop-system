@@ -456,11 +456,12 @@ function drawInvestors(){
       </tbody></table></div>` : emptyBlock('No investors yet. Add them one by one, or copy the names and amounts from Excel and use "Paste from Excel".')}
       <p class="hint" style="margin-bottom:0;">Each share is the person's amount ÷ the total, so it updates by itself when you add, remove or change an investor. To replace someone, edit their name and amount (the audit log keeps the old values).</p>
     </div>
-    ${INV.investors.length ? `<div class="card" style="margin-bottom:16px;" id="inv-share-card">
-      <div class="toolbar" style="margin-bottom:8px;"><h3 class="ni-title" style="margin:0;">Share of net income</h3><div class="toolbar-left">${rangePickerHtml(INV.share, 'is')}</div></div>
+    <div class="card" style="margin-bottom:16px;" id="inv-share-card">
+      <div class="toolbar" style="margin-bottom:8px;"><h3 class="ni-title" style="margin:0;">Profit split</h3>
+        <div class="field-inline"><div class="toolbar-left">${rangePickerHtml(INV.share, 'is')}</div>${BO.has161 ? '<button class="btn btn-outline btn-sm" id="ps-edit">Change the split</button>' : ''}</div></div>
       <div id="inv-share"><div class="loading-line">Working it out…</div></div>
-      <p class="hint" style="margin-bottom:0;">For information: net income from the Accounting overview for these days × each share. Nothing is paid out by this page.</p>
-    </div>` : ''}
+      <p class="hint" style="margin-bottom:0;">For information: net income from the Accounting overview for these days, shared the way you set. Nothing is paid out by this page.</p>
+    </div>
     <div class="card">
       <div class="toolbar" style="margin-bottom:8px;"><h3 class="ni-title" style="margin:0;">Start-up costs</h3>
         <div class="field-inline"><select class="filter" id="sc-cat-filter" aria-label="Show category"><option value="">All categories</option>${STARTUP_CATEGORIES.map(c => `<option value="${c.id}" ${INV.costFilter === c.id ? 'selected' : ''}>${esc(c.label)}${byCat[c.id] ? ' · ' + fmtMoney(byCat[c.id]) : ''}</option>`).join('')}</select>
@@ -484,7 +485,31 @@ function drawInvestors(){
   content.querySelectorAll('[data-inv-del]').forEach(b => b.onclick = () => removeInvestor(INV.investors.find(x => x.id === b.dataset.invDel)));
   content.querySelectorAll('[data-sc-edit]').forEach(b => b.onclick = () => openStartupForm(INV.costs.find(x => x.id === b.dataset.scEdit)));
   content.querySelectorAll('[data-sc-del]').forEach(b => b.onclick = () => removeStartupCost(INV.costs.find(x => x.id === b.dataset.scDel)));
+  if($('#ps-edit')) $('#ps-edit').onclick = openProfitSplitForm;
   if($('#inv-share-card')){ wireRangePicker(content, INV.share, 'is', () => drawInvestorShare()); drawInvestorShare(); }
+}
+/* Profit split (release 1.6.1, owner decision 2026-11-13): net income is shared
+   investors_pct (by each investor's amount) / managers_pct (equally among the managers)
+   / shop_pct (kept by the shop). A manager who also invested gets both parts. */
+const DEFAULT_PROFIT_SPLIT = {investors_pct: 30, managers_pct: 20, shop_pct: 50, managers: []};
+function profitSplit(){
+  const p = state.settings.profit_split;
+  if(!p || typeof p !== 'object') return Object.assign({}, DEFAULT_PROFIT_SPLIT);
+  return {investors_pct: num(p.investors_pct), managers_pct: num(p.managers_pct), shop_pct: num(p.shop_pct),
+    managers: Array.isArray(p.managers) ? p.managers.map(String) : []};
+}
+// Everyone's part of net income `ni`: {shop, investors: [{name, pct, part}], managers: [{name, part}], people: [{name, investor, manager, total}]}
+function profitParts(ni, split, investors){
+  const {pct} = investorShares(investors);
+  const inv = investors.map(x => ({name: x.name, pct: pct(x), part: ni * split.investors_pct / 100 * pct(x) / 100}));
+  const each = split.managers.length ? ni * split.managers_pct / 100 / split.managers.length : 0;
+  const mgr = split.managers.map(n => ({name: n, part: each}));
+  const people = new Map();
+  const add = (name, k, v) => { const key = String(name).trim().toLowerCase(); const p = people.get(key) || {name: String(name).trim(), investor: 0, manager: 0}; p[k] += v; people.set(key, p); };
+  inv.forEach(x => add(x.name, 'investor', x.part));
+  mgr.forEach(x => add(x.name, 'manager', x.part));
+  return {shop: ni * split.shop_pct / 100, investors: inv, managers: mgr,
+    people: [...people.values()].map(p => Object.assign(p, {total: p.investor + p.manager})).sort((a, b) => b.total - a.total)};
 }
 async function drawInvestorShare(){
   const box = document.getElementById('inv-share'); if(!box) return;
@@ -493,10 +518,54 @@ async function drawInvestorShare(){
   try{ r = await acctReport(a, b); }catch(e){ box.innerHTML = `<p class="text-light">${esc(friendlyError(e))}</p>`; return; }
   if(!box.isConnected) return;
   const ni = num((r.totals || {}).net_income);
-  const {pct} = investorShares(INV.investors);
-  box.innerHTML = `<p style="margin:0 0 8px;">Net income ${esc(acctRangeLabel(a, b))}: <b class="${ni < 0 ? 'text-red' : ''}">${signedMoney(ni)}</b></p>
-    <div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Investor</th><th class="num">Share</th><th class="num">Their part</th></tr></thead><tbody>
-    ${INV.investors.map(x => `<tr><td>${esc(x.name)}</td><td class="num">${pctText(pct(x))}</td><td class="num">${signedMoney(ni * pct(x) / 100)}</td></tr>`).join('')}</tbody></table></div>`;
+  const split = profitSplit();
+  const P = profitParts(ni, split, INV.investors);
+  const mgrNote = split.managers_pct > 0 && !split.managers.length;
+  box.innerHTML = `<p style="margin:0 0 8px;">Net income ${esc(acctRangeLabel(a, b))}: <b class="${ni < 0 ? 'text-red' : ''}">${signedMoney(ni)}</b>${ni < 0 ? ' <span class="text-light">(a loss: shown as negative parts)</span>' : ''}</p>
+    <div class="grid grid-3 kpi-sans" style="margin-bottom:12px;">
+      ${statCard(`Investors · ${pctText(split.investors_pct)}`, signedMoney(ni * split.investors_pct / 100), 'shared by the amounts invested')}
+      ${statCard(`Managers · ${pctText(split.managers_pct)}`, signedMoney(ni * split.managers_pct / 100), split.managers.length ? esc(split.managers.join(' & ')) + ', equally' : 'no managers named yet')}
+      ${statCard(`The shop · ${pctText(split.shop_pct)}`, signedMoney(P.shop), 'kept by the coffee shop')}
+    </div>
+    ${mgrNote ? `<div class="banner warn" style="margin-bottom:10px;">Name the managers with <b>Change the split</b>, so their ${pctText(split.managers_pct)} is shared out.</div>` : ''}
+    ${P.people.length ? `<div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Person</th><th class="num">As investor</th><th class="num">As manager</th><th class="num">Total</th></tr></thead><tbody>
+      ${P.people.map(p => `<tr><td>${esc(p.name)}</td><td class="num">${p.investor ? signedMoney(p.investor) : '—'}</td><td class="num">${p.manager ? signedMoney(p.manager) : '—'}</td><td class="num"><b>${signedMoney(p.total)}</b></td></tr>`).join('')}
+      <tr class="total-row"><td><b>The shop</b></td><td></td><td></td><td class="num"><b>${signedMoney(P.shop)}</b></td></tr>
+    </tbody></table></div>` : ''}
+    ${BO.has161 ? '' : '<p class="hint">Using 30% investors, 20% managers, 50% the shop. To name the managers and change the split, run the 1.6.1 database update (014).</p>'}`;
+}
+function openProfitSplitForm(){
+  const sp = profitSplit();
+  const names = INV.investors.map(x => x.name);
+  openModal({title: 'Profit split', body: `
+    <p class="hint" style="margin-top:0;">How net income is shared. The three parts must add up to 100%.</p>
+    <div class="form-grid">
+      <div class="form-row"><label for="ps-inv">Investors (%)</label><input id="ps-inv" type="number" min="0" max="100" step="any" value="${esc(sp.investors_pct)}"><div class="hint">Shared by the amounts each one invested.</div></div>
+      <div class="form-row"><label for="ps-mgr">Managers (%)</label><input id="ps-mgr" type="number" min="0" max="100" step="any" value="${esc(sp.managers_pct)}"><div class="hint">Shared equally among the managers below.</div></div>
+      <div class="form-row"><label for="ps-shop">The shop (%)</label><input id="ps-shop" type="number" min="0" max="100" step="any" value="${esc(sp.shop_pct)}"></div>
+    </div>
+    <div id="ps-sum" class="hint"></div>
+    <div class="form-row"><label for="ps-names">Managers <span class="text-light">(one name per line)</span></label>
+      <textarea id="ps-names" rows="3" maxlength="900" style="width:100%;font-family:inherit;" placeholder="Jake&#10;Your name">${esc(sp.managers.join('\n'))}</textarea>
+      <div class="hint">A manager who also invested gets both parts. Use the same spelling as in the investor list${names.length ? ` (${esc(names.join(', '))})` : ''} so their totals add up.</div></div>`,
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="ps-save">Save</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      const v = (id) => Number(root.querySelector(id).value);
+      const sum = () => { const t = Math.round((v('#ps-inv') + v('#ps-mgr') + v('#ps-shop')) * 1000) / 1000; root.querySelector('#ps-sum').innerHTML = `Total: <b class="${t === 100 ? '' : 'text-red'}">${pctText(t)}</b>${t === 100 ? '' : ' (must be 100%)'}`; return t; };
+      root.querySelectorAll('#ps-inv,#ps-mgr,#ps-shop').forEach(x => x.oninput = sum); sum();
+      root.querySelector('#ps-save').onclick = (e) => busy(e.currentTarget, async () => {
+        const parts = ['#ps-inv', '#ps-mgr', '#ps-shop'].map(v);
+        if(parts.some(x => !isFinite(x) || x < 0 || x > 100) || Math.abs(sum() - 100) > 0.001){ toast(friendlyError({message: 'BAD_PROFIT_SPLIT'}), 'error'); return; }
+        const list = root.querySelector('#ps-names').value.split(/\r?\n/).map(x => x.replace(/[\x00-\x1F\x7F]/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
+        const seen = new Set();
+        for(const n of list){ if(n.length > 80){ toast('A manager\'s name can be at most 80 characters.', 'error'); return; } if(seen.has(n.toLowerCase())){ toast(`"${n}" is listed twice.`, 'error'); return; } seen.add(n.toLowerCase()); }
+        if(list.length > 10){ toast('At most 10 managers.', 'error'); return; }
+        const split = {investors_pct: parts[0], managers_pct: parts[1], shop_pct: parts[2], managers: list};
+        const words = `investors ${pctText(parts[0])}, managers ${pctText(parts[1])}${list.length ? ' (' + list.join(', ') + ')' : ''}, shop ${pctText(parts[2])}`;
+        if(await boSave([Ops.update('settings', {profit_split: split, updated_at: nowISO()}), Ops.audit('Profit split saved', words)], {success: 'Saved'})){ closeModal(); renderInvestors(); }
+      });
+    }});
 }
 function openInvestorForm(x){
   const isNew = !x;
