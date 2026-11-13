@@ -15,6 +15,8 @@ unless marked "screens".
 | `sale_items.senior_discount` numeric, default 0 | VAT taken out + discount of that line | A Senior/PWD line is entirely the customer's (the counter splits lines). |
 | `senior_discount_records` (new table) | one row per Senior/PWD sale: kind, holder_name, id_number, pct, amounts, cashier | RLS on, no API access at all (`revoke all`). Written only by `fo_sync`; read only through `senior_report` (owner). Deleted with its sale (FK cascade: Start fresh). |
 | `inventory_transactions.received_at` timestamptz | when the SERVER got the line | Set by a trigger on insert, can't be changed. Old lines: their `created_at`. Used by the smart count (a counter's own clock is not trusted, and offline sales arrive late). |
+| `investors` (new table) | id, name (1..80, unique per shop ignoring case/spaces), amount (>0, ≤100M), invested_on, notes (≤500) | B2. Owner only (RLS rank 3), written through `apply_changes`. Shares are computed by the screen (amount ÷ total), never stored. |
+| `startup_costs` (new table) | id, name (1..120), amount (>0, ≤100M), cost_date, category (EQUIPMENT, RENOVATION, SUPPLIES, STOCK, TRANSPORT, SENT_TO_STAFF, OTHER), notes | B2. Owner only, through `apply_changes`. **Not part of `accounting_report` or `net_income_report`** (owner decision). |
 | `payments.method` rule | word list → format rule `^[A-Z][A-Z0-9_]{1,19}$` | Live rule replaced (owner can add methods). Every stored word already fits. |
 
 ### `settings.payment_methods`

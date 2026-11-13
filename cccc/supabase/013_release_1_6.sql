@@ -20,6 +20,9 @@
 --   B20  SMART STOCK COUNT: only ticked items whose stock changed since their
 --        last count (or not counted for settings.count_recheck_days days) are
 --        due at Close shift. The SERVER decides the list.
+--   B2   INVESTORS AND START-UP COSTS (owner only): who invested how much
+--        (each share = amount / total) and what was spent to open the shop.
+--        Start-up costs are NOT taken off any month's net income.
 --   B1 / B18  ONE MONEY REPORT (accounting_report) for the Accounting overview
 --        and the Sales calendar, for any date range, with a row per day.
 --
@@ -967,6 +970,88 @@ begin
     from public.senior_discount_records r join public.sales x on x.id = r.sale_id
     where r.business_id = v_biz and x.business_id = v_biz and x.status <> 'VOIDED'
       and coalesce(x.transaction_date, x.created_at) >= v_from_ts and coalesce(x.transaction_date, x.created_at) < v_to_ts), '[]'::jsonb);
+end $$;
+
+-- =============================================================================
+-- 7b. B2: INVESTORS AND START-UP COSTS (owner only)
+-- =============================================================================
+-- Investors: who put money into the shop, how much and when. Each one's share
+-- (%) is worked out from the amounts (amount / total), never stored. Start-up
+-- costs: what the shop spent to open (equipment, renovation, first stock...).
+-- They are kept apart from Expenses on purpose (owner decision 2026-11-13):
+-- they are NOT taken off any month's net income. Owner only (read and write,
+-- through apply_changes like the other Back Office data). The audit log keeps
+-- every change (the screen writes an audit line with each save).
+create table if not exists public.investors (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null default public.current_business_id() references public.businesses(id) on delete cascade,
+  name text not null,
+  amount numeric not null,
+  invested_on date,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists investors_name_key on public.investors(business_id, lower(btrim(name)));
+create table if not exists public.startup_costs (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null default public.current_business_id() references public.businesses(id) on delete cascade,
+  name text not null,
+  amount numeric not null,
+  cost_date date,
+  category text not null default 'OTHER',
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists startup_costs_business_idx on public.startup_costs(business_id, cost_date);
+do $$
+declare spec text[];
+  specs text[][] := array[
+    array['investors', 'investors_name_check',      $c$length(btrim(name)) between 1 and 80 and name !~ '[\x01-\x1F\x7F]'$c$],
+    array['investors', 'investors_amount_check',    $c$amount > 0 and amount <= 100000000$c$],
+    array['investors', 'investors_notes_check',     $c$notes is null or length(notes) <= 500$c$],
+    array['startup_costs', 'startup_costs_name_check',     $c$length(btrim(name)) between 1 and 120 and name !~ '[\x01-\x1F\x7F]'$c$],
+    array['startup_costs', 'startup_costs_amount_check',   $c$amount > 0 and amount <= 100000000$c$],
+    array['startup_costs', 'startup_costs_category_check', $c$category in ('EQUIPMENT','RENOVATION','SUPPLIES','STOCK','TRANSPORT','SENT_TO_STAFF','OTHER')$c$],
+    array['startup_costs', 'startup_costs_notes_check',    $c$notes is null or length(notes) <= 500$c$]
+  ];
+begin
+  foreach spec slice 1 in array specs loop
+    execute format('alter table public.%I drop constraint if exists %I', spec[1], spec[2]);
+    execute format('alter table public.%I add constraint %I check (%s)', spec[1], spec[2], spec[3]);
+  end loop;
+end $$;
+
+-- apply_changes may write: same as 012, plus investors and startup_costs.
+create or replace function public._writable_tables() returns text[]
+language sql immutable as $$
+  select array['categories','suppliers','ingredients','recipes','recipe_ingredients','purchases','production_batches',
+    'waste','inventory_transactions','settings','stores','dining_tables','staff','devices','customers','sales',
+    'sale_items','payments','refunds','shifts','cash_movements','audit_log','qr_orders','businesses',
+    'ingredient_brands','floor_shapes','loyalty_redemptions',
+    'option_groups','option_group_recipes','expenses','waste_logs','waste_log_items','ingredient_costs',
+    'rnd_projects',
+    'investors','startup_costs']
+$$;
+
+-- Row Level Security: only the owner (rank 3) reads and writes, in their own
+-- shop. Counters (rank 0), customers and the public never touch them.
+do $$
+declare t text; p record;
+begin
+  foreach t in array array['investors','startup_costs'] loop
+    execute format('alter table public.%I enable row level security', t);
+    for p in select policyname from pg_policies where schemaname = 'public' and tablename = t loop
+      execute format('drop policy %I on public.%I', p.policyname, t);
+    end loop;
+    execute format('create policy %I on public.%I for select to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3)', t || '_read', t);
+    execute format('create policy %I on public.%I for insert to authenticated with check (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3)', t || '_admin_insert', t);
+    execute format('create policy %I on public.%I for update to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3) with check (business_id = (select public.current_business_id()))', t || '_admin_update', t);
+    execute format('create policy %I on public.%I for delete to authenticated using (business_id = (select public.current_business_id()) and (select public.app_rank()) >= 3)', t || '_admin_delete', t);
+    execute format('revoke all on public.%I from anon', t);
+    execute format('revoke truncate, references, trigger on public.%I from authenticated', t);
+  end loop;
 end $$;
 
 -- =============================================================================

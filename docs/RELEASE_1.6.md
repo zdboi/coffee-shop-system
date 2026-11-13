@@ -31,6 +31,13 @@ Your current live version (1.5) is saved as the **last working version** (`docs/
 - Money → **Accounting overview**: any dates (today, this month, last month, or your own dates), with "Compare with the period before".
 - Sales, discounts, stamp rewards, Senior / PWD, tax, service charge, payment charges, refunds, net sales, payment fees, ingredients used and wasted, expenses, **net income**. Plus voids, cash over / short, items sold (drinks and food / pastries), each payment method, and the list of waived charges with who waived them. CSV download.
 
+**Investors & start-up costs (Back Office → Money)**
+- Your investors with their amounts and **share (%)**, worked out from the amounts. Add, edit (to replace someone) or remove an investor and everyone's share updates by itself.
+- Your **start-up costs** (what you spent to open), each with a category and an optional date. They are **not** taken off any month's net income.
+- **Invested − start-up costs = left from the investments** (₱4,129 with your sheet).
+- **Share of net income** for any dates, per investor (for information).
+- **Paste from Excel:** select the two columns (name and amount) in your sheet, copy, and paste. The "?" row with no amount is skipped.
+
 **Sales calendar (Back Office)**
 - The month calendar **stays on screen** while you scroll the details.
 - **Tap a day** to see that day. **Tap a second day** (use the arrows for another month in between) to see everything from the first day to the second.
@@ -67,6 +74,10 @@ On each counter, your computer and your phone: open the app and reload the page 
 ### 5. Set up (5 min)
 1. Back Office → **Settings → Payments & discounts**: check the payment methods. If you want an extra charge (for example GCash 2%), set it here and save. Check the **Senior / PWD %**.
 2. Back Office → **Stock counts**: check the list and the "ask again every … days" number.
+3. Back Office → **Money → Investors & start-up**:
+   - Open your sheet "CCCC Initial Funds and Expense". Select the investor names and amounts (D4:E9), copy, then click **Paste from Excel** under Investors, paste, choose the date if you know it, and click **Add**.
+   - Do the same for the start-up costs: first H4:I34, then K4:L33 (two pastes). Pick a category for each batch or leave "Other"; you can change each item afterwards.
+   - Check the totals: ₱200,000 invested, ₱195,871 start-up costs, ₱4,129 left.
 
 ### 6. Quick check (5 min)
 1. **Counter:** ring up a drink, tap **Senior / PWD discount → add**, fill it in, pay. The receipt shows the discount and a signature line.

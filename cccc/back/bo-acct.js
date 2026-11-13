@@ -375,3 +375,240 @@ function wirePaymentSettings(root){
     if(ok && state.route === 'settings') renderSettings();
   });
 }
+
+/* ================= Investors & start-up costs (B2, owner decisions 2026-11-13) =================
+   - Investors: name, amount, date, note. Each one's share = amount ÷ total (worked out here,
+     never stored), so adding, removing or changing anyone updates every share by itself.
+   - Start-up costs: what was spent to open the shop. Kept apart from Expenses on purpose: they are
+     NOT taken off any month's net income. "Cash left" = invested − start-up costs.
+   - Rows can be pasted straight from Excel (name, amount per line).
+   Owner only (the database refuses everyone else). Every save writes an audit line. */
+const STARTUP_CATEGORIES = [
+  {id: 'EQUIPMENT', label: 'Equipment'}, {id: 'RENOVATION', label: 'Renovation & furniture'}, {id: 'SUPPLIES', label: 'Supplies & tools'},
+  {id: 'STOCK', label: 'First stock (beans, milk…)'}, {id: 'TRANSPORT', label: 'Transport & delivery'},
+  {id: 'SENT_TO_STAFF', label: 'Money sent to staff'}, {id: 'OTHER', label: 'Other'},
+];
+function startupCategoryLabel(id){ const c = STARTUP_CATEGORIES.find(x => x.id === id); return c ? c.label : 'Other'; }
+const INV = {investors: [], costs: [], share: {preset: 'month', from: '', to: ''}, costFilter: ''};
+// "₱1,234.50" / "1234.5" / "=1000+758" (Excel copies the value, but be kind) -> number or NaN
+function parsePeso(t){
+  t = String(t == null ? '' : t).replace(/[₱,\s]/g, '').replace(/^php/i, '');
+  if(/^=?\d+(\.\d+)?(\+\d+(\.\d+)?)*$/.test(t)) return t.replace(/^=/, '').split('+').reduce((s, x) => s + Number(x), 0);
+  return NaN;
+}
+// Pasted Excel cells -> [{name, amount}] (+ the lines that couldn't be read)
+function parsePastedRows(text){
+  const rows = [], bad = [];
+  String(text || '').split(/\r?\n/).forEach((line, i) => {
+    if(!line.trim()) return;
+    let parts = line.split('\t');
+    if(parts.length < 2) parts = line.split(/\s{2,}|,(?=\s*[₱\d=])/);
+    if(parts.length < 2){ const m = line.match(/^(.*?)[\s]+([₱\d,.=+]+)\s*$/); if(m) parts = [m[1], m[2]]; }
+    const name = String(parts[0] || '').replace(/[\x00-\x1F\x7F]/g, ' ').replace(/\s+/g, ' ').trim();
+    const amount = parsePeso(parts.slice(1).find(x => String(x).trim() !== ''));
+    if(!name || !(amount > 0)){ bad.push(i + 1); return; }
+    rows.push({name: name.slice(0, 120), amount: Math.round(amount * 100) / 100});
+  });
+  return {rows, bad};
+}
+function investorShares(list){
+  const total = list.reduce((s, x) => s + num(x.amount), 0);
+  return {total, pct: (x) => total > 0 ? num(x.amount) / total * 100 : 0};
+}
+function pctText(v){ return (Math.round(v * 100) / 100).toLocaleString('en-PH', {maximumFractionDigits: 2}) + '%'; }
+
+async function renderInvestors(){
+  const content = document.getElementById('content');
+  if(!BO.has16){ content.innerHTML = emptyBlock('Investors and start-up costs are available after the 1.6 database update (013) is installed.'); return; }
+  const bar = setTopbarActions(`<button class="btn btn-outline" id="btn-inv-csv">Export CSV</button>`);
+  bar.querySelector('#btn-inv-csv').onclick = exportInvestorsCSV;
+  content.innerHTML = `<div class="loading-line">Loading…</div>`;
+  try{
+    [INV.investors, INV.costs] = await Promise.all([
+      cloud.selectAll('investors', {order: 'amount.desc,name.asc'}),
+      cloud.selectAll('startup_costs', {order: 'cost_date.asc.nullsfirst,created_at.asc'})]);
+  }catch(e){ content.innerHTML = emptyBlock(esc(friendlyError(e))); return; }
+  if(state.route !== 'investors') return;
+  drawInvestors();
+}
+function drawInvestors(){
+  const content = document.getElementById('content'); if(!content) return;
+  const {total, pct} = investorShares(INV.investors);
+  const spent = INV.costs.reduce((s, x) => s + num(x.amount), 0);
+  const left = total - spent;
+  const byCat = {};
+  INV.costs.forEach(c => { byCat[c.category] = (byCat[c.category] || 0) + num(c.amount); });
+  const shown = INV.costFilter ? INV.costs.filter(c => c.category === INV.costFilter) : INV.costs;
+  content.innerHTML = `
+    <div class="grid grid-3 kpi-sans" style="margin-bottom:16px;">
+      ${statCard('Invested', fmtMoney(total), plural(INV.investors.length, 'investor'))}
+      ${statCard('Start-up costs', fmtMoney(spent), plural(INV.costs.length, 'item') + ' · not part of monthly net income')}
+      ${statCard('Left from the investments', `<span class="${left < 0 ? 'text-red' : ''}">${signedMoney(left)}</span>`, 'invested minus start-up costs')}
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="toolbar" style="margin-bottom:8px;"><h3 class="ni-title" style="margin:0;">Investors</h3>
+        <div class="field-inline"><button class="btn btn-outline btn-sm" id="inv-paste">Paste from Excel</button><button class="btn btn-primary btn-sm" id="inv-add">${icon('plus', {size: 16})} Add investor</button></div></div>
+      ${INV.investors.length ? `<div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Name</th><th class="num">Invested</th><th class="num">Share</th><th>Date</th><th>Note</th><th><span class="sr-only">Change</span></th></tr></thead><tbody>
+        ${INV.investors.map(x => `<tr><td><b>${esc(x.name)}</b></td><td class="num">${fmtMoney(x.amount)}</td><td class="num">${pctText(pct(x))}</td>
+          <td>${x.invested_on ? esc(fmtDay(x.invested_on)) : '<span class="text-light">—</span>'}</td><td class="text-light">${esc(x.notes || '')}</td>
+          <td class="wr-actions"><button class="btn btn-ghost btn-sm" data-inv-edit="${esc(x.id)}">Edit</button><button class="btn btn-ghost btn-sm" data-inv-del="${esc(x.id)}">Remove</button></td></tr>`).join('')}
+        <tr class="total-row"><td><b>Total</b></td><td class="num"><b>${fmtMoney(total)}</b></td><td class="num"><b>100%</b></td><td colspan="3"></td></tr>
+      </tbody></table></div>` : emptyBlock('No investors yet. Add them one by one, or copy the names and amounts from Excel and use "Paste from Excel".')}
+      <p class="hint" style="margin-bottom:0;">Each share is the person's amount ÷ the total, so it updates by itself when you add, remove or change an investor. To replace someone, edit their name and amount (the audit log keeps the old values).</p>
+    </div>
+    ${INV.investors.length ? `<div class="card" style="margin-bottom:16px;" id="inv-share-card">
+      <div class="toolbar" style="margin-bottom:8px;"><h3 class="ni-title" style="margin:0;">Share of net income</h3><div class="toolbar-left">${rangePickerHtml(INV.share, 'is')}</div></div>
+      <div id="inv-share"><div class="loading-line">Working it out…</div></div>
+      <p class="hint" style="margin-bottom:0;">For information: net income from the Accounting overview for these days × each share. Nothing is paid out by this page.</p>
+    </div>` : ''}
+    <div class="card">
+      <div class="toolbar" style="margin-bottom:8px;"><h3 class="ni-title" style="margin:0;">Start-up costs</h3>
+        <div class="field-inline"><select class="filter" id="sc-cat-filter" aria-label="Show category"><option value="">All categories</option>${STARTUP_CATEGORIES.map(c => `<option value="${c.id}" ${INV.costFilter === c.id ? 'selected' : ''}>${esc(c.label)}${byCat[c.id] ? ' · ' + fmtMoney(byCat[c.id]) : ''}</option>`).join('')}</select>
+          <button class="btn btn-outline btn-sm" id="sc-paste">Paste from Excel</button><button class="btn btn-primary btn-sm" id="sc-add">${icon('plus', {size: 16})} Add a cost</button></div></div>
+      ${shown.length ? `<div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>What</th><th>Category</th><th>Date</th><th class="num">Amount</th><th><span class="sr-only">Change</span></th></tr></thead><tbody>
+        ${shown.map(c => `<tr><td>${esc(c.name)}${c.notes ? `<div class="text-light" style="font-size:12px;">${esc(c.notes)}</div>` : ''}</td><td>${esc(startupCategoryLabel(c.category))}</td>
+          <td>${c.cost_date ? esc(fmtDay(c.cost_date)) : '<span class="text-light">—</span>'}</td><td class="num">${fmtMoney(c.amount)}</td>
+          <td class="wr-actions"><button class="btn btn-ghost btn-sm" data-sc-edit="${esc(c.id)}">Edit</button><button class="btn btn-ghost btn-sm" data-sc-del="${esc(c.id)}">Delete</button></td></tr>`).join('')}
+        <tr class="total-row"><td colspan="3"><b>Total${INV.costFilter ? ' · ' + esc(startupCategoryLabel(INV.costFilter)) : ''}</b></td><td class="num"><b>${fmtMoney(shown.reduce((s, x) => s + num(x.amount), 0))}</b></td><td></td></tr>
+      </tbody></table></div>` : emptyBlock(INV.costs.length ? 'Nothing in this category.' : 'No start-up costs yet. Copy the item names and prices from Excel and use "Paste from Excel".')}
+      <p class="hint" style="margin-bottom:0;">What the shop spent to open (equipment, renovation, first stock…). These are kept apart from Expenses: they are not taken off any month's net income. Running costs after opening go in <a class="linklike" id="sc-go-exp">Expenses</a>.</p>
+    </div>`;
+  const $ = (s) => content.querySelector(s);
+  $('#inv-add').onclick = () => openInvestorForm(null);
+  $('#inv-paste').onclick = () => openPasteRows('investors');
+  $('#sc-add').onclick = () => openStartupForm(null);
+  $('#sc-paste').onclick = () => openPasteRows('startup_costs');
+  $('#sc-go-exp').onclick = () => navigate('expenses');
+  $('#sc-cat-filter').onchange = (e) => { INV.costFilter = e.target.value; drawInvestors(); };
+  content.querySelectorAll('[data-inv-edit]').forEach(b => b.onclick = () => openInvestorForm(INV.investors.find(x => x.id === b.dataset.invEdit)));
+  content.querySelectorAll('[data-inv-del]').forEach(b => b.onclick = () => removeInvestor(INV.investors.find(x => x.id === b.dataset.invDel)));
+  content.querySelectorAll('[data-sc-edit]').forEach(b => b.onclick = () => openStartupForm(INV.costs.find(x => x.id === b.dataset.scEdit)));
+  content.querySelectorAll('[data-sc-del]').forEach(b => b.onclick = () => removeStartupCost(INV.costs.find(x => x.id === b.dataset.scDel)));
+  if($('#inv-share-card')){ wireRangePicker(content, INV.share, 'is', () => drawInvestorShare()); drawInvestorShare(); }
+}
+async function drawInvestorShare(){
+  const box = document.getElementById('inv-share'); if(!box) return;
+  const [a, b] = presetKeys(INV.share.preset, INV.share);
+  let r;
+  try{ r = await acctReport(a, b); }catch(e){ box.innerHTML = `<p class="text-light">${esc(friendlyError(e))}</p>`; return; }
+  if(!box.isConnected) return;
+  const ni = num((r.totals || {}).net_income);
+  const {pct} = investorShares(INV.investors);
+  box.innerHTML = `<p style="margin:0 0 8px;">Net income ${esc(acctRangeLabel(a, b))}: <b class="${ni < 0 ? 'text-red' : ''}">${signedMoney(ni)}</b></p>
+    <div class="table-wrap" style="box-shadow:none;"><table><thead><tr><th>Investor</th><th class="num">Share</th><th class="num">Their part</th></tr></thead><tbody>
+    ${INV.investors.map(x => `<tr><td>${esc(x.name)}</td><td class="num">${pctText(pct(x))}</td><td class="num">${signedMoney(ni * pct(x) / 100)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function openInvestorForm(x){
+  const isNew = !x;
+  openModal({title: isNew ? 'Add investor' : 'Edit investor', body: `
+    <div class="form-row"><label for="if-name">Name</label><input id="if-name" maxlength="80" value="${esc(x ? x.name : '')}"></div>
+    <div class="form-grid">
+      <div class="form-row"><label for="if-amt">Amount invested (₱)</label><input id="if-amt" type="number" min="0" step="any" inputmode="decimal" value="${x ? esc(num(x.amount)) : ''}"></div>
+      <div class="form-row"><label for="if-date">Date <span class="text-light">(optional)</span></label><input id="if-date" type="date" value="${esc(x && x.invested_on || '')}"></div>
+    </div>
+    <div class="form-row"><label for="if-note">Note <span class="text-light">(optional)</span></label><input id="if-note" maxlength="500" value="${esc(x && x.notes || '')}"></div>`,
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="if-save">Save</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      root.querySelector('#if-save').onclick = (e) => busy(e.currentTarget, async () => {
+        const name = root.querySelector('#if-name').value.replace(/\s+/g, ' ').trim();
+        const amount = Math.round(num(root.querySelector('#if-amt').value) * 100) / 100;
+        if(!name){ toast('Type the investor\'s name.', 'error'); return; }
+        if(!(amount > 0)){ toast('Type the amount invested (more than ₱0).', 'error'); return; }
+        if(INV.investors.some(o => o.id !== (x && x.id) && o.name.trim().toLowerCase() === name.toLowerCase())){ toast(`There is already an investor called "${name}".`, 'error'); return; }
+        const row = {id: x ? x.id : uid(), name, amount, invested_on: root.querySelector('#if-date').value || null, notes: root.querySelector('#if-note').value.trim() || null, updated_at: nowISO()};
+        const what = isNew ? `${name}: ${fmtMoney(amount)}` : `${x.name}: ${fmtMoney(x.amount)} -> ${name}: ${fmtMoney(amount)}`;
+        if(await boSave([Ops.upsert('investors', row), Ops.audit(isNew ? 'Investor added' : 'Investor changed', what, row.id)], {reload: false, success: 'Saved'})){ closeModal(); renderInvestors(); }
+      });
+      setTimeout(() => root.querySelector('#if-name').focus(), 50);
+    }});
+}
+async function removeInvestor(x){
+  if(!x) return;
+  if(!(await confirmDialog(`Remove <b>${esc(x.name)}</b> (${fmtMoney(x.amount)})? Everyone else's share goes up to match. The audit log keeps a record.`, 'Remove investor'))) return;
+  if(await boSave([Ops.del('investors', x.id), Ops.audit('Investor removed', `${x.name}: ${fmtMoney(x.amount)}`, x.id)], {reload: false, success: 'Removed'})) renderInvestors();
+}
+function startupCategoryOptions(sel){ return STARTUP_CATEGORIES.map(c => `<option value="${c.id}" ${sel === c.id ? 'selected' : ''}>${esc(c.label)}</option>`).join(''); }
+function openStartupForm(c){
+  const isNew = !c;
+  openModal({title: isNew ? 'Add a start-up cost' : 'Edit start-up cost', body: `
+    <div class="form-row"><label for="sf-name">What</label><input id="sf-name" maxlength="120" value="${esc(c ? c.name : '')}" placeholder="e.g. Espresso machine"></div>
+    <div class="form-grid">
+      <div class="form-row"><label for="sf-amt">Amount (₱)</label><input id="sf-amt" type="number" min="0" step="any" inputmode="decimal" value="${c ? esc(num(c.amount)) : ''}"></div>
+      <div class="form-row"><label for="sf-date">Date <span class="text-light">(optional)</span></label><input id="sf-date" type="date" value="${esc(c && c.cost_date || '')}"></div>
+    </div>
+    <div class="form-row"><label for="sf-cat">Category</label><select id="sf-cat">${startupCategoryOptions(c ? c.category : 'OTHER')}</select></div>
+    <div class="form-row"><label for="sf-note">Note <span class="text-light">(optional)</span></label><input id="sf-note" maxlength="500" value="${esc(c && c.notes || '')}"></div>`,
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="sf-save">Save</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      root.querySelector('#sf-save').onclick = (e) => busy(e.currentTarget, async () => {
+        const name = root.querySelector('#sf-name').value.replace(/\s+/g, ' ').trim();
+        const amount = Math.round(num(root.querySelector('#sf-amt').value) * 100) / 100;
+        if(!name){ toast('Type what it was.', 'error'); return; }
+        if(!(amount > 0)){ toast('Type the amount (more than ₱0).', 'error'); return; }
+        const row = {id: c ? c.id : uid(), name, amount, cost_date: root.querySelector('#sf-date').value || null, category: root.querySelector('#sf-cat').value,
+          notes: root.querySelector('#sf-note').value.trim() || null, updated_at: nowISO()};
+        const what = isNew ? `${name}: ${fmtMoney(amount)}` : `${c.name}: ${fmtMoney(c.amount)} -> ${name}: ${fmtMoney(amount)}`;
+        if(await boSave([Ops.upsert('startup_costs', row), Ops.audit(isNew ? 'Start-up cost added' : 'Start-up cost changed', what, row.id)], {reload: false, success: 'Saved'})){ closeModal(); renderInvestors(); }
+      });
+      setTimeout(() => root.querySelector('#sf-name').focus(), 50);
+    }});
+}
+async function removeStartupCost(c){
+  if(!c) return;
+  if(!(await confirmDialog(`Delete <b>${esc(c.name)}</b> (${fmtMoney(c.amount)}) from the start-up costs?`, 'Delete'))) return;
+  if(await boSave([Ops.del('startup_costs', c.id), Ops.audit('Start-up cost deleted', `${c.name}: ${fmtMoney(c.amount)}`, c.id)], {reload: false, success: 'Deleted'})) renderInvestors();
+}
+// Paste rows copied from Excel: two columns (name, amount). Preview first, then save all at once.
+function openPasteRows(table){
+  const isInv = table === 'investors';
+  openModal({title: isInv ? 'Paste investors from Excel' : 'Paste start-up costs from Excel', wide: true, body: `
+    <p class="hint" style="margin-top:0;">In Excel, select the two columns (${isInv ? 'name and amount invested' : 'what it was and the price'}), copy (Ctrl+C), then paste here (Ctrl+V). One row per line. Rows without a name or an amount are skipped${isInv ? '' : ', and a total row is left out if you copied it'}.</p>
+    <textarea id="pr-text" rows="10" style="width:100%;font-family:inherit;" placeholder="${isInv ? 'Mama Lorna\t50000' : 'Espresso machine\t29990'}"></textarea>
+    <div class="form-grid" style="margin-top:10px;">
+      <div class="form-row"><label for="pr-date">Date for all of them <span class="text-light">(optional)</span></label><input type="date" id="pr-date"></div>
+      ${isInv ? '' : `<div class="form-row"><label for="pr-cat">Category for all of them</label><select id="pr-cat">${startupCategoryOptions('OTHER')}</select><div class="hint">You can change each one afterwards.</div></div>`}
+    </div>
+    <div id="pr-preview" class="hint"></div>`,
+    foot: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="pr-save" disabled>Add</button>`,
+    onMount: (root) => {
+      root.querySelector('[data-cancel]').onclick = closeModal;
+      let parsed = {rows: [], bad: []};
+      const ta = root.querySelector('#pr-text'), save = root.querySelector('#pr-save'), pv = root.querySelector('#pr-preview');
+      const update = () => {
+        parsed = parsePastedRows(ta.value);
+        parsed.rows = parsed.rows.filter(r => !/^(total|sub-?total|grand total)$/i.test(r.name));
+        const dupes = isInv ? parsed.rows.filter((r, i) => parsed.rows.findIndex(o => o.name.toLowerCase() === r.name.toLowerCase()) !== i || INV.investors.some(o => o.name.trim().toLowerCase() === r.name.toLowerCase())) : [];
+        const sum = parsed.rows.reduce((s, r) => s + r.amount, 0);
+        pv.innerHTML = parsed.rows.length ? `<b>${plural(parsed.rows.length, isInv ? 'investor' : 'item')}, ${fmtMoney(sum)} in all.</b>${parsed.bad.length ? ` Skipped line${parsed.bad.length === 1 ? '' : 's'} ${parsed.bad.slice(0, 10).join(', ')}${parsed.bad.length > 10 ? '…' : ''} (no name or amount).` : ''}
+          ${dupes.length ? `<div class="text-red">Already on the list or twice in what you pasted: ${dupes.map(d => esc(d.name)).join(', ')}. Remove ${dupes.length === 1 ? 'it' : 'them'} first.</div>` : ''}
+          <div style="max-height:180px;overflow:auto;margin-top:6px;">${parsed.rows.slice(0, 200).map(r => `<div>${esc(r.name)} · ${fmtMoney(r.amount)}</div>`).join('')}</div>`
+          : (ta.value.trim() ? 'Nothing could be read yet: each line needs a name and an amount.' : '');
+        save.disabled = !parsed.rows.length || parsed.rows.length > 200 || dupes.length > 0;
+        if(parsed.rows.length > 200) pv.innerHTML += '<div class="text-red">At most 200 rows at a time.</div>';
+      };
+      ta.oninput = update;
+      save.onclick = (e) => busy(e.currentTarget, async () => {
+        const date = root.querySelector('#pr-date').value || null, now = nowISO();
+        const cat = isInv ? null : root.querySelector('#pr-cat').value;
+        const ops = parsed.rows.map(r => Ops.upsert(table, isInv ? {id: uid(), name: r.name.slice(0, 80), amount: r.amount, invested_on: date, updated_at: now}
+          : {id: uid(), name: r.name, amount: r.amount, cost_date: date, category: cat, updated_at: now}));
+        const sum = parsed.rows.reduce((s, r) => s + r.amount, 0);
+        ops.push(Ops.audit(isInv ? 'Investors pasted' : 'Start-up costs pasted', `${plural(parsed.rows.length, 'row')}, ${fmtMoney(sum)}`));
+        if(await boSave(ops, {reload: false, success: `Added ${plural(parsed.rows.length, 'row')}`})){ closeModal(); renderInvestors(); }
+      });
+      setTimeout(() => ta.focus(), 50);
+    }});
+}
+function exportInvestorsCSV(){
+  if(!INV.investors.length && !INV.costs.length){ toast('Nothing to export', 'warn'); return; }
+  const {total, pct} = investorShares(INV.investors);
+  const rows = INV.investors.map(x => ['Investor', x.name, num(x.amount).toFixed(2), pctText(pct(x)), x.invested_on || '', x.notes || '']);
+  rows.push(['Investors total', '', total.toFixed(2), '100%', '', '']);
+  INV.costs.forEach(c => rows.push(['Start-up cost', c.name, num(c.amount).toFixed(2), startupCategoryLabel(c.category), c.cost_date || '', c.notes || '']));
+  const spent = INV.costs.reduce((s, x) => s + num(x.amount), 0);
+  rows.push(['Start-up costs total', '', spent.toFixed(2), '', '', ''], ['Left from the investments', '', (total - spent).toFixed(2), '', '', '']);
+  downloadFile(`${fileNameSlug()}-investors-startup.csv`, toCSV(['Kind', 'Name', 'Amount', 'Share / category', 'Date', 'Note'], rows), 'text/csv');
+  toast('Exported as CSV');
+}
