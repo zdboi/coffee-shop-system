@@ -4,7 +4,7 @@ A small update: it takes about 5 minutes. You can do it any time, the counters a
 
 Your current live version (1.6) is saved as the **last working version** (`docs/checkpoints.md`). If anything goes wrong, tell C: **"Go back to the last working version."**
 
-> Status: **being checked by Z.** Don't start until C says it's ready.
+> Status: **ready** (Z: PASS on 2026-11-13, 6,875 checks, none failing).
 
 ## What's new
 Back Office → **Money → Investors & start-up** → **Profit split** (replaces "Share of net income"):
