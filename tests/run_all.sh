@@ -119,6 +119,11 @@ if $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/10_behaviour_tests.sql" > /dev/null 
   run_sql_lines sql/42_release_1_5_tests "$DIR/sql/42_release_1_5_tests.sql"
   run_cmd conc15_checks "$DIR/conc15_checks.sh" "$DB"
 else record sql/42_release_1_5_tests FAIL 1 1 0 "$LOGS/sql_42_release_1_5_tests.log"; echo "      setup (10 + 11) failed"; fi
+"$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
+# 013 (release 1.6): same set-up (fresh database -> 10 -> 11 -> 43)
+if $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/10_behaviour_tests.sql" > /dev/null 2>&1 && $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/11_qr_tests.sql" > /dev/null 2>&1; then
+  run_sql_lines sql/43_release_1_6_tests "$DIR/sql/43_release_1_6_tests.sql"
+else record sql/43_release_1_6_tests FAIL 1 1 0 "$LOGS/sql_43_release_1_6_tests.log"; echo "      setup (10 + 11) failed"; fi
 
 echo "== unit checks (shared core)"
 run_node unit/core_check "$DIR/unit/core_check.js" "$REPO"
@@ -137,6 +142,7 @@ run_node unit/core14_check "$DIR/unit/core14_check.js" "$REPO"                  
 run_node unit/core15_check "$DIR/unit/core15_check.js" "$REPO"                    # 1.5: shop day (Manila), stock_count op, blind-count differences, production scale / max / partner debt maths
 TZ=America/Los_Angeles run_node "unit/core15_check@LA" "$DIR/unit/core15_check.js" "$REPO"          # ... the same on a device far behind Manila
 TZ=Pacific/Kiritimati run_node "unit/core15_check@Kiritimati" "$DIR/unit/core15_check.js" "$REPO"   # ... and far ahead
+run_node unit/core16_check "$DIR/unit/core16_check.js" "$REPO"                    # 1.6: totals with the payment charge + Senior / PWD, refund share, payment methods, ID mask, CSV cells
 "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1          # parity check needs a shop (runs inside a rolled-back transaction)
 run_node unit/refund_parity_check "$DIR/unit/refund_parity_check.js" "$REPO" "$DB" 500
 run_node unit/loyalty_totals_check "$DIR/unit/loyalty_totals_check.js" "$REPO" "$DB" 1500   # 1.2: reward totals vs the 008 server (rolled back)
@@ -163,7 +169,8 @@ if [ "$BROWSER" = 1 ]; then
              "fake_standin.e2e:fake_standin.e2e.js:" "fo_release14.e2e:fo_release14.e2e.js:" "bo_release14.e2e:bo_release14.e2e.js:" "order_release14.e2e:order_release14.e2e.js:" \
              "money14.e2e:money14.e2e.js:" "fo_print14.e2e:fo_print14.e2e.js:" "menu_public.e2e:menu_public.e2e.js:" "bo_menulink.e2e:bo_menulink.e2e.js:" "bo_menuqr.e2e:bo_menuqr.e2e.js:" "menu_tabs.e2e:menu_tabs.e2e.js:" \
              "fo_release15.e2e:fo_release15.e2e.js:" "bo_release15.e2e:bo_release15.e2e.js:" "order_release15.e2e:order_release15.e2e.js:" "bo_waste_edit15.e2e:bo_waste_edit15.e2e.js:" \
-             "money15.e2e:money15.e2e.js:"; do
+             "money15.e2e:money15.e2e.js:" \
+             "fo16.e2e:fo16.e2e.js:" "bo16.e2e:bo16.e2e.js:1366x900" "money16.e2e:money16.e2e.js:"; do
       IFS=: read -r name file vp <<<"$t"
       "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1      # every browser suite starts from a fresh seed
       BO_VIEWPORT="${vp:-1280x900}" run_node "e2e/$name#$run" "$DIR/e2e/$file"

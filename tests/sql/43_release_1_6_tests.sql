@@ -440,8 +440,13 @@ reset role;
 select test.chk(:'r5'::jsonb->>'status' = 'ok' and (select sum(amount) = 302.94 from refunds where sale_id = '16000000-0000-0000-0000-000000000013') and (select status = 'REFUNDED' from sales where id = '16000000-0000-0000-0000-000000000013'),
   'ZR: both lines refunded = exactly what was paid (302.94), sale REFUNDED', :'r5' || (select status from sales where id = '16000000-0000-0000-0000-000000000013'));
 -- tax on top (sale 17, paid 315): the two shares never add up to more than was paid.
--- OPEN FINDING (Z, 2026-11-13, not asserted here because contract B gives this formula): the Senior line's share is 140.00 but the
--- customer paid 132.00 for it (120 + 12 service; no tax); the other line's share is 175.00 against 183.00 paid. See the gate report.
+-- Z finding (2026-11-13, CLAUDE.md security decision 6: a partial refund gives back what the customer actually paid for
+-- those items): the Senior line was paid 132.00 (120 + 12 service, no tax) but the contract-B formula gives 140.00; the other
+-- line was paid 183.00 (150 + 18 tax + 15 service) and gets 175.00. Fails until _refund_items_cap / refundAmountForItems
+-- count the tax only on the lines that carried it.
+select test.chk(public._refund_items_cap(s, gen_random_uuid(), '[{"sale_item_id":"e1600000-0000-0000-0000-000000000017","quantity":1}]', 315) between 131.98 and 132.02,
+  'ZR: tax on top: the Senior line''s refund share = what was paid for it (132.00: no tax on it)',
+  public._refund_items_cap(s, gen_random_uuid(), '[{"sale_item_id":"e1600000-0000-0000-0000-000000000017","quantity":1}]', 315)::text) from sales s where s.id = '16000000-0000-0000-0000-000000000017';
 select test.chk(public._refund_items_cap(s, gen_random_uuid(), '[{"sale_item_id":"e1600000-0000-0000-0000-000000000017","quantity":1}]', 315)
   + public._refund_items_cap(s, gen_random_uuid(), '[{"sale_item_id":"e1600000-0000-0000-0000-000000000018","quantity":1}]', 315) <= 315.00,
   'ZR: tax on top: the two lines'' refund shares together are not above what was paid (315.00)') from sales s where s.id = '16000000-0000-0000-0000-000000000017';

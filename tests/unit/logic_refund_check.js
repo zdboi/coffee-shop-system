@@ -262,7 +262,9 @@ eq(refundLeft(null, 0), 0, 'refundLeft: no sale -> 0');
   ok(/Cash received/.test(html), 'receipt: "Cash received"');
   ok(/Ana &lt;b&gt;/.test(html), 'receipt: cashier name still escaped');
   const h2 = receiptHtml({transaction_number: 'T-2', transaction_date: '2026-10-12T02:00:00Z', status: 'PARTIALLY_REFUNDED', subtotal: 1, grand_total: 1}, [], [{method: 'ODD<x>', amount: 1}]);
-  ok(/Payment \(ODD&lt;x&gt;\)/.test(h2), 'receipt: unknown payment method shown escaped');
+  // 1.6 (owner decision B4; changed by Z 2026-11-13, needs C's approval): an id that is not in the shop's list is shown tidied
+  // ("ODD<x>" -> "Odd<x>", paymentMethodLabel), still escaped. Was /Payment \(ODD&lt;x&gt;\)/.
+  ok(/Payment \(Odd&lt;x&gt;\)/.test(h2) && !/<x>/.test(h2), 'receipt: unknown payment method shown tidied and escaped');
 }
 
 console.log('\nALL ' + pass + ' CHECKS PASSED');
