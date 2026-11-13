@@ -323,3 +323,9 @@ Owner: **don't start 1.3 until I say so.**
 - Owner: "put the necessary and useful bits/audit in Z's instruction. ONLY THE BENEFICIAL ONES. Adjust it to our needs if needed and discard useless prompts."
 - Done: `.claude/agents/z.md` Part 3 "full security audit" (sections A–H adapted to a static site + Supabase, per-item verdicts, rating, quick wins, owner actions). Dropped: framework/npm/webhook/OAuth/AI/CORS/SSRF items. Not run yet; the owner decides when.
 - Gaps already seen (for a later "security hardening" release, owner to decide): privacy notice on the QR page, two-step sign-in for the Back Office, a meta CSP, backups routine, Supabase dashboard settings, test accounts clean-up, security contact, error alerts.
+
+## Release 1.6.2: Back Office clean-up + security hardening (owner, 2026-11-14 01:52–02:01)
+- Owner: "ready Security Hardening release… in the mean time, I want to clean up the app, particularly the Back office as there seems to be too many tabs/tiles… some tabs can exist under one Tab, like the Transactions and QR orders."
+- Lead suggestions (26 menu items → 12 with tabs; Dashboard trimmed; repeated reports removed; one badge per item; remembered tab). Owner: "I like the new 12 items and the other clean-up ideas."
+- Decisions: **Sales calendar under Sales, as the first tab**; the 12-item grouping as proposed; **ship the clean-up and the security hardening together** (as 1.6.2) if they don't interfere (they don't).
+- Z's full audit of 1.6.1 started 2026-11-14 01:5x (baseline for the hardening plan).

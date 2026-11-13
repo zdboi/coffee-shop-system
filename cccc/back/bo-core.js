@@ -707,38 +707,53 @@ async function ensureStarterData(){
 
 /* ================= shell & navigation ================= */
 // ic = a line icon from icon() in ../shared/ui.js (never emoji)
+// 1.6.2 (owner, 2026-11-14): 12 menu items; each groups the old screens as tabs (same screens, same logic).
+// Every old route still works (links, #hash, tests) and lands on its tab.
 const BO_NAV = [
-  {group: 'Overview'},
-  {id: 'dashboard', label: 'Dashboard', ic: 'home'},
-  {id: 'calendar', label: 'Sales calendar', ic: 'clock'},
-  {id: 'transactions', label: 'Transactions', ic: 'receipt', badge: 'needs_review'},
-  {id: 'qrOrders', label: 'QR orders', ic: 'qr', badge: 'open_qr_orders'},
-  {id: 'customers', label: 'Customers', ic: 'users'},
+  {group: 'Daily'},
+  {id: 'dashboard', label: 'Dashboard', ic: 'home', tabs: ['dashboard']},
+  {id: 'sales', label: 'Sales', ic: 'receipt', tabs: ['calendar', 'transactions', 'qrOrders'], badges: ['needs_review', 'open_qr_orders']},
+  {id: 'customersHub', label: 'Customers', ic: 'users', tabs: ['customers']},
   {group: 'Kitchen & stock'},
-  {id: 'ingredients', label: 'Ingredients', ic: 'box'},
-  {id: 'purchases', label: 'Purchases', ic: 'inbox'},
-  {id: 'production', label: 'Production', ic: 'refresh'},
-  {id: 'stockCounts', label: 'Stock counts', ic: 'check'},
-  {id: 'rnd', label: 'R&D log', ic: 'edit'},
-  {id: 'recipes', label: 'Recipes & menu', ic: 'cup'},
-  {id: 'inventory', label: 'Inventory', ic: 'grid'},
-  {id: 'wasteReport', label: 'Waste report', ic: 'trash'},
-  {id: 'costing', label: 'Costing', ic: 'cash'},
-  {id: 'suppliers', label: 'Suppliers', ic: 'download'},
+  {id: 'menu', label: 'Menu', ic: 'cup', tabs: ['recipes', 'optionLibrary', 'costing']},
+  {id: 'stock', label: 'Stock', ic: 'box', tabs: ['ingredients', 'inventory', 'stockCounts', 'wasteReport']},
+  {id: 'buying', label: 'Buying', ic: 'inbox', tabs: ['purchases', 'suppliers']},
+  {id: 'kitchen', label: 'Kitchen', ic: 'refresh', tabs: ['production', 'rnd']},
   {group: 'Money'},
-  {id: 'expenses', label: 'Expenses', ic: 'card'},
-  {id: 'netIncome', label: 'Accounting overview', ic: 'star'},
-  {id: 'seniorReport', label: 'Senior / PWD report', ic: 'user'},
-  {id: 'investors', label: 'Investors & start-up', ic: 'users'},
-  {id: 'reports', label: 'Reports', ic: 'chart'},
+  {id: 'money', label: 'Money', ic: 'cash', tabs: ['netIncome', 'expenses', 'seniorReport', 'investors']},
+  {id: 'reportsHub', label: 'Reports', ic: 'chart', tabs: ['reports']},
   {group: 'Setup'},
-  {id: 'tables', label: 'Tables & QR codes', ic: 'map'},
-  {id: 'staff', label: 'Staff & PINs', ic: 'user'},
-  {id: 'devices', label: 'Devices', ic: 'phone'},
-  {id: 'auditLog', label: 'Audit log', ic: 'search'},
-  {id: 'settings', label: 'Settings', ic: 'settings'},
-  {id: 'backup', label: 'Backup & import', ic: 'upload'},
+  {id: 'people', label: 'Staff & devices', ic: 'user', tabs: ['staff', 'devices']},
+  {id: 'shopSetup', label: 'Shop setup', ic: 'settings', tabs: ['settings', 'tables']},
+  {id: 'records', label: 'Records', ic: 'search', tabs: ['auditLog', 'backup']},
 ];
+// Short tab names (the page title keeps the full name).
+const BO_TAB_LABELS = {calendar: 'Sales calendar', transactions: 'Transactions', qrOrders: 'QR orders',
+  recipes: 'Recipes', optionLibrary: 'Options library', costing: 'Costing',
+  ingredients: 'Ingredients', inventory: 'Stock levels', stockCounts: 'Stock counts', wasteReport: 'Waste',
+  purchases: 'Purchases', suppliers: 'Suppliers', production: 'Production', rnd: 'R&D log',
+  netIncome: 'Accounting overview', expenses: 'Expenses', seniorReport: 'Senior / PWD', investors: 'Investors & start-up',
+  staff: 'Staff & PINs', devices: 'Devices', settings: 'Settings', tables: 'Tables & QR codes',
+  auditLog: 'Audit log', backup: 'Backup & import'};
+const BO_HUBS = BO_NAV.filter(n => n.tabs);
+// The menu item a screen belongs to (detail screens follow their list's tab).
+function boHubFor(route){
+  const def = BO_ROUTES[route];
+  const tab = def && def.nav ? def.nav : route;
+  return BO_HUBS.find(h => h.tabs.includes(tab)) || BO_HUBS.find(h => h.tabs.includes(route)) || null;
+}
+function boTabFor(route){ const def = BO_ROUTES[route]; return def && def.nav ? def.nav : route; }
+// The tab a menu item opens: the one used last on this browser, else the first.
+function boLastTab(hub){
+  let t = null;
+  try{ t = localStorage.getItem('cccc.bo.tab.' + hub.id); }catch(e){}
+  return hub.tabs.includes(t) ? t : hub.tabs[0];
+}
+function boRememberTab(hub, tab){ try{ localStorage.setItem('cccc.bo.tab.' + hub.id, tab); }catch(e){} }
+function boHubTabsHtml(hub, active){
+  if(!hub || hub.tabs.length < 2) return '';
+  return `<div class="seg hub-tabs" role="tablist" aria-label="${esc(hub.label)}">${hub.tabs.map(t => `<button type="button" class="seg-btn ${t === active ? 'active' : ''}" role="tab" aria-selected="${t === active}" data-hubtab="${t}">${esc(BO_TAB_LABELS[t] || (BO_ROUTES[t] || {}).title || t)}</button>`).join('')}</div>`;
+}
 // The three-line menu button (no such icon in ui.js yet; same drawing style as icon()).
 const BO_MENU_ICON = '<svg class="cc-icon" aria-hidden="true" focusable="false" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
 // Sign-in cards: the brand tile (or the shop's own logo with the Custom theme).
@@ -758,7 +773,7 @@ const BO_ROUTES = {
   rnd: {title: 'R&D log', render: () => renderRnd()},                                               // bo-counts.js (1.5, B8)
   recipes: {title: 'Recipes & menu', render: () => renderRecipes()},
   recipeDetail: {title: 'Recipe', param: true, nav: 'recipes', render: (p) => renderRecipeDetail(p)},
-  optionLibrary: {title: 'Options library', nav: 'recipes', render: () => renderOptionLibrary()},     // bo-library.js (1.4, A9)
+  optionLibrary: {title: 'Options library', render: () => renderOptionLibrary()},     // bo-library.js (1.4, A9)
   wasteReport: {title: 'Waste report', render: () => renderWasteReport()},                          // bo-money.js (1.4, A15)
   expenses: {title: 'Expenses', render: () => renderExpenses()},                                    // bo-money.js (1.4, A11)
   netIncome: {title: 'Accounting overview', render: () => renderAccounting()},                      // bo-acct.js (1.6, B1; month-only Net income on an older database)
@@ -788,7 +803,7 @@ function renderShell(){
       <div class="brand-text">${brandWordmarkHtml('dark', {className: 'brand-wordmark'})}<small>Back Office${own ? ' · <span class="brand-shop">' + esc(shop) + '</span>' : ''}</small></div></div>
     <nav id="nav" aria-label="Back Office menu">${BO_NAV.map(n => n.group
       ? `<div class="nav-group">${esc(n.group)}</div>`
-      : `<div class="nav-item" data-route="${n.id}" tabindex="0" role="link" title="${esc(n.label)}"><span class="ic">${icon(n.ic)}</span><span class="label">${esc(n.label)}</span>${n.badge ? `<span class="nav-badge" data-badge="${n.badge}" style="display:none;">0</span>` : ''}</div>`).join('')}</nav>
+      : `<div class="nav-item" data-route="${n.id}" tabindex="0" role="link" title="${esc(n.label)}"><span class="ic">${icon(n.ic)}</span><span class="label">${esc(n.label)}</span>${n.badges ? `<span class="nav-badge" data-badge="${n.badges.join(' ')}" style="display:none;">0</span>` : ''}</div>`).join('')}</nav>
     <div id="sidebar-foot">
       <div class="who" title="${esc(boActorName())}">${icon('user', {size: 18})} <span>${esc(boActorName())}</span></div>
       <span id="offline-pill" class="online"><span class="dot"></span> Online</span>
@@ -809,7 +824,7 @@ function renderShell(){
 function closeNavDrawer(){ document.body.classList.remove('nav-open'); }
 function updateNavBadges(){
   document.querySelectorAll('[data-badge]').forEach(b => {
-    const n = Number(BO.counts[b.dataset.badge]) || 0;
+    const n = b.dataset.badge.split(' ').reduce((t, k) => t + (Number(BO.counts[k]) || 0), 0);
     b.textContent = n; b.style.display = n ? 'inline-flex' : 'none';
   });
 }
@@ -837,6 +852,9 @@ async function signOutBackOffice(){
 }
 
 function navigate(route, param){
+  // a menu item (Sales, Stock…) opens its last-used tab
+  const hubItem = BO_HUBS.find(h => h.id === route);
+  if(hubItem && !BO_ROUTES[route]) route = boLastTab(hubItem);
   const def = BO_ROUTES[route] || BO_ROUTES.dashboard;
   route = BO_ROUTES[route] ? route : 'dashboard';
   // Floor plan with unsaved changes (bo-floor.js): ask before leaving the Tables screen.
@@ -852,9 +870,17 @@ function navigate(route, param){
   BO.salesCache.clear();      // opening a screen always shows fresh sales; the cache only serves filter changes on it
   state.route = route; state.routeParam = param == null ? null : param;
   calTip(null);
-  const navId = def.nav || route;
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.route === navId));
-  document.getElementById('topbar-title').textContent = def.title;
+  const hub = boHubFor(route);
+  const tab = boTabFor(route);
+  if(hub && !def.param) boRememberTab(hub, tab);
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', !!hub && n.dataset.route === hub.id));
+  document.getElementById('topbar-title').textContent = hub && hub.tabs.length > 1 && !def.param ? hub.label : def.title;
+  const tabsBox = document.getElementById('hub-tabs');
+  if(tabsBox){
+    tabsBox.innerHTML = boHubTabsHtml(hub, tab);
+    tabsBox.hidden = !tabsBox.innerHTML;
+    tabsBox.querySelectorAll('[data-hubtab]').forEach(b => b.onclick = () => navigate(b.dataset.hubtab));
+  }
   setTopbarActions('');
   const c = document.getElementById('content');
   c.className = '';
@@ -955,20 +981,12 @@ function renderDashboard(){
   const today = shopTodayKey();
   const monthStartKey = keyMonthStart(today);
   const inMonth = (v) => dayValue(v) >= monthStartKey;
-  const purchasesThisMonth = state.purchases.filter(p => inMonth(p.purchase_date));
-  const purchaseTotal = purchasesThisMonth.reduce((s, p) => s + num(p.total_price), 0);
   const wasteThisMonth = state.waste.filter(w => inMonth(w.date));
   const wasteCost = wasteThisMonth.reduce((s, w) => s + num(w.quantity) * (ingredientCosting(w.ingredient_id).current || 0), 0);
-  const productionToday = state.productionBatches.filter(b => dayValue(b.production_date) === today);
-  const productionThisMonth = state.productionBatches.filter(b => inMonth(b.production_date));
-  const productionCostThisMonth = productionThisMonth.reduce((s, b) => s + num(b.raw_cost_total), 0);
-  const productionWasteThisMonth = productionThisMonth.reduce((s, b) => s + Math.max(0, num(b.expected_yield) - num(b.actual_yield)) * num(b.actual_cost_per_unit), 0);
 
   const activeRecipes = state.recipes.filter(r => r.active !== false);
   const recipeStats = activeRecipes.map(r => Object.assign({recipe: r}, recipeMetrics(r)));
   const avgFoodCost = recipeStats.length ? recipeStats.reduce((s, r) => s + r.foodCostPct, 0) / recipeStats.length : 0;
-  const highestCost = recipeStats.slice().sort((a, b) => b.cost - a.cost)[0];
-  const highestProfit = recipeStats.slice().sort((a, b) => b.profit - a.profit)[0];
   const recentPurchases = state.purchases.slice().sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 5);
   const recentRecipes = state.recipes.slice().sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at))).slice(0, 5);
   const recentProduction = state.productionBatches.slice().sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 5);
@@ -986,22 +1004,10 @@ function renderDashboard(){
     </div>
     <div class="section-title">Stock &amp; menu</div>
     <div class="grid grid-4">
-      ${statCard('Total ingredients', activeIngredients.length, `${rawActive.length} raw · ${producedActive.length} produced`)}
-      ${statCard('Total recipes', activeRecipes.length, `${state.recipes.length} total`)}
-      ${statCard('Inventory value', fmtMoney(invValue), 'at current cost')}
-      ${statCard('Low stock ingredients', `${lowStockRaw.length} / ${outStockRaw.length}`, 'low / out of stock (raw)')}
-    </div>
-    <div class="grid grid-4" style="margin-top:16px;">
-      ${statCard('Low stock produced items', `${lowStockProduced.length} / ${outStockProduced.length}`, 'low / out of stock (house-made)')}
-      ${statCard('Production today', productionToday.length, `${productionThisMonth.length} this month`)}
-      ${statCard('Purchases this month', fmtMoney(purchaseTotal), plural(purchasesThisMonth.length, 'purchase'))}
-      ${statCard('Avg. food cost %', fmtNum(avgFoodCost, 1) + '%', 'across active recipes')}
-    </div>
-    <div class="grid grid-4" style="margin-top:16px;">
-      ${statCard('Production cost this month', fmtMoney(productionCostThisMonth), plural(productionThisMonth.length, 'batch', 'batches'))}
-      ${statCard('Production waste this month', fmtMoney(productionWasteThisMonth), 'yield loss, at cost')}
-      ${statCard('Waste this month', fmtMoney(wasteCost), plural(wasteThisMonth.length, 'ingredient entry', 'ingredient entries'))}
-      ${statCard('Highest cost recipe', highestCost ? esc(highestCost.recipe.name) : '—', highestCost ? fmtMoney(highestCost.cost) : '')}
+      ${statCard('Low stock', `${lowStockRaw.length + lowStockProduced.length} / ${outStockRaw.length + outStockProduced.length}`, 'low / out of stock · <a class="linklike" data-go="inventory">see stock levels</a>')}
+      ${statCard('Inventory value', fmtMoney(invValue), 'at current cost · <a class="linklike" data-go="inventory">see stock</a>')}
+      ${statCard('Waste this month', fmtMoney(wasteCost), plural(wasteThisMonth.length, 'entry', 'entries') + ' · <a class="linklike" data-go="wasteReport">see waste</a>')}
+      ${statCard('Avg. food cost %', fmtNum(avgFoodCost, 1) + '%', 'across active recipes · <a class="linklike" data-go="costing">see costing</a>')}
     </div>
     ${(lowStockProduced.length || outStockProduced.length) ? `
       <div class="section-title">${icon('alert')} Produced items running low</div>
@@ -1028,7 +1034,7 @@ function renderDashboard(){
         ${recentRecipes.length ? recentRecipes.map(r => `<div style="padding:8px 0;border-top:1px solid var(--beige);font-size:13.5px;"><a class="linklike" data-recipe="${esc(r.id)}">${esc(r.name)}</a> <span class="text-light">(${fmtShopDate(r.updated_at || r.created_at)})</span></div>`).join('') : emptyLine('No recipes yet')}
       </div>
     </div>
-    ${highestProfit ? `<div class="section-title">Highest profit recipe</div><div class="card"><b>${esc(highestProfit.recipe.name)}</b> — gross profit ${fmtMoney(highestProfit.profit)} on a selling price of ${fmtMoney(highestProfit.recipe.selling_price)}</div>` : ''}`;
+`;
   wireDashboardLinks(content);
   wirePinUpdateBanner(content);
   wirePinLockoutAlert(content);

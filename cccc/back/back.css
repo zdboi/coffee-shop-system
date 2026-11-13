@@ -611,3 +611,11 @@ tr.wr-flag-row td{background:var(--cc-warning-tint);}
 /* the cards next to the calendar wrap to fit their column (no cut-off cards) */
 .cal-details .cal-kpis{grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));}
 .cal-details .stat-card .value, .cal-details .stat .value{white-space:nowrap;}
+
+/* 1.6.2: tabs under the top bar for menu items that group several screens */
+#hub-tabs{padding:4px 28px 0;flex:0 0 auto;}
+#hub-tabs[hidden]{display:none;}
+#hub-tabs .hub-tabs{display:flex;width:max-content;max-width:100%;overflow-x:auto;scrollbar-width:thin;}
+#hub-tabs .seg-btn{white-space:nowrap;}
+@media (max-width: 900px){ #hub-tabs{padding:4px 20px 0;} }
+@media (max-width: 600px){ #hub-tabs{padding:4px 14px 0;} #hub-tabs .hub-tabs{width:100%;} }
