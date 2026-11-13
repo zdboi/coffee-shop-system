@@ -584,3 +584,73 @@ select test.pm('[' || :'cash' || ',{"id":"X1","label":"<b>x</b>","active":true,"
 select test.chk(:'good' = 'NO ERROR' and (select payment_methods->1 = '{"id":"X1","label":"<b>x</b>","active":true,"reference":true,"charge_type":"PERCENT","charge_value":25,"charge_default":"ADD"}'::jsonb from settings where business_id = :'biz'), 'ZS: a good list is saved in the standard shape (unknown keys dropped; labels are plain text for the pages to escape)', (select payment_methods::text from settings where business_id = :'biz'));
 update settings set payment_methods = :'keep' where business_id = :'biz';
 update ingredients set count_at_close = false where business_id = :'biz';
+
+-- =====================================================================================================
+-- Part 3: B2 investors + start-up costs (013 section 7b): the database work's 12 checks + Z's
+-- =====================================================================================================
+-- ============================ I. investors + start-up costs (B2) ============================
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select (public.accounting_report(date_trunc('month', now() at time zone 'Asia/Manila')::date, (now() at time zone 'Asia/Manila')::date)->'totals'->>'net_income') as ni_before \gset
+select (public.net_income_report(date_trunc('month', now() at time zone 'Asia/Manila')::date)->>'net_income') as nir_before \gset
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000001","name":"Mama Lorna","amount":50000,"invested_on":"2026-08-01"}},
+  {"op":"upsert","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000002","name":"Jake","amount":30000}},
+  {"op":"upsert","table":"startup_costs","row":{"id":"16c00000-0000-0000-0000-000000000011","name":"Milesto EM19-M4","amount":29990,"category":"EQUIPMENT","cost_date":"2026-08-05"}},
+  {"op":"upsert","table":"startup_costs","row":{"id":"16c00000-0000-0000-0000-000000000012","name":"sent to jek","amount":3000,"category":"SENT_TO_STAFF"}}]')$$) = 'NO ERROR', 'I: owner adds 2 investors and 2 start-up costs');
+select test.chk((select count(*) = 2 from public.investors) and (select sum(amount) = 32990 from public.startup_costs), 'I: owner reads them back');
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000003","name":" mama lorna ","amount":1}}]')$$) like '%investors_name_key%' or test.err($$select public.apply_changes('[{"op":"upsert","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000003","name":" mama lorna ","amount":1}}]')$$) like '%duplicate%', 'I: the same name twice is refused');
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000004","name":"Zero","amount":0}}]')$$) like '%amount_check%', 'I: amount 0 refused');
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"startup_costs","row":{"id":"16c00000-0000-0000-0000-000000000013","name":"x","amount":5,"category":"PARTY"}}]')$$) like '%category_check%', 'I: unknown category refused');
+select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000002","name":"Jake Cruz","amount":35000}},{"op":"delete","table":"startup_costs","id":"16c00000-0000-0000-0000-000000000012"}]')$$) = 'NO ERROR', 'I: edit + delete accepted');
+select test.chk((select amount = 35000 and name = 'Jake Cruz' from public.investors where id = '16c00000-0000-0000-0000-000000000002') and (select count(*) = 1 from public.startup_costs), 'I: owner edits an investor and deletes a cost');
+reset role;
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.chk((public.accounting_report(date_trunc('month', now() at time zone 'Asia/Manila')::date, (now() at time zone 'Asia/Manila')::date)->'totals'->>'net_income') = :'ni_before'
+  and (public.net_income_report(date_trunc('month', now() at time zone 'Asia/Manila')::date)->>'net_income') = :'nir_before',
+  'I: start-up costs change neither accounting_report''s nor net_income_report''s net income (Z: replaces an always-true check)');
+reset role;
+-- a counter and another shop see nothing; nobody signed in sees nothing
+select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
+select test.chk((select count(*) = 0 from public.investors) and (select count(*) = 0 from public.startup_costs), 'I: a counter reads no investors or start-up costs');
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000005","name":"Hacker","amount":1}}]')$$) <> 'NO ERROR', 'I: a counter can''t add an investor');
+reset role;
+select test.login('00000000-0000-0000-0000-0000000000b1'); set role authenticated;
+select test.chk((select count(*) = 0 from public.investors), 'I: another shop''s owner reads none');
+select test.chk(test.err($$update public.investors set amount = 1$$) = 'NO ERROR' and (select count(*) = 0 from public.investors where amount = 1), 'I: another shop''s owner changes none');
+reset role;
+select test.login(null); set role anon;
+select test.chk(test.err($$select count(*) from public.investors$$) like '%permission denied%' and test.err($$select count(*) from public.startup_costs$$) like '%permission denied%', 'I: no access without signing in');
+reset role;
+select test.chk((select amount = 35000 from investors where id = '16c00000-0000-0000-0000-000000000002'), 'I: still 35000 after the other shop''s try');
+-- ---- Z (2026-11-13): investors + start-up costs, more refusals and rights
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000021","name":"Big","amount":100000000.01}}]')$$) like '%amount_check%'
+  and test.err($$select public.apply_changes('[{"op":"upsert","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000021","name":"Big","amount":"NaN"}}]')$$) <> 'NO ERROR'
+  and test.err($$select public.apply_changes('[{"op":"upsert","table":"startup_costs","row":{"id":"16c00000-0000-0000-0000-000000000022","name":"Big","amount":"Infinity","category":"OTHER"}}]')$$) <> 'NO ERROR'
+  and test.err($$select public.apply_changes('[{"op":"upsert","table":"startup_costs","row":{"id":"16c00000-0000-0000-0000-000000000022","name":"Neg","amount":-5,"category":"OTHER"}}]')$$) <> 'NO ERROR',
+  'ZI: amounts above ₱100,000,000, NaN, Infinity and negative are refused');
+select test.chk(test.err(format($$select public.apply_changes('[{"op":"upsert","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000023","name":"A%sB","amount":1}}]')$$, '\u0007')) like '%name_check%'
+  and test.err($$select public.apply_changes('[{"op":"upsert","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000023","name":"   ","amount":1}}]')$$) like '%name_check%'
+  and test.err(format($$select public.apply_changes('[{"op":"upsert","table":"startup_costs","row":{"id":"16c00000-0000-0000-0000-000000000024","name":"x","amount":1,"notes":"%s"}}]')$$, repeat('n', 501))) like '%notes_check%',
+  'ZI: a name with a control character or only spaces, and notes over 500 characters, are refused');
+-- another shop's owner can't put a row into THIS shop (apply_changes sets their own shop)
+reset role;
+select test.login('00000000-0000-0000-0000-0000000000b1'); set role authenticated;
+select test.err(format($$select public.apply_changes('[{"op":"upsert","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000025","business_id":"%s","name":"Planted","amount":7}}]')$$, :'biz')) as planted \gset
+select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"investors","row":{"id":"16c00000-0000-0000-0000-000000000002","amount":1}}]')$$) <> 'NO ERROR'
+  or (select count(*) = 0 from public.investors where id = '16c00000-0000-0000-0000-000000000002'), 'ZI: another shop''s owner can''t edit this shop''s investor through apply_changes');
+reset role;
+select test.chk((select count(*) = 0 from investors where id = '16c00000-0000-0000-0000-000000000025' and business_id = :'biz')
+  and (select amount = 35000 from investors where id = '16c00000-0000-0000-0000-000000000002'), 'ZI: ... nor plant a row in this shop (row lands in their own shop or is refused)', :'planted');
+-- a counter: no direct read / write either
+select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
+select test.chk(test.err(format($$insert into public.investors(business_id, name, amount) values ('%s', 'Direct', 1)$$, :'biz')) <> 'NO ERROR'
+  and test.err($$insert into public.startup_costs(name, amount) values ('Direct', 1)$$) <> 'NO ERROR', 'ZI: a counter can''t insert into either table directly');
+with u as (update public.startup_costs set amount = 1 returning 1) select test.chk(count(*) = 0, 'ZI: a counter can''t update start-up costs') from u;
+with d as (delete from public.investors returning 1) select test.chk(count(*) = 0, 'ZI: a counter can''t delete investors') from d;
+select test.chk(not (public.fo_bootstrap('device-key-0001-abcdef')::text ~ 'Mama Lorna|Milesto'), 'ZI: fo_bootstrap carries no investor or start-up cost');
+reset role;
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.chk(not has_table_privilege('anon', 'public.investors', 'select') and not has_table_privilege('anon', 'public.startup_costs', 'insert')
+  and (select bool_and(c.relrowsecurity) from pg_class c where c.oid in ('public.investors'::regclass, 'public.startup_costs'::regclass)), 'ZI: RLS on both tables; no rights for anon');
+reset role;
+select test.chk((select count(*) from investors where business_id = :'biz') = 2 and (select count(*) from startup_costs where business_id = :'biz') = 1, 'ZI: after all the tries: this shop still has 2 investors and 1 start-up cost');
