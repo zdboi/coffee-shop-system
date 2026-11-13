@@ -309,3 +309,8 @@ Owner: **don't start 1.3 until I say so.**
 - Built as **1.6.1** with database script **014** (013 was already run).
 - Owner (15:33): "the calendar in sales calendar is a little bit awkwardly small… it cant even fit the numbers properly." → 1.6.1: calendar column about half the page (min 480px), taller day boxes, bigger day numbers and amounts that never wrap; cards beside it wrap to fit; below 1,150px wide the calendar goes full width above the details (not pinned). CSS only (back.css).
 - Owner (15:35): "you can put the tiles, texts, and data below the calendar." → 1.6.1: calendar full width on top, all cards and the day-by-day table below it. The calendar is no longer pinned while scrolling (this replaces the B18 "fixed calendar" layout; owner's newer instruction).
+
+## Saved ideas for later (owner, 2026-11-13 21:09)
+- Owner asked about cloning the POS for a client restaurant (20:56): **standalone copy (option 2)**, no loyalty card, so no customer data. Three-way system: **BOH** kitchen inventory with production; **FOH** bar inventory, POS, QR ordering; **Management** overview of all + accounting. Lead answered what carries over and what is new (see RESUME "Saved ideas").
+- Owner asked (21:06): "can other people currently copy my coffee shop app?" Lead: most likely yes, the repo is public for free GitHub Pages; data is safe; options: LICENSE file, private repo + Cloudflare Pages, or private repo + GitHub Pro.
+- Owner (21:09): **"Save this Idea. I'll come back to it later."** → both ideas saved; nothing to build until the owner says so.

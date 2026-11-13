@@ -143,6 +143,9 @@ Full list with decisions: `docs/owner-feedback.md` (sections "Release 1.3 …").
   - **Optional:** T3, T4, Senior/PWD, drop `profiles.pin_hash`.
 - **Menu photos (A1):** already exist; no change (owner).
 - **Later, plan first:** RPG-style loyalty.
+- **Saved ideas (owner, 2026-11-13, "I'll come back to it later"):**
+  - **Protect the code:** the GitHub repository is most likely public (needed for free GitHub Pages), so anyone can copy the app code (data stays safe in Supabase). Options: (1) add an "All rights reserved" LICENSE file (free, legal only); (2) make the repo private and host on Cloudflare Pages (free; web address changes, so QR codes and paired counters must be updated); (3) make it private and keep GitHub Pages with GitHub Pro (~$4/month, same address). Lead suggests 2 or 3 before selling the system to others. Fits with the planned move to the business GitHub account + nicer web address.
+  - **Client restaurant (standalone copy, option 2):** separate repo + Supabase project, no loyalty / no customer data. Three-way: BOH = kitchen inventory + production; FOH = bar inventory, POS, QR ordering; Management = overview + accounting. New: stock locations + transfers, Kitchen/Floor/Management roles, production batches, station routing + kitchen screen, tables / tabs / split bills, QR at the table, food cost % and supplier bills. Phases: copy + rebrand → stock locations/production → tables + kitchen screen → QR table ordering → accounting. Needs from owner: restaurant name, accounts, sample menu with recipes, service style, screen vs printed tickets; client's accountant to confirm BIR receipt needs. Not started.
 
 ## How the team works
 Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs/checkpoints.md`.
