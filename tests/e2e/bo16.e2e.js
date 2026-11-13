@@ -89,6 +89,19 @@ sql(`insert into senior_discount_records(business_id, sale_id, kind, holder_name
     ok(await page.$$eval('.cal-day.sel', x => x.length) === 2, 'both days marked');
     const pos = await page.evaluate(() => getComputedStyle(document.querySelector('.cal-fixed')).position);
     ok(pos === 'sticky', 'calendar stays on screen (sticky)');
+    // Z (1.6.1, bigger calendar, owner 2026-11-13): no day box, amount or card is cut off at 1366, 1920, 1024 and 768 px;
+    // sticky only from 1150 px wide (narrower: full width above the details, not pinned)
+    const overflow = () => page.evaluate(() => [...document.querySelectorAll('.cal-split .cal-day, .cal-details .stat-card, .cal-details .stat-card .value')]
+      .filter(el => el.offsetParent && el.scrollWidth > el.clientWidth + 1).map(el => (el.className + ' ' + el.textContent.trim()).slice(0, 60)));
+    const layout = {};
+    for(const w of [1366, 1920, 1024, 768]){
+      await page.setViewportSize({width: w, height: 900}); await page.waitForTimeout(400);
+      layout[w] = {pos: await page.evaluate(() => getComputedStyle(document.querySelector('.cal-fixed')).position), over: await overflow(),
+        sideways: await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)};
+    }
+    await page.setViewportSize({width: 1366, height: 900}); await page.waitForTimeout(300);
+    ok(layout[1366].pos === 'sticky' && layout[1920].pos === 'sticky' && layout[1024].pos === 'static' && layout[768].pos === 'static', 'Z: calendar sticky at 1366 / 1920, not at 1024 / 768 (stacked)', layout);
+    ok([1366, 1920, 1024, 768].every(w => layout[w].over.length === 0 && !layout[w].sideways), 'Z: no day box, card or amount cut off and no sideways scroll at 1366 / 1920 / 1024 / 768', layout);
     await page.screenshot({path: SH + 'calendar.png', fullPage: false});
     // ---- the same totals as the overview for that span
     await page.click('#cal-go-acct'); await page.waitForSelector('#ac-table', {timeout: 15000});
