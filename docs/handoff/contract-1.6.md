@@ -104,3 +104,6 @@ share = L × (G − T) / (S − V − Ds) + Lt × T / St (St = 0 → no tax part
 6. The Senior/PWD record, the report and the waived list take the cashier's name from `staff` by `cashier_id`.
 7. The thermal receipt masks the ID like the screen receipt (`maskIdNumber`).
 Left as is (owner only, pre-existing): editing `sale_items` of a finished sale through `apply_changes`; deleting a stock line leaves no movement trace. A voided Senior/PWD sale keeps its record (hidden from the report) until the sale is deleted.
+
+## Z recheck (2026-11-13): PASS
+140 suites, 9,044 checks, 0 failing. Approved expected-value changes: sql/43 Z1d (refused instead of flagged); e2e/money16 refund ₱53.12 / refunds ₱275.32 / net sales ₱491.35 / tax owed ₱13.20 (follow from fix 3; net income unchanged ₱388.25); bo16_investors paste over the limit is skipped; core16 receipt mask; error_codes_check lists NOT_A_NUMBER as internal (always answered as SALE_TOTALS_MISMATCH). Also noted: the owner deleting an old stock line doesn't make the item due (low, owner only).

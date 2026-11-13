@@ -173,3 +173,6 @@ Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs
 - DB: `cccc/supabase/013_release_1_6.sql` built from scratch template + 012 pieces by `scratchpad/w4/build013.py` (template `013_template.sql`). Edit the TEMPLATE/builder, then rebuild. My SQL checks: scratchpad/w4/db16-tests.sql via run16.sh (db_sec) = 90 pass.
 - Screens: counter (checkout methods + charge tick, Senior/PWD dialog, smart count), shared logic/printer/ui, Back Office bo-acct.js (Accounting overview, Senior/PWD report, Settings → Payments & discounts), span calendar in bo-sales.js, smart count box in bo-counts.js. Scratch browser checks: fo16-checks.js (15), bo16-checks.js (18), core16.js (16): all pass.
 - Z: security gate + full QA running (resumed after a usage stop). Next: fix Z findings, PR, checkpoint, owner runs 013.
+
+## 2026-11-13 15:xx: RELEASE 1.6 READY (checkpoint 22)
+- Z PASS after gate fixes (eeac8b8). PR opened for the owner; owner runs 013 then merges (docs/RELEASE_1.6.md). After that: freeze 013 (next 014), checkpoint 23 live, Project changelog, Obsidian.

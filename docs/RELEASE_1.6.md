@@ -4,7 +4,7 @@ The "Money" update (Wave 4). It takes about 20 minutes. **Do it when the shop is
 
 Your current live version (1.5) is saved as the **last working version** (`docs/checkpoints.md`). If anything goes wrong, tell C: **"Go back to the last working version."**
 
-> Status: **being checked by Z.** Don't start until C sends you the pull request link and says it's ready.
+> Status: **ready** (Z: PASS on 2026-11-13, 9,044 checks, none failing).
 
 ## What's new
 

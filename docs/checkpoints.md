@@ -46,6 +46,7 @@ Older working versions stay in the table below, so you can go back further if ne
 | 19 | **Release 1.4.2 live** | 2026-11-10 10:54 | You merged pull request #7 (no database script). This is now the last working version (merge commit `8b522f2`). |
 | 20 | **Release 1.5 ready** (Wave 3) | 2026-11-12 | QR guest/registered and usernames, table limits, one phone per account, stamp card cycling with history, Barista drink, blind stock count, R&D log, half/double production, TCO batches with a "To return" list, waste edit/delete, archived customers. Database script 012. Z (independent security + QA): PASS; 82 suites / 5,396 checks, 0 failing. Waiting for you: `docs/RELEASE_1.5.md`. |
 | 21 | **Release 1.5 live** | 2026-11-12 17:10 | You ran `012_release_1_5.sql` ("Success") and merged pull request #8. This is now the last working version (merge commit `976a61f`). |
+| 22 | **Release 1.6 ready** (Wave 4 "Money") | 2026-11-13 | Payment methods + charges (add or waive), Senior/PWD discount with report, smart stock count, Accounting overview, span Sales calendar, investors & start-up costs, Weighs on bought items. Z: PASS (140 suites, 9,044 checks, 0 failing). Database script `013_release_1_6.sql`. Waiting for you: `docs/RELEASE_1.6.md`. Last working version stays 1.5 (`976a61f`) until you merge. |
 
 ## Look at or download a checkpoint
 

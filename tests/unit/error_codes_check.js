@@ -17,7 +17,9 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 // something a person can cause), so a generic "Something went wrong" is acceptable:
 const INTERNAL = new Set(['BAD_CONFLICT_MODE', 'UNKNOWN_OP', 'BAD_ACTION', 'BAD_OP', 'BAD_COLUMN', 'TABLE_NOT_ALLOWED', 'BAD_PURPOSE',
   'BAD_DEVICE_KEY',      // the counter always makes a 36-character key
-  'ALREADY_A_USER']);    // the counter always pairs with its own anonymous login
+  'ALREADY_A_USER',      // the counter always pairs with its own anonymous login
+  'NOT_A_NUMBER']);      // 1.6 (013 _num_strict, Z 2026-11-13, needs C's approval): raised with SQLSTATE 22P02 and always caught by
+                         // _check_sale_totals' own "exception when data_exception" -> SALE_TOTALS_MISMATCH (suite 43 Z1/Z1d/Z5 check the answer)
 
 // 004, then every later numbered script (005, 006, 007...): a function re-created in a later script
 // replaces the earlier definition (as on the database).
