@@ -307,3 +307,4 @@ Owner: **don't start 1.3 until I say so.**
 - Owner: "the investor's percentage to the net income is only 30%, 20% goes to the managers (Jake & I, yes we also get from the previous 30% aside from this), 50% goes to the coffee shop".
 - Decisions: managers' 20% **split equally** (10% each); the split (30 / 20 / 50) and the managers' names are **editable** in the Back Office; investors' 30% still follows each investor's amount; managers also get their investor part.
 - Built as **1.6.1** with database script **014** (013 was already run).
+- Owner (15:33): "the calendar in sales calendar is a little bit awkwardly small… it cant even fit the numbers properly." → 1.6.1: calendar column about half the page (min 480px), taller day boxes, bigger day numbers and amounts that never wrap; cards beside it wrap to fit; below 1,150px wide the calendar goes full width above the details (not pinned). CSS only (back.css).
