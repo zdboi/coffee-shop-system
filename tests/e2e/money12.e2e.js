@@ -228,10 +228,12 @@ async function manilaClock(){
   const xrow = {};
   try{
     await go('pos'); await go('shift'); await fo.waitForSelector('.drawer-card .drow.total');
+    // 1.6 (owner decisions B4 + B18; changed by Z 2026-11-13, needs C's approval): the counter shows one card per payment method
+    // ("GCash"), the X-report / Back Office shift view say "Other methods" (was "GCash / Maya / Other"), no "Average sale" card.
     const stat = (label) => fo.$$eval('.stat-card', (cards, l) => { const c = cards.find(x => x.querySelector('.label') && x.querySelector('.label').textContent.trim() === l); return c ? c.querySelector('.value').textContent : null; }, label);
     ok(eq2(money(await stat('Sales')), X.sales) && eq2(money(await stat('Refunds')), X.refundD) && eq2(money(await stat('Net sales')), X.net) && Number(await stat('Transactions')) === 4,
       `counter shift screen: Sales ${peso(X.sales)}, Refunds ${peso(X.refundD)}, Net ${peso(X.net)}, 4 transactions`, [await stat('Sales'), await stat('Refunds'), await stat('Net sales'), await stat('Transactions')]);
-    ok(eq2(money(await stat('Cash')), X.cash) && eq2(money(await stat('GCash / Maya / Other')), X.other), `counter payment breakdown: cash ${peso(X.cash)}, GCash ${peso(X.other)}`, [await stat('Cash'), await stat('GCash / Maya / Other')]);
+    ok(eq2(money(await stat('Cash')), X.cash) && eq2(money(await stat('GCash')), X.other), `counter payment breakdown: cash ${peso(X.cash)}, GCash ${peso(X.other)}`, [await stat('Cash'), await stat('GCash')]);
     ok(eq2(money(await fo.textContent('.drawer-card .drow.total')), X.expectedCash), `counter drawer: expected cash 1000 + ${X.cash} - ${X.refundD} = ${peso(X.expectedCash)}`, await fo.textContent('.drawer-card .drow.total'));
     const [xr] = await Promise.all([fctx.waitForEvent('page'), fo.click('#xreport-btn')]);
     await xr.waitForLoadState();
@@ -243,7 +245,7 @@ async function manilaClock(){
     const order = Object.keys(xrow);
     ok(order.indexOf('Discounts') + 1 === order.indexOf('Loyalty rewards') && order.indexOf('Loyalty rewards') + 1 === order.indexOf('Tax & service'), 'X-report: "Loyalty rewards" sits between Discounts and Tax & service', order);
     ok(eq2(-xv('Refunds'), X.refundD) && eq2(xv('Net sales'), X.net) && eq2(xv('Voids'), X.V.total) && Number(xrow['Transactions']) === 4, `X-report: refunds ${X.refundD}, net ${X.net}, voids ${X.V.total}, 4 transactions`, xrow);
-    ok(eq2(xv('Cash'), X.cash) && eq2(xv('GCash / Maya / Other'), X.other) && eq2(xv('Expected Cash'), X.expectedCash), `X-report: cash ${X.cash}, GCash ${X.other}, expected cash ${X.expectedCash}`, xrow);
+    ok(eq2(xv('Cash'), X.cash) && eq2(xv('Other methods'), X.other) && eq2(xv('Expected Cash'), X.expectedCash), `X-report: cash ${X.cash}, GCash ${X.other}, expected cash ${X.expectedCash}`, xrow);
     await xr.close();
   }catch(e){ await H.shot(fo, 'money12-stopped-xreport'); await browser.close(); H.abort(NAME, e); }
 

@@ -130,8 +130,10 @@ function seed(){
     await page.click('[data-rnd-del]'); await page.waitForSelector('[data-ok]'); await page.click('[data-ok]'); await page.waitForTimeout(1200);
     ok(sql(`select count(*) from waste_logs where reason='RND'`) === '0', 'R&D usage deleted');
     // net income lines
-    await go(page, 'netIncome'); await page.waitForTimeout(800);
-    ok(/missing at count/i.test(await page.textContent('#ni-body')), 'net income: missing at count line');
+    // 1.6 (owner decision B1; changed by Z 2026-11-13, needs C's approval): the Net income page is now the Accounting overview
+    // (#ac-body, ACCT_LAST.r = accounting_report; zero lines such as "Tax collected" are not shown). Same hand-math numbers.
+    await go(page, 'netIncome'); await page.waitForSelector('#ac-table', {timeout: 15000}); await page.waitForTimeout(800);
+    ok(/missing at count/i.test(await page.textContent('#ac-body')), 'accounting overview: missing at count line');
 
     /* ---- B15 production ---- */
     await go(page, 'suppliers');
@@ -234,7 +236,8 @@ function seed(){
     sql(`update stock_counts set needs_review = true, review_reason = 'COUNT_INCOMPLETE' where id='${COUNT}'`);
     await page.evaluate(() => refreshReviewCount()); await page.waitForTimeout(800);
     await page.evaluate(() => { txFilter.review = true; }); await go(page, 'transactions'); await page.waitForTimeout(1200);
-    ok(/Stock counts to review/.test(await page.textContent('#tx-wrap')) && /Not every ticked item/.test(await page.textContent('#tx-wrap')), 'flagged count in Needs review');
+    ok(/Stock counts to review/.test(await page.textContent('#tx-wrap')) && /An item that was due was not counted/.test(await page.textContent('#tx-wrap')), 'flagged count in Needs review');
+    // ^ 1.6 (owner decision B20; changed by Z 2026-11-13, needs C's approval): COUNT_INCOMPLETE reads "An item that was due was not counted" (was "Not every ticked item...")
     await shot(page, 'needs-review');
     await page.click('[data-count-review]'); await page.waitForSelector('#sc-reviewed'); await page.click('#sc-reviewed'); await gone(page); await page.waitForTimeout(800);
     ok(sql(`select needs_review from stock_counts where id='${COUNT}'`) === 'f', 'mark reviewed clears it');

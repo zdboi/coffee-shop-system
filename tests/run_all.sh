@@ -120,9 +120,10 @@ if $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/10_behaviour_tests.sql" > /dev/null 
   run_cmd conc15_checks "$DIR/conc15_checks.sh" "$DB"
 else record sql/42_release_1_5_tests FAIL 1 1 0 "$LOGS/sql_42_release_1_5_tests.log"; echo "      setup (10 + 11) failed"; fi
 "$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
-# 013 (release 1.6): same set-up (fresh database -> 10 -> 11 -> 43)
+# 013 (release 1.6): same set-up (fresh database -> 10 -> 11 -> 43), then the 1.6 two-sessions checks on the data 43 left
 if $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/10_behaviour_tests.sql" > /dev/null 2>&1 && $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/11_qr_tests.sql" > /dev/null 2>&1; then
   run_sql_lines sql/43_release_1_6_tests "$DIR/sql/43_release_1_6_tests.sql"
+  run_cmd conc16_checks "$DIR/conc16_checks.sh" "$DB"          # 1.6, two sessions at once, on the data 43 left
 else record sql/43_release_1_6_tests FAIL 1 1 0 "$LOGS/sql_43_release_1_6_tests.log"; echo "      setup (10 + 11) failed"; fi
 
 echo "== unit checks (shared core)"
