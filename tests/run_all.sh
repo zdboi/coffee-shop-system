@@ -150,6 +150,7 @@ run_node unit/loyalty_totals_check "$DIR/unit/loyalty_totals_check.js" "$REPO" "
 run_node unit/stock_parity_check "$DIR/unit/stock_parity_check.js" "$REPO" "$DB"         # 1.4: stock lines + unit conversion vs the 010 server (rolled back)
 run_node unit/partner_parity_check "$DIR/unit/partner_parity_check.js" "$REPO" "$DB"     # 1.5: production scaling + partner debt plan vs the 012 server (loads its fixture; the browser suites re-seed)
 run_node unit/count_parity_check "$DIR/unit/count_parity_check.js" "$REPO" "$DB"         # 1.5: blind count data + differences vs the 012 server; count before shift close; duplicate / skipped
+run_node unit/weighs16_parity_check "$DIR/unit/weighs16_parity_check.js" "$REPO" "$DB"   # 1.6: "weighs" on bought items: units, recipe lines in g, extras / swaps, cost vs the 013 server (rolled back)
 
 if [ "$BROWSER" = 1 ]; then
   "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1
@@ -171,7 +172,7 @@ if [ "$BROWSER" = 1 ]; then
              "money14.e2e:money14.e2e.js:" "fo_print14.e2e:fo_print14.e2e.js:" "menu_public.e2e:menu_public.e2e.js:" "bo_menulink.e2e:bo_menulink.e2e.js:" "bo_menuqr.e2e:bo_menuqr.e2e.js:" "menu_tabs.e2e:menu_tabs.e2e.js:" \
              "fo_release15.e2e:fo_release15.e2e.js:" "bo_release15.e2e:bo_release15.e2e.js:" "order_release15.e2e:order_release15.e2e.js:" "bo_waste_edit15.e2e:bo_waste_edit15.e2e.js:" \
              "money15.e2e:money15.e2e.js:" \
-             "fo16.e2e:fo16.e2e.js:" "bo16.e2e:bo16.e2e.js:1366x900" "money16.e2e:money16.e2e.js:" "bo16_investors.e2e:bo16_investors.e2e.js:"; do
+             "fo16.e2e:fo16.e2e.js:" "bo16.e2e:bo16.e2e.js:1366x900" "money16.e2e:money16.e2e.js:" "bo16_investors.e2e:bo16_investors.e2e.js:" "bo16_weighs.e2e:bo16_weighs.e2e.js:"; do
       IFS=: read -r name file vp <<<"$t"
       "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1      # every browser suite starts from a fresh seed
       BO_VIEWPORT="${vp:-1280x900}" run_node "e2e/$name#$run" "$DIR/e2e/$file"

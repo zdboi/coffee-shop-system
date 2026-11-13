@@ -54,7 +54,11 @@ select test.chk(public._to_base_qty(2, 'box', 'pcs') is null and public._to_base
 
 -- ============================ W. weighs (A10) ============================
 select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
-select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"ingredients","row":{"id":"22222222-0000-0000-0000-000000000002","weight_g_per_ml":1.03}}]')$$) like 'WEIGHS_PRODUCED_ONLY%', 'W: weighs refused on a bought ingredient');
+-- 1.6 (013 section 7c, owner decision 2026-11-13 reversing the 1.4 house-made-only rule; changed by Z, needs C's approval):
+-- "weighs" is allowed on a bought item too. Was: like 'WEIGHS_PRODUCED_ONLY%' ('W: weighs refused on a bought ingredient').
+select test.err($$select public.apply_changes('[{"op":"update","table":"ingredients","row":{"id":"22222222-0000-0000-0000-000000000002","weight_g_per_ml":1.03}}]')$$) as w16a \gset
+select test.chk(:'w16a' = 'NO ERROR' and (select weight_g_per_ml = 1.03 from ingredients where id = '22222222-0000-0000-0000-000000000002'), 'W (1.6): weighs accepted on a bought ingredient', :'w16a');
+select public.apply_changes('[{"op":"update","table":"ingredients","row":{"id":"22222222-0000-0000-0000-000000000002","weight_g_per_ml":null}}]');   -- back as before (the checks below need milk without weighs)
 select public.apply_changes(jsonb_build_array(
   jsonb_build_object('op','upsert','table','ingredients','row', jsonb_build_object('id','a1000000-0000-0000-0000-000000000001','name','Caramel sauce (house)','base_unit','ml','is_produced_item',true,'weight_g_per_ml',1.25)),
   jsonb_build_object('op','upsert','table','recipes','row', jsonb_build_object('id','a2000000-0000-0000-0000-000000000001','name','Caramel Latte','recipe_type','DRINKS','category','Iced','selling_price',170)),
@@ -65,7 +69,11 @@ select test.chk((select quantity from recipe_ingredients where id = 'a3000000-00
 select public.apply_changes('[{"op":"update","table":"ingredients","row":{"id":"a1000000-0000-0000-0000-000000000001","weight_g_per_ml":1.0}}]');
 select test.chk((select quantity from recipe_ingredients where id = 'a3000000-0000-0000-0000-000000000001') = 25, 'W: weighs changed -> recipe line converted again (25 mL)');
 select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"recipe_ingredients","row":{"id":"a3000000-0000-0000-0000-000000000009","recipe_id":"a2000000-0000-0000-0000-000000000001","ingredient_id":"22222222-0000-0000-0000-000000000002","entered_quantity":5,"unit":"g","quantity":5}}]')$$) like 'BAD_UNIT%', 'W: grams on a bought mL ingredient -> BAD_UNIT');
-select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"ingredients","row":{"id":"a1000000-0000-0000-0000-000000000001","is_produced_item":false}}]')$$) like 'WEIGHS_PRODUCED_ONLY%', 'W: can''t turn a weighed item into a bought one');
+-- 1.6 (013 section 7c, owner decision 2026-11-13; changed by Z, needs C's approval): a weighed item may become a bought one.
+-- Was: like 'WEIGHS_PRODUCED_ONLY%' ('W: can''t turn a weighed item into a bought one').
+select test.err($$select public.apply_changes('[{"op":"update","table":"ingredients","row":{"id":"a1000000-0000-0000-0000-000000000001","is_produced_item":false}}]')$$) as w16b \gset
+select test.chk(:'w16b' = 'NO ERROR' and (select weight_g_per_ml = 1.0 and not is_produced_item from ingredients where id = 'a1000000-0000-0000-0000-000000000001'), 'W (1.6): a weighed item can be turned into a bought one (weighs kept)', :'w16b');
+select public.apply_changes('[{"op":"update","table":"ingredients","row":{"id":"a1000000-0000-0000-0000-000000000001","is_produced_item":true}}]');   -- back as before
 -- old-style line (no entered_quantity) is stored as sent
 select public.apply_changes('[{"op":"update","table":"recipe_ingredients","row":{"id":"a3000000-0000-0000-0000-000000000002","entered_quantity":null,"quantity":180,"unit":"ml"}}]');
 select test.chk((select quantity from recipe_ingredients where id = 'a3000000-0000-0000-0000-000000000002') = 180, 'W: old apps: quantity kept as sent');

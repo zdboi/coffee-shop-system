@@ -654,3 +654,33 @@ select test.chk(not has_table_privilege('anon', 'public.investors', 'select') an
   and (select bool_and(c.relrowsecurity) from pg_class c where c.oid in ('public.investors'::regclass, 'public.startup_costs'::regclass)), 'ZI: RLS on both tables; no rights for anon');
 reset role;
 select test.chk((select count(*) from investors where business_id = :'biz') = 2 and (select count(*) from startup_costs where business_id = :'biz') = 1, 'ZI: after all the tries: this shop still has 2 investors and 1 start-up cost');
+
+-- =====================================================================================================
+-- Part 4: "weighs" on bought items too (013 section 7c, owner 2026-11-13): the database work's 3 checks + Z's
+-- =====================================================================================================
+-- ============================ W. "weighs" on bought items (owner 2026-11-13) ============================
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"ingredients","row":{"id":"22222222-0000-0000-0000-000000000002","weight_g_per_ml":1.03}}]')$$) = 'NO ERROR', 'W: a bought item (milk, mL) may now say how much it weighs');
+reset role;
+select test.chk((select weight_g_per_ml = 1.03 and not coalesce(is_produced_item, false) from ingredients where id = '22222222-0000-0000-0000-000000000002'), 'W: saved on the bought item');
+select test.chk(test.err($$update ingredients set base_unit = 'pcs' where id = '22222222-0000-0000-0000-000000000002'$$) = 'WEIGHS_BAD_UNIT', 'W: still refused for an item counted in pieces');
+update ingredients set weight_g_per_ml = null where id = '22222222-0000-0000-0000-000000000002';
+-- Z: a recipe line typed in grams on a bought item with weighs is converted; without weighs it is still BAD_UNIT
+update ingredients set weight_g_per_ml = 1.03 where id = '22222222-0000-0000-0000-000000000002';
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"recipe_ingredients","row":{"id":"16d00000-0000-0000-0000-000000000001","recipe_id":"33333333-0000-0000-0000-000000000001","ingredient_id":"22222222-0000-0000-0000-000000000002","entered_quantity":103,"unit":"g","quantity":0}}]')$$) = 'NO ERROR', 'ZW: 103 g of the bought milk on a recipe line is accepted');
+reset role;
+select test.chk((select quantity = 100 from recipe_ingredients where id = '16d00000-0000-0000-0000-000000000001'), 'ZW: ... saved as 100 mL (1.03 g/mL)', (select quantity::text from recipe_ingredients where id = '16d00000-0000-0000-0000-000000000001'));
+update ingredients set weight_g_per_ml = 1.0 where id = '22222222-0000-0000-0000-000000000002';
+select test.chk((select quantity = 103 from recipe_ingredients where id = '16d00000-0000-0000-0000-000000000001'), 'ZW: weighs changed on the bought item -> the line is converted again (103 mL)');
+delete from recipe_ingredients where id = '16d00000-0000-0000-0000-000000000001';
+update ingredients set weight_g_per_ml = null where id = '22222222-0000-0000-0000-000000000002';
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.chk(test.err($$select public.apply_changes('[{"op":"upsert","table":"recipe_ingredients","row":{"id":"16d00000-0000-0000-0000-000000000002","recipe_id":"33333333-0000-0000-0000-000000000001","ingredient_id":"22222222-0000-0000-0000-000000000002","entered_quantity":5,"unit":"g","quantity":5}}]')$$) like 'BAD_UNIT%', 'ZW: without weighs, grams on a mL item are still BAD_UNIT');
+select test.chk(test.err($$select public.apply_changes('[{"op":"update","table":"ingredients","row":{"id":"22222222-0000-0000-0000-000000000002","weight_g_per_ml":-1}}]')$$) <> 'NO ERROR'
+  or (select weight_g_per_ml is null from ingredients where id = '22222222-0000-0000-0000-000000000002'), 'ZW: a negative weighs is not saved');
+reset role;
+select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
+with u as (update public.ingredients set weight_g_per_ml = 5 returning 1) select test.chk(count(*) = 0, 'ZW: a counter can''t set weighs') from u;
+reset role;
+
