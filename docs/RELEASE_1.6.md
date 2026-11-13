@@ -38,6 +38,9 @@ Your current live version (1.5) is saved as the **last working version** (`docs/
 - **Share of net income** for any dates, per investor (for information).
 - **Paste from Excel:** select the two columns (name and amount) in your sheet, copy, and paste. The "?" row with no amount is skipped.
 
+**"Weighs" on bought sauces and syrups**
+- A sauce or syrup you buy (counted in mL) can now say how much it weighs: Ingredients → open it → **Weighs** (for example "1 L weighs 1,250 g"). Then drinks and options can use it in **grams**. Stock and cost stay in mL.
+
 **Sales calendar (Back Office)**
 - The month calendar **stays on screen** while you scroll the details.
 - **Tap a day** to see that day. **Tap a second day** (use the arrows for another month in between) to see everything from the first day to the second.

@@ -300,3 +300,4 @@ Owner: **don't start 1.3 until I say so.**
 ## Supplied sauces / syrups (owner, 2026-11-13 10:31)
 - Owner: "Include sauces, syrups, and foods to Supplied items". Asked what for: **"Use them in drinks"**.
 - Lead: already supported, nothing to build. Food is already a supplied item type (resold per piece). Bought-ready sauces and syrups used in drinks are normal (raw) ingredients: Ingredients → + Add ingredient (category Syrups & Sauces, stock in mL or g), then Purchases, then in recipes / the Options library. Told the owner how.
+- Owner (10:32): **"I need it in grams too"** → bought sauces / syrups (counted in mL) may now have "Weighs", so drinks can use them in grams. This reverses the 1.4 owner decision of 2026-11-02 ("bought liquids stay in mL"). Built into 1.6: 013 re-makes `_ingredient_check` without WEIGHS_PRODUCED_ONLY; the Back Office shows "Weighs" when editing any item counted in g / mL.

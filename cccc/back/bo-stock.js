@@ -357,7 +357,7 @@ function openIngredientForm(id){
       <div class="form-row"><label for="f-unit">Base unit</label><select id="f-unit" ${produced ? 'disabled' : ''}>${UNITS.map(u => `<option value="${u}" ${editing && editing.base_unit === u ? 'selected' : ''}>${u}</option>`).join('')}</select><div class="hint">The unit costing and recipes use (e.g. g, ml, pcs)</div></div>
       <div class="form-row"><label for="f-reorder">Reorder level</label><input id="f-reorder" type="number" step="any" min="0" value="${esc(editing ? num(editing.reorder_level) : num(s.low_stock_default_threshold))}"></div>
     </div>
-    ${produced && unitFamily(editing.base_unit) !== 'count' ? weighsFieldHtml(editing) : ''}
+    ${editing && unitFamily(editing.base_unit) !== 'count' ? weighsFieldHtml(editing) : ''}
     ${produced ? `<div class="form-grid">
       <div class="form-row"><label for="f-shelflife">Shelf life (days, optional)</label><input id="f-shelflife" type="number" step="1" min="0" value="${esc(editing.shelf_life_days || '')}"></div>
       <div class="form-row"><label for="f-storage">Storage notes</label><input id="f-storage" maxlength="120" value="${esc(editing.storage_notes || '')}" placeholder="e.g. Refrigerated"></div>
@@ -447,10 +447,12 @@ function openIngredientForm(id){
       if(produced){
         fields.shelf_life_days = Number(root.querySelector('#f-shelflife').value) || null;
         fields.storage_notes = root.querySelector('#f-storage').value;
-        const wf = readWeighsField(root);
-        if(wf === false) return;
-        if(wf !== undefined) fields.weight_g_per_ml = wf;
       }
+      // "Weighs" (1.4, house-made only; 1.6: bought items too, owner 2026-11-13). Counted in pieces = no weighs.
+      const wf = readWeighsField(root);
+      if(wf === false) return;
+      if(unitFamily(fields.base_unit) === 'count'){ if(editing && editing.weight_g_per_ml != null) fields.weight_g_per_ml = null; }
+      else if(wf !== undefined) fields.weight_g_per_ml = wf;
       const ops = [];
       let newId = null;
       if(editing){
@@ -486,7 +488,7 @@ function openIngredientForm(id){
   }});
 }
 
-/* ---- "Weighs" (release 1.4, A10; owner decision: house-made items only) ----
+/* ---- "Weighs" (release 1.4, A10: house-made items; release 1.6: any item counted in g / mL, owner 2026-11-13) ----
    The owner weighs a measured amount once ("1 L of caramel = 1,250 g"). Saved as grams per mL
    (ingredients.weight_g_per_ml, above 0 and at most 10); recipe lines and option extras for the item
    can then be typed in g or mL. Stock and cost stay in the item's own unit. */

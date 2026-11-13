@@ -23,6 +23,7 @@
 --   B2   INVESTORS AND START-UP COSTS (owner only): who invested how much
 --        (each share = amount / total) and what was spent to open the shop.
 --        Start-up costs are NOT taken off any month's net income.
+--   WEIGHS on bought items too (a bought syrup in mL can be used in grams).
 --   B1 / B18  ONE MONEY REPORT (accounting_report) for the Accounting overview
 --        and the Sales calendar, for any date range, with a row per day.
 --
@@ -1055,13 +1056,34 @@ begin
 end $$;
 
 -- =============================================================================
+-- 7c. "WEIGHS" ON BOUGHT ITEMS TOO (owner, 2026-11-13)
+-- =============================================================================
+-- Same as 010, without WEIGHS_PRODUCED_ONLY: a bought sauce or syrup (counted
+-- in mL) may also say how much it weighs, so drinks can use it in grams.
+--   WEIGHS_BAD_UNIT    = "weighs" needs an item counted in g, kg, mL or L
+--   SUPPLIED_NEEDS_PCS = the stock item of a supplied menu item stays in pieces
+create or replace function public._ingredient_check() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.weight_g_per_ml is not null then
+    if public._unit_family(new.base_unit) = 'count' then raise exception 'WEIGHS_BAD_UNIT'; end if;
+  end if;
+  if tg_op = 'UPDATE' and new.base_unit is distinct from old.base_unit
+     and exists (select 1 from public.recipes where supplied_ingredient_id = new.id)
+     and lower(btrim(coalesce(new.base_unit, ''))) <> 'pcs' then
+    raise exception 'SUPPLIED_NEEDS_PCS';
+  end if;
+  return new;
+end $$;
+
+-- =============================================================================
 -- 8. WHO MAY CALL WHAT
 -- =============================================================================
 do $$
 declare f record;
   -- (functions that existed before and are only re-made here keep the rights they had)
   mine text[] := array['_stamp_stock_received','_valid_payment_methods','_payment_method','_settings_check',
-    '_count_due','fo_count_due','bo_count_status',
+    '_count_due','fo_count_due','bo_count_status','_ingredient_check',
     '_fo_error_code','_fo_apply_16','fo_sync','accounting_report','senior_report'];
   member_fns text[] := array['fo_sync','fo_count_due','bo_count_status','accounting_report','senior_report'];
 begin
