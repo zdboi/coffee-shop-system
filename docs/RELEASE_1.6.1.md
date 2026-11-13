@@ -13,7 +13,7 @@ Back Office → **Money → Investors & start-up** → **Profit split** (replace
 - **Change the split**: the three percentages (must add up to 100%) and the managers' names. Saved in the audit log.
 - For information only: nothing is paid out by this page.
 
-Back Office → **Sales calendar**: the month calendar is bigger (about half the page), with larger day boxes so the amounts fit. On a narrow screen it sits full width above the details.
+Back Office → **Sales calendar**: the month calendar is full width at the top, with bigger day boxes so the amounts fit. The cards and the day-by-day table are below it.
 
 ## Steps
 1. In Supabase (business account): **SQL Editor → New query**, paste the whole of `014_release_1_6_1.sql`, **Run**, wait for **Success**.
