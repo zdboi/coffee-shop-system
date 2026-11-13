@@ -317,3 +317,9 @@ Owner: **don't start 1.3 until I say so.**
 
 ## Release 1.6.1 live (owner, 2026-11-14 01:28)
 - Owner: "btw, 1.6.1 is live." → 014 run, PR #10 merged (`0bf5bec`). Checkpoint 25 is the last working version; next database script is 015.
+
+## Security checklists → Z's instructions (owner, 2026-11-14 01:33–01:45)
+- Owner sent two PDFs ("Security Checklist Prompt", "Security Audit Prompt") and asked whether they're needed / useful for Z.
+- Owner: "put the necessary and useful bits/audit in Z's instruction. ONLY THE BENEFICIAL ONES. Adjust it to our needs if needed and discard useless prompts."
+- Done: `.claude/agents/z.md` Part 3 "full security audit" (sections A–H adapted to a static site + Supabase, per-item verdicts, rating, quick wins, owner actions). Dropped: framework/npm/webhook/OAuth/AI/CORS/SSRF items. Not run yet; the owner decides when.
+- Gaps already seen (for a later "security hardening" release, owner to decide): privacy notice on the QR page, two-step sign-in for the Back Office, a meta CSP, backups routine, Supabase dashboard settings, test accounts clean-up, security contact, error alerts.
