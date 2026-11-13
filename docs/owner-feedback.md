@@ -301,3 +301,9 @@ Owner: **don't start 1.3 until I say so.**
 - Owner: "Include sauces, syrups, and foods to Supplied items". Asked what for: **"Use them in drinks"**.
 - Lead: already supported, nothing to build. Food is already a supplied item type (resold per piece). Bought-ready sauces and syrups used in drinks are normal (raw) ingredients: Ingredients → + Add ingredient (category Syrups & Sauces, stock in mL or g), then Purchases, then in recipes / the Options library. Told the owner how.
 - Owner (10:32): **"I need it in grams too"** → bought sauces / syrups (counted in mL) may now have "Weighs", so drinks can use them in grams. This reverses the 1.4 owner decision of 2026-11-02 ("bought liquids stay in mL"). Built into 1.6: 013 re-makes `_ingredient_check` without WEIGHS_PRODUCED_ONLY; the Back Office shows "Weighs" when editing any item counted in g / mL.
+
+## Release 1.6 live + profit split (owner, 2026-11-13 15:03)
+- 1.6 is live: owner ran 013 and merged PR #9 (14:54).
+- Owner: "the investor's percentage to the net income is only 30%, 20% goes to the managers (Jake & I, yes we also get from the previous 30% aside from this), 50% goes to the coffee shop".
+- Decisions: managers' 20% **split equally** (10% each); the split (30 / 20 / 50) and the managers' names are **editable** in the Back Office; investors' 30% still follows each investor's amount; managers also get their investor part.
+- Built as **1.6.1** with database script **014** (013 was already run).

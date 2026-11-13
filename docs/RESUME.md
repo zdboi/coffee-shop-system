@@ -176,3 +176,6 @@ Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs
 
 ## 2026-11-13 15:xx: RELEASE 1.6 READY (checkpoint 22)
 - Z PASS after gate fixes (eeac8b8). PR opened for the owner; owner runs 013 then merges (docs/RELEASE_1.6.md). After that: freeze 013 (next 014), checkpoint 23 live, Project changelog, Obsidian.
+
+## 2026-11-13 15:10: RELEASE 1.6 LIVE (checkpoint 23 = 6cd45f9); 013 frozen, next 014
+- Building 1.6.1: profit split (investors 30% by amount, managers 20% equal: Jake + owner, shop 50%), editable; script 014 (settings.profit_split).
