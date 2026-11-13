@@ -18,11 +18,12 @@
 // Partial refunds (manager approval), share = returned value x grand total / (subtotal - VAT out - Senior discount):
 //   R1 S1, 1 Americano:            110 x 224.40 / 220     = 112.20   (beans +18 g)
 //   R2 S4, the NON-Senior Americano: 110 x 188.57 / 188.57 = 110.00   (beans +18 g)
-//   R3 S5, the PWD Ensaymada:        52 x 178.70 / 162     =  57.36   (57.39 refused first: REFUND_TOO_LARGE)
-// Today: sales 766.67 · refunds 279.56 · net sales 487.11 · payment charges 7.90 · fees 25.10 · waived 17.20
-//        Senior/PWD discounts 32.64 · VAT exempt 11.79 · tax 13.20 · tax owed 13.20 - 57.36 x 13.20 / 178.70 = 8.96
+//   R3 S5, the PWD Ensaymada (no tax on it):  52 x (178.70 - 13.20) / 162 = 53.12   (53.15 refused first: REFUND_TOO_LARGE)
+//      (1.6 gate fix 3, 2026-11-13: was 52 x 178.70 / 162 = 57.36, which gave back tax the customer never paid)
+// Today: sales 766.67 · refunds 275.32 · net sales 491.35 · payment charges 7.90 · fees 25.10 · waived 17.20
+//        Senior/PWD discounts 32.64 · VAT exempt 11.79 · tax 13.20 · tax owed 13.20 (no refund gave tax back: R3 is a tax-free line)
 //        ingredients sold 6 x 18 g = 108 g (97.20) - 36 g back (32.40) = 64.80
-//        net income 487.11 - 8.96 - 25.10 - 64.80 = 388.25
+//        net income 491.35 - 13.20 - 25.10 - 64.80 = 388.25
 //   by method: GCASH 3 sales 513.10 (charges 7.90, fees 10.10, waived 2.20) · CARD 1 sale 65.00 (fee 15, waived 15)
 //              CASH 1 sale 188.57
 // Needs a fresh seed:  tests/e2e_reset.sh [db] && tests/restart_fake.sh [port] [db]
@@ -137,10 +138,10 @@ function refundOp(dev, saleId, amount, items, inventory){
     ok(r.status === 'ok', 'R1: 1 of 2 Americanos of the GCash-charged sale: 112.20 (half the charge too)', r);
     r = refundOp(dev, sale(4).id, 110.00, [{sale_item_id: it(4, AMERICANO, false), quantity: 1}], inv(18));
     ok(r.status === 'ok', 'R2: the non-Senior Americano of the VAT-inclusive Senior sale: 110.00', r);
-    r = refundOp(dev, sale(5).id, 57.39, [{sale_item_id: it(5, ENSAYMADA), quantity: 1}], []);
+    r = refundOp(dev, sale(5).id, 53.15, [{sale_item_id: it(5, ENSAYMADA), quantity: 1}], []);
     ok(r.message === 'REFUND_TOO_LARGE', 'R3: 3 centavos above the PWD line\'s share is refused (REFUND_TOO_LARGE)', r);
-    r = refundOp(dev, sale(5).id, 57.36, [{sale_item_id: it(5, ENSAYMADA), quantity: 1}], []);
-    ok(r.status === 'ok', 'R3: the PWD Ensaymada: 57.36', r);
+    r = refundOp(dev, sale(5).id, 53.12, [{sale_item_id: it(5, ENSAYMADA), quantity: 1}], []);
+    ok(r.status === 'ok', 'R3: the PWD Ensaymada: 53.12 (its own price after the discount + its part of the GCash charge, no tax)', r);
     ok(sql(`select string_agg(status, ',' order by created_at, transaction_number) from sales where business_id = '${biz}' and status <> 'HELD'`) === 'PARTIALLY_REFUNDED,COMPLETED,COMPLETED,PARTIALLY_REFUNDED,PARTIALLY_REFUNDED',
        'sale statuses: S1, S4, S5 partly refunded');
 
@@ -149,16 +150,16 @@ function refundOp(dev, saleId, amount, items, inventory){
                           round(sum(senior_discount), 2) as senior, round(sum(vat_exempt_amount), 2) as vat, round(sum(tax_amount), 2) as tax,
                           (select round(sum(amount), 2) from refunds where business_id = '${biz}') as refunds
                    from sales where business_id = '${biz}' and status in ('COMPLETED','PARTIALLY_REFUNDED','REFUNDED')`);
-    ok(eq2(T.sales, 766.67) && eq2(T.refunds, 279.56) && eq2(T.charges, 7.90) && eq2(T.fees, 25.10) && eq2(T.senior, 32.64) && eq2(T.vat, 11.79) && eq2(T.tax, 13.20),
-       'tables: sales 766.67, refunds 279.56, charges 7.90, fees 25.10, Senior/PWD 32.64, VAT exempt 11.79, tax 13.20', T);
+    ok(eq2(T.sales, 766.67) && eq2(T.refunds, 275.32) && eq2(T.charges, 7.90) && eq2(T.fees, 25.10) && eq2(T.senior, 32.64) && eq2(T.vat, 11.79) && eq2(T.tax, 13.20),
+       'tables: sales 766.67, refunds 275.32, charges 7.90, fees 25.10, Senior/PWD 32.64, VAT exempt 11.79, tax 13.20', T);
     // ---- accounting_report (owner) = the tables = hand math
     const d = today();
     const A = JSON.parse(asOwner(`select public.accounting_report('${d}', '${d}')::text`));
     const t = A.totals;
     ok(eq2(t.sales, T.sales) && eq2(t.refunds, T.refunds) && eq2(t.payment_charges, T.charges) && eq2(t.payment_fees, T.fees) && eq2(t.senior_discounts, T.senior) && eq2(t.vat_exempt, T.vat) && eq2(t.tax, T.tax),
        'accounting_report totals = the tables', t);
-    ok(eq2(t.net_sales, 487.11) && eq2(t.charges_waived, 17.20) && eq2(t.tax_owed, 8.96) && eq2(t.ingredients_sold, 64.80) && eq2(t.net_income, 388.25) && t.sale_count === 5 && t.void_count === 0,
-       'accounting_report: net sales 487.11, waived 17.20, tax owed 8.96, ingredients 64.80, net income 388.25', t);
+    ok(eq2(t.net_sales, 491.35) && eq2(t.charges_waived, 17.20) && eq2(t.tax_owed, 13.20) && eq2(t.ingredients_sold, 64.80) && eq2(t.net_income, 388.25) && t.sale_count === 5 && t.void_count === 0,
+       'accounting_report: net sales 491.35, waived 17.20, tax owed 13.20, ingredients 64.80, net income 388.25', t);
     ok(A.days.length === 1 && eq2(A.days[0].sales, t.sales) && eq2(A.days[0].net_income, t.net_income) && eq2(A.days[0].refunds, t.refunds), 'the one day row = the totals', A.days);
     const pm = Object.fromEntries(A.payment_methods.map(m => [m.method, m]));
     ok(pm.GCASH && pm.GCASH.count === 3 && eq2(pm.GCASH.total, 513.10) && eq2(pm.GCASH.charges, 7.90) && eq2(pm.GCASH.fees, 10.10) && eq2(pm.GCASH.waived, 2.20)
@@ -175,13 +176,13 @@ function refundOp(dev, saleId, amount, items, inventory){
     await bo.evaluate(() => navigate('netIncome')); await bo.waitForSelector('#ac-table', {timeout: 15000}); await bo.waitForTimeout(800);
     // this month: the shop has no other sales, so the month = today
     const acc = await bo.textContent('#ac-body');
-    ok(['₱766.67', '₱279.56', '₱487.11', '₱388.25', '₱25.10', '₱8.96'].every(x => acc.includes(x)), 'Accounting overview (this month): 766.67 sales, 279.56 refunds, 487.11 net sales, 388.25 net income, 25.10 fees, 8.96 tax owed', acc.slice(0, 900));
+    ok(['₱766.67', '₱275.32', '₱491.35', '₱388.25', '₱25.10', '₱13.20'].every(x => acc.includes(x)), 'Accounting overview (this month): 766.67 sales, 275.32 refunds, 491.35 net sales, 388.25 net income, 25.10 fees, 13.20 tax owed', acc.slice(0, 900));
     await H.shot(bo, 'money16-accounting', {fullPage: true});
     await bo.evaluate(() => navigate('calendar')); await bo.waitForSelector('.cal-split', {timeout: 15000}); await bo.waitForTimeout(800);
     await bo.click(`[data-pick="${d}"]`); await bo.waitForTimeout(800);
     await bo.click(`[data-pick="${d}"]`).catch(() => {}); await bo.waitForTimeout(1500);   // one day = start and end on the same day
     const det = await bo.textContent('.cal-details');
-    ok(['₱766.67', '₱487.11', '₱388.25', '₱279.56'].every(x => det.includes(x)), 'Sales calendar, today: sales 766.67, net sales 487.11, net income 388.25, refunds 279.56 (= the overview)', det.slice(0, 900));
+    ok(['₱766.67', '₱491.35', '₱388.25', '₱275.32'].every(x => det.includes(x)), 'Sales calendar, today: sales 766.67, net sales 491.35, net income 388.25, refunds 275.32 (= the overview)', det.slice(0, 900));
     await H.shot(bo, 'money16-calendar', {fullPage: false});
   }catch(e){ ok(false, 'stopped: ' + (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e)); await H.shot(page, 'money16-abort'); }
   ok(errors.length === 0, 'no console errors', errors.slice(0, 6));

@@ -60,14 +60,22 @@ sql(`delete from investors; delete from startup_costs;`);
     const csv = require('fs').readFileSync(await dl.path(), 'utf8');
     ok(csv.includes('"\'=1+1') === false && csv.includes('"<i>note</i> =1+1"') && /"Investor","Ana Example","50000\.00","24\.39%"/.test(csv), 'Z: CSV: shares from the amounts (Ana 24.39% of 205,000), notes as text', csv.slice(0, 400));
     // ---- Z: paste reader: control characters out; a formula-looking or huge amount
+    // 1.6 gate fix 4 (2026-11-13): an amount above ₱100,000,000 is now skipped by the paste reader (was: the whole save refused
+    // by the database with its raw message). Expectation changed by Z to follow the fix.
     await page.click('#sc-paste'); await page.fill('#pr-text', 'Bell\u0007 item\t500\n=HYPERLINK("x")\t=500+1\nToo big\t100000000.01'); await page.waitForTimeout(200);
     const pv = await page.textContent('#pr-preview');
-    ok(/3 items/.test(pv) && pv.includes('Bell item') && !pv.includes('\u0007'), 'Z: paste reader strips control characters from names', pv);
-    await page.click('#pr-save'); await page.waitForTimeout(1500);
-    ok(sql(`select count(*) from startup_costs`) === '61' && !/SERVER_ERROR|startup_costs_amount_check/.test(await toasts()) && (await toasts()).length > 0,
-       'Z: a pasted amount above ₱100,000,000 -> nothing saved (all or nothing), a message in plain words', await toasts());
+    ok(/2 items/.test(pv) && /Skipped line 3/.test(pv) && pv.includes('Bell item') && !pv.includes('\u0007'), 'Z: paste reader strips control characters from names and skips an amount above ₱100,000,000 (line 3)', pv);
     await page.click('#active-modal-overlay [data-cancel]').catch(() => {}); await gone();
-    ok(sql(`select count(*) from startup_costs where name like '=HYPERLINK%'`) === '0', 'Z: ... the formula-looking row was not saved either');
+    ok(sql(`select count(*) from startup_costs`) === '61', 'Z: ... cancelled: nothing saved');
+    // the forms refuse it too, in plain words, before anything is sent
+    await page.click('#sc-add'); await page.waitForSelector('#sf-name');
+    await page.fill('#sf-name', 'Too big'); await page.fill('#sf-amt', '100000000.01'); await page.click('#sf-save'); await page.waitForTimeout(500);
+    ok(/at most ₱100,000,000/.test(await toasts()) && sql(`select count(*) from startup_costs`) === '61', 'Z: start-up cost form: above ₱100,000,000 refused in plain words, nothing saved', await toasts());
+    await page.click('#active-modal-overlay [data-cancel]').catch(() => {}); await gone();
+    // and if the database itself refuses (an old screen), the owner reads plain words, not the rule's name
+    const feTexts = await page.evaluate(() => [friendlyError({message: 'new row for relation "startup_costs" violates check constraint "startup_costs_amount_check"'}),
+                                           friendlyError({message: 'new row for relation "investors" violates check constraint "investors_name_check"'})]);
+    ok(feTexts.every(t => !/check constraint|_check/.test(t)) && /100,000,000/.test(feTexts[0]), 'Z: friendlyError turns the database limits into plain words', feTexts);
     // monthly net income untouched by start-up costs
     const ex = await page.evaluate(async () => { const r = await cloud.rpc('accounting_report', {p_from: '2026-08-01', p_to: '2026-08-31'}); return r.totals.expenses; });
     ok(Number(ex) === 0, 'start-up costs are not in the accounting report expenses');
@@ -81,8 +89,7 @@ sql(`delete from investors; delete from startup_costs;`);
     await dev.close();
   }catch(e){ ok(false, 'stopped: ' + (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e)); await H.shot(page, 'bo16-investors-abort'); }
   // the refusal provoked on purpose above (amount over the limit) is the only error allowed
-  const other = errors.filter(e => !/apply_changes|startup_costs_amount_check/.test(e));
-  ok(other.length === 0, 'no console errors (apart from the refusal provoked on purpose)', other.slice(0, 6));
+  ok(errors.length === 0, 'no console errors', errors.slice(0, 6));
   const rc = H.summary(NAME);
   await browser.close();
   process.exit(rc);

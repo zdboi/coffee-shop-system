@@ -377,7 +377,8 @@ select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticate
 select test.sale16('16000000-0000-0000-0000-0000000000a4', '[{"id":"e1600000-0000-0000-0000-0000000000a4","recipe_id":"33333333-0000-0000-0000-000000000001","name":"Iced Latte","quantity":1,"unit_price":150,"line_total":150}]',
   '{"subtotal":150,"service_charge_amount":0,"payment_fee":"+0","payment_charge":0,"grand_total":150}', 'GCASH', null, :'sh') as r \gset
 reset role;
-select test.chk((select review_reason ~ 'CHARGE_MISMATCH' from sales where id = '16000000-0000-0000-0000-0000000000a4'), 'Z1d (control): GCash sale with fee 0 is flagged CHARGE_MISMATCH', :'r' || coalesce((select review_reason from sales where id = '16000000-0000-0000-0000-0000000000a4'),' (no flag)'));
+-- 1.6 gate fix 1 (_num_strict; changed 2026-11-13, approved by C): a fee written "+0" is now refused outright (was: saved + flagged CHARGE_MISMATCH)
+select test.chk(:'r'::jsonb->>'message' = 'SALE_TOTALS_MISMATCH' and not exists (select 1 from sales where id = '16000000-0000-0000-0000-0000000000a4'), 'Z1d: a fee written "+0" is refused (SALE_TOTALS_MISMATCH), nothing saved', :'r');
 -- Z2: where do the name / ID end up?  (checked from the shell with pg_dump)
 -- Z3: rights
 select test.chk(count(*) = 0, 'Z3: no function in public is callable by anon that was not before', string_agg(p.oid::regprocedure::text, ', '))
@@ -684,3 +685,45 @@ select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticate
 with u as (update public.ingredients set weight_g_per_ml = 5 returning 1) select test.chk(count(*) = 0, 'ZW: a counter can''t set weighs') from u;
 reset role;
 
+
+-- =====================================================================================================
+-- Part 5: rechecks of the gate fixes (commit eeac8b8, Z 2026-11-13)
+-- =====================================================================================================
+-- fix 8a: an owner edit of an OLD stock line's amount makes the item due again (MOVED); a note-only edit doesn't
+update ingredients set count_at_close = (id = '22222222-0000-0000-0000-000000000001') where business_id = :'biz';
+update settings set count_recheck_days = 60 where business_id = :'biz';
+select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
+select test.op('shift_open', jsonb_build_object('id','d1600000-0000-0000-0000-0000000005f1','shift_number','SHIFT-Z5-0001','cashier_id','66666666-0000-0000-0000-000000000001','cashier_name','Cathy Cashier','opened_at', now(),'opening_cash',0))->>'status' as so \gset
+select test.op('stock_count', jsonb_build_object('id', 'd1600000-0000-0000-0000-0000000000f9', 'shift_id', 'd1600000-0000-0000-0000-0000000005f1', 'staff_id', '66666666-0000-0000-0000-000000000001', 'counted_at', now(),
+  'lines', jsonb_build_array(jsonb_build_object('ingredient_id','22222222-0000-0000-0000-000000000001','quantity', (select stock from v_ingredient_stock where ingredient_id = '22222222-0000-0000-0000-000000000001'))))) ->>'status' as sc \gset
+reset role;
+select test.chk(:'so' = 'ok' and :'sc' = 'ok' and (select count(*) = 0 from public._count_due(:'biz', null) where why is not null), 'Z5: set-up: beans counted, nothing due', :'so' || :'sc');
+select id as oldline from inventory_transactions where business_id = :'biz' and ingredient_id = '22222222-0000-0000-0000-000000000001' and transaction_type = 'PURCHASE' order by received_at limit 1 \gset
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.err(format($$select public.apply_changes('[{"op":"update","table":"inventory_transactions","row":{"id":"%s","notes":"just a note"}}]')$$, :'oldline')) as e1 \gset
+reset role;
+select test.chk(:'e1' = 'NO ERROR' and (select count(*) = 0 from public._count_due(:'biz', null) where why is not null), 'Z5 (fix 8a): a note-only edit of an old stock line does not make the item due', :'e1');
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.err(format($$select public.apply_changes('[{"op":"update","table":"inventory_transactions","row":{"id":"%s","quantity":999}}]')$$, :'oldline')) as e2 \gset
+reset role;
+select test.chk(:'e2' = 'NO ERROR' and (select string_agg(why, ',') = 'MOVED' from public._count_due(:'biz', null) where why is not null), 'Z5 (fix 8a): an owner edit of an old stock line''s amount makes the item due (MOVED)', :'e2');
+update settings set count_recheck_days = 7 where business_id = :'biz';
+update ingredients set count_at_close = false where business_id = :'biz';
+-- fix 6: the Senior / PWD record and the report name the cashier from the staff list, not what the counter typed
+select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
+select test.sale16('16000000-0000-0000-0000-0000000000e1', '[{"id":"e1600000-0000-0000-0000-0000000000e1","recipe_id":"33333333-0000-0000-0000-000000000001","name":"Iced Latte","quantity":1,"unit_price":150,"line_total":150,"senior_discount":30}]',
+  '{"subtotal":150,"service_charge_amount":0,"senior_kind":"SENIOR","senior_items_amount":150,"vat_exempt_amount":0,"senior_discount":30,"grand_total":120,"cashier_name":"Manny Manager"}', 'CASH', '{"kind":"SENIOR","holder_name":"Name Check","id_number":"SC-N-1"}', 'd1600000-0000-0000-0000-0000000005f1')->>'status' as nc \gset
+reset role;
+select test.chk(:'nc' = 'ok' and (select cashier_name = 'Cathy Cashier' from senior_discount_records where sale_id = '16000000-0000-0000-0000-0000000000e1'), 'Z5 (fix 6): the Senior / PWD record names the real cashier (Cathy), not the typed "Manny Manager"',
+  :'nc' || ' ' || coalesce((select cashier_name from senior_discount_records where sale_id = '16000000-0000-0000-0000-0000000000e1'), '-'));
+select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
+select test.chk((select bool_and(x->>'cashier_name' = 'Cathy Cashier') from jsonb_array_elements(public.senior_report((now() at time zone 'Asia/Manila')::date, (now() at time zone 'Asia/Manila')::date)) x where x->>'holder_name' = 'Name Check'), 'Z5 (fix 6): ... and so does senior_report');
+reset role;
+-- fix 1: other number forms are refused as well (NaN, a number written with spaces inside, a hex quantity)
+select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
+select test.chk(test.sale16('16000000-0000-0000-0000-0000000000e2', '[{"id":"e1600000-0000-0000-0000-0000000000e2","recipe_id":"33333333-0000-0000-0000-000000000001","name":"Iced Latte","quantity":1,"unit_price":150,"line_total":150}]', '{"subtotal":150,"service_charge_amount":0,"grand_total":"NaN"}', 'CASH', null, 'd1600000-0000-0000-0000-0000000005f1')->>'message' = 'SALE_TOTALS_MISMATCH'
+  and test.sale16('16000000-0000-0000-0000-0000000000e3', '[{"id":"e1600000-0000-0000-0000-0000000000e3","recipe_id":"33333333-0000-0000-0000-000000000001","name":"Iced Latte","quantity":"0x1","unit_price":150,"line_total":150}]', '{"subtotal":150,"service_charge_amount":0,"grand_total":150}', 'CASH', null, 'd1600000-0000-0000-0000-0000000005f1')->>'message' = 'SALE_TOTALS_MISMATCH',
+  'Z5 (fix 1): a grand total "NaN" or a quantity "0x1" is refused (SALE_TOTALS_MISMATCH)');
+select test.chk(test.sale16('16000000-0000-0000-0000-0000000000e4', '[{"id":"e1600000-0000-0000-0000-0000000000e4","recipe_id":"33333333-0000-0000-0000-000000000001","name":"Iced Latte","quantity":1,"unit_price":150,"line_total":150}]', '{"subtotal":150,"service_charge_amount":0,"grand_total":150}', 'CASH', null, 'd1600000-0000-0000-0000-0000000005f1')->>'status' = 'ok',
+  'Z5 (fix 1): a plain sale still goes through');
+reset role;

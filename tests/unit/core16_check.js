@@ -54,5 +54,12 @@ chk(T.refundAmountForItems(S5, it5, [{sale_item_id:'en', quantity:1}]) + T.refun
 chk(T.refundAmountForItems({subtotal:150, vat_exempt_amount:0, senior_discount:30, grand_total:120}, [{id:'x', unit_price:150, quantity:3, line_total:450, senior_discount:30}], [{sale_item_id:'x', quantity:9}]) === 120, 'Z: naming more pieces than sold gives at most what is left');
 chk(T.toCSV(['n'], [['=HYPERLINK("x")'], ['+63917'], ['-5.00'], ['@SUM(A1)']]) === '"n"\n"\'=HYPERLINK(""x"")"\n"+63917"\n"-5.00"\n"\'@SUM(A1)"', 'Z: CSV cells (Senior report) can\'t start a formula; plain numbers stay numbers', T.toCSV(['n'], [['=HYPERLINK("x")'], ['+63917'], ['-5.00'], ['@SUM(A1)']]));
 chk(T.paymentMethodList({payment_methods:[{id:'CASH', label:'Cash', active:true, charge_type:'BOGUS', charge_value:99}]})[0].charge_value === 0, 'Z: an unknown charge type counts as no charge');
+// Z (gate fix 7): the thermal receipt masks the ID the same way as the screen (last 4, or last 2 for a short ID)
+{
+  const {makeEnv, SAMPLE} = require('./printer_env.js');
+  const e = makeEnv(); e.r(SAMPLE);
+  const idLine = (idno) => e.r('Printer.describe(Printer.receiptBytes(Object.assign({}, SALE, {senior_kind: "SENIOR", senior_discount: 20}), ITEMS, PAYS, {senior: {holder_name: "Lola", id_number: ' + JSON.stringify(idno) + '}}))').split('\n').filter(l => /ID no/.test(l))[0];
+  chk(idLine('SC-0012345') === 'ID no.: **** 2345' && idLine('ABC') === 'ID no.: **BC' && idLine('A1B2') === 'ID no.: **B2', 'Z: thermal receipt ID masked like the screen (**** 2345, short IDs **BC)', [idLine('SC-0012345'), idLine('ABC'), idLine('A1B2')]);
+}
 console.log(`SUMMARY unit/core16_check: ${checks} checks, ${failed} failed`);
 process.exit(failed ? 1 : 0);

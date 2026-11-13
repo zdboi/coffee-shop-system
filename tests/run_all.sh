@@ -146,6 +146,7 @@ TZ=Pacific/Kiritimati run_node "unit/core15_check@Kiritimati" "$DIR/unit/core15_
 run_node unit/core16_check "$DIR/unit/core16_check.js" "$REPO"                    # 1.6: totals with the payment charge + Senior / PWD, refund share, payment methods, ID mask, CSV cells
 "$DIR/e2e_reset.sh" "$DB" > /dev/null 2>&1          # parity check needs a shop (runs inside a rolled-back transaction)
 run_node unit/refund_parity_check "$DIR/unit/refund_parity_check.js" "$REPO" "$DB" 500
+run_node unit/refund16_parity_check "$DIR/unit/refund16_parity_check.js" "$REPO" "$DB" 300   # 1.6: refund share + tax part with Senior / PWD lines (no tax, VAT inside, tax on top, GCash charge) vs the 013 server (rolled back)
 run_node unit/loyalty_totals_check "$DIR/unit/loyalty_totals_check.js" "$REPO" "$DB" 1500   # 1.2: reward totals vs the 008 server (rolled back)
 run_node unit/stock_parity_check "$DIR/unit/stock_parity_check.js" "$REPO" "$DB"         # 1.4: stock lines + unit conversion vs the 010 server (rolled back)
 run_node unit/partner_parity_check "$DIR/unit/partner_parity_check.js" "$REPO" "$DB"     # 1.5: production scaling + partner debt plan vs the 012 server (loads its fixture; the browser suites re-seed)
