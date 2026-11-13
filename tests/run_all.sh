@@ -64,16 +64,16 @@ run_cmd(){ # name command [args...]
 echo "== test database (PostgreSQL 16 on :54329)"
 "$DIR/start_pg.sh" >/dev/null || { echo "test postgres did not start"; exit 1; }
 
-echo "== database: live order 004 -> 005 -> 006 -> 007 -> 008 -> 009 -> 010 -> 011 -> 012 on the live-schema copy (with live CHECK rules), installed twice"
+echo "== database: live order 004 -> 005 -> 006 -> 007 -> 008 -> 009 -> 010 -> 011 -> 012 -> 013 on the live-schema copy (with live CHECK rules), installed twice"
 t0=$SECONDS
 if "$DIR/reset_db.sh" "" "$DB" > "$LOGS/install-1.log" 2>&1; then
   ok2=1; : > "$LOGS/install-2.log"
-  for m in 004_cccc_online_qr.sql 005_live_fixes.sql 006_live_fix_sync_operations.sql 007_batch1.sql 008_release_1_2.sql 009_release_1_3.sql 010_release_1_4.sql 011_release_1_4_1.sql 012_release_1_5.sql; do
+  for m in 004_cccc_online_qr.sql 005_live_fixes.sql 006_live_fix_sync_operations.sql 007_batch1.sql 008_release_1_2.sql 009_release_1_3.sql 010_release_1_4.sql 011_release_1_4_1.sql 012_release_1_5.sql 013_release_1_6.sql; do
     $PSQL -v ON_ERROR_STOP=1 -q -f "$REPO/cccc/supabase/$m" >> "$LOGS/install-2.log" 2>&1 || { ok2=0; echo "second run of $m failed" >> "$LOGS/install-2.log"; break; }
   done
-  if [ $ok2 = 1 ]; then record "004..012 install (x2)" PASS 2 0 $((SECONDS-t0)) "$LOGS/install-2.log"
-  else record "004..012 install (x2)" FAIL 2 1 $((SECONDS-t0)) "$LOGS/install-2.log"; tail -3 "$LOGS/install-2.log"; fi
-else record "004..012 install (x2)" FAIL 1 1 $((SECONDS-t0)) "$LOGS/install-1.log"; tail -3 "$LOGS/install-1.log"; fi
+  if [ $ok2 = 1 ]; then record "004..013 install (x2)" PASS 2 0 $((SECONDS-t0)) "$LOGS/install-2.log"
+  else record "004..013 install (x2)" FAIL 2 1 $((SECONDS-t0)) "$LOGS/install-2.log"; tail -3 "$LOGS/install-2.log"; fi
+else record "004..013 install (x2)" FAIL 1 1 $((SECONDS-t0)) "$LOGS/install-1.log"; tail -3 "$LOGS/install-1.log"; fi
 run_sql_lines  sql/36_live_rules_tests "$DIR/sql/36_live_rules_tests.sql"   # CHECK rules now match live
 
 echo "== database behaviour suites (on the twice-installed database)"

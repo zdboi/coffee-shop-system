@@ -281,6 +281,11 @@ function setSettingsFromServer(row){
   s.subcategory_order = cleanSubcategoryOrder(row && row.subcategory_order);
   // Release 1.5 (012, B7): the barista calibration kit ([] when the column isn't there yet).
   s.barista_kit = cleanBaristaKit(row && row.barista_kit);
+  // Release 1.6 (013): the shop's payment methods, the Senior / PWD % and the count re-check days.
+  // Kept out of DEFAULT_SETTINGS too; missing (older database) -> the defaults in the helpers.
+  if(row && Array.isArray(row.payment_methods) && row.payment_methods.length) s.payment_methods = row.payment_methods.map(m => Object.assign({}, m));
+  if(row && row.senior_discount_pct !== undefined && row.senior_discount_pct !== null) s.senior_discount_pct = Number(row.senior_discount_pct) || 0;
+  if(row && row.count_recheck_days !== undefined && row.count_recheck_days !== null) s.count_recheck_days = Number(row.count_recheck_days) || 7;
   // Optional receipt lines (only when the database has these columns): kept out of
   // DEFAULT_SETTINGS for the same reason. Missing -> '' (nothing printed).
   RECEIPT_EXTRA_KEYS.forEach(k => { s[k] = (row && typeof row[k] === 'string') ? row[k] : ''; });
@@ -300,6 +305,9 @@ function serverSettingsRow(){
   if(Array.isArray(state.settings.barista_kit) && state.settings.barista_kit.length)
     row.barista_kit = state.settings.barista_kit.map(l => Object.assign({}, l));
   RECEIPT_EXTRA_KEYS.forEach(k => { if(state.settings[k]) row[k] = state.settings[k]; });
+  if(Array.isArray(state.settings.payment_methods)) row.payment_methods = state.settings.payment_methods.map(m => Object.assign({}, m));
+  if(state.settings.senior_discount_pct !== undefined) row.senior_discount_pct = state.settings.senior_discount_pct;
+  if(state.settings.count_recheck_days !== undefined) row.count_recheck_days = state.settings.count_recheck_days;
   row.updated_at = new Date().toISOString();
   return row;
 }

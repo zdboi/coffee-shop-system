@@ -403,8 +403,10 @@ select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticate
 select test.chk(test.op('stock_count', jsonb_build_object('id', 'd1500000-0000-0000-0000-0000000000f2', 'shift_id', :'shift_id', 'staff_id', '66666666-0000-0000-0000-000000000001',
    'counted_at', now(), 'lines', '[{"ingredient_id":"22222222-0000-0000-0000-000000000001","quantity":0}]'::jsonb))->>'status' = 'ok', 'C: second count accepted');
 reset role;
-select test.chk((select review_reason from stock_counts where id = 'd1500000-0000-0000-0000-0000000000f2') = 'COUNT_INCOMPLETE, SHIFT_CLOSED, LARGE_SHORTAGE',
-   'C: flags: incomplete, after closing, large shortage', (select review_reason from stock_counts where id = 'd1500000-0000-0000-0000-0000000000f2'));
+-- 013 (release 1.6, owner decision B20; expected value changed 2026-11-13 with C's approval): COUNT_INCOMPLETE now means
+-- "an item that is DUE has no line in any count of this shift". The shift's first count covered both, so: not incomplete.
+select test.chk((select review_reason from stock_counts where id = 'd1500000-0000-0000-0000-0000000000f2') = 'SHIFT_CLOSED, LARGE_SHORTAGE',
+   'C: flags: after closing, large shortage (1.6: not "incomplete", the shift''s first count covered every due item)', (select review_reason from stock_counts where id = 'd1500000-0000-0000-0000-0000000000f2'));
 select test.chk(test.stock('22222222-0000-0000-0000-000000000001') = 0, 'C: stock follows the latest count');
 select test.login('00000000-0000-0000-0000-0000000000a1'); set role authenticated;
 select public.revise_stock_count('d1500000-0000-0000-0000-0000000000f2', '[]') is not null as x \gset
@@ -614,8 +616,10 @@ select test.chk(test.op('stock_count', jsonb_build_object('id','d1500000-0000-00
 -- count 1: beans only, 600 missing (₱600, under the ₱1000 limit)
 select test.chk(test.op('stock_count', jsonb_build_object('id','d1500000-0000-0000-0000-0000000005d2','shift_id','d1500000-0000-0000-0000-0000000005a1','staff_id','66666666-0000-0000-0000-000000000001',
    'lines', jsonb_build_array(jsonb_build_object('ingredient_id','22222222-0000-0000-0000-000000000001','quantity', :zb - 600))))->>'status' = 'ok', 'L4: count of beans only accepted');
-select test.chk(test.op('shift_close', jsonb_build_object('id','d1500000-0000-0000-0000-0000000005a1','closed_by','66666666-0000-0000-0000-000000000001','closed_at', now(),'declared_cash',0))->>'message' = 'COUNT_REQUIRED',
-            'L4: a count that misses a ticked item does not allow closing (COUNT_REQUIRED)');
+select test.chk(test.op('shift_close', jsonb_build_object('id','d1500000-0000-0000-0000-0000000005a1','closed_by','66666666-0000-0000-0000-000000000001','closed_at', now(),'declared_cash',0))->>'status' = 'ok',
+            'L4 (1.6, B20): a count that misses a ticked item that is NOT due (milk: counted before, not moved since) lets the shift close');
+-- ^ 013 (release 1.6, owner decision B20; expected value changed 2026-11-13 with C's approval): was 'message' = 'COUNT_REQUIRED'
+--   ("L4: a count that misses a ticked item does not allow closing"). Only DUE items need a count now.
 -- count 2: both items, another 600 missing: ₱1200 for the shift
 select test.chk(test.op('stock_count', jsonb_build_object('id','d1500000-0000-0000-0000-0000000005d3','shift_id','d1500000-0000-0000-0000-0000000005a1','staff_id','66666666-0000-0000-0000-000000000001',
    'lines', jsonb_build_array(jsonb_build_object('ingredient_id','22222222-0000-0000-0000-000000000001','quantity', :zb - 1200),
@@ -626,8 +630,14 @@ select test.chk((select coalesce(review_reason, '') not like '%LARGE_SHORTAGE%' 
             'L4: LARGE_SHORTAGE on the shift''s total (600 + 600 > 1000), not only per count',
             (select string_agg(id::text || ':' || coalesce(review_reason, '-') || ':' || shortage_cost, ' | ') from stock_counts where shift_id = 'd1500000-0000-0000-0000-0000000005a1'));
 select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
-select test.chk(test.op('shift_close', jsonb_build_object('id','d1500000-0000-0000-0000-0000000005a1','closed_by','66666666-0000-0000-0000-000000000001','closed_at', now(),'declared_cash',0))->>'status' = 'ok',
-            'L4: with a count of every ticked item the shift closes');
+select test.chk(test.op('shift_close', jsonb_build_object('id','d1500000-0000-0000-0000-0000000005a1','closed_by','66666666-0000-0000-0000-000000000001','closed_at', now(),'declared_cash',0))->>'status' = 'skipped',
+            'L4 (1.6, B20): the shift already closed after the first count (closing again: skipped)');
+-- ^ 013 (expected value changed 2026-11-13 with C's approval): was 'status' = 'ok' ("L4: with a count of every ticked item the shift closes")
+reset role;
+select test.chk((select coalesce(review_reason, '') !~ 'COUNT_INCOMPLETE' from stock_counts where id = 'd1500000-0000-0000-0000-0000000005d2')
+            and (select status = 'CLOSED' from shifts where id = 'd1500000-0000-0000-0000-0000000005a1'),
+            'L4 (1.6, B20): ... and that first count is not flagged incomplete; the shift is closed');
+select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
 reset role;
 update ingredients set count_at_close = false where business_id = :'biz';
 select test.login('00000000-0000-0000-0000-0000000000d1'); set role authenticated;
