@@ -20,6 +20,7 @@ const BO = {
   profileName: '',
   counts: {open_qr_orders: 0, customer_count: 0, needs_review: 0},
   reviewSales: 0, reviewRefunds: 0, reviewPayouts: 0, reviewCounts: 0,  // parts of counts.needs_review
+  has161: false,             // the server has 014: settings.profit_split
   has16: false,              // the server has the 1.6 (013) columns: payment methods, Senior / PWD, smart count, accounting report
   has15: false,              // the server has the 1.5 (012) columns: counts, barista kit, R&D, partner branch
   pinUpdateNeeded: [],       // staff ids whose manager/admin PIN is shorter than 6 digits (server list)
@@ -179,6 +180,8 @@ function applyBoBootstrap(d){
   BO.has15 = !!(d.settings && Object.prototype.hasOwnProperty.call(d.settings, 'barista_kit'));
   // Release 1.6 (013): payment methods, extra charges, Senior / PWD, smart count, accounting report.
   BO.has16 = !!(d.settings && Object.prototype.hasOwnProperty.call(d.settings, 'payment_methods'));
+  // Release 1.6.1 (014): the profit split.
+  BO.has161 = !!(d.settings && Object.prototype.hasOwnProperty.call(d.settings, 'profit_split'));
   state.staff = d.staff || [];
   state.categories = d.categories || [];
   state.suppliers = d.suppliers || [];

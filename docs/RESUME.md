@@ -179,3 +179,4 @@ Rules and file owners: `CLAUDE.md`. Tests: `tests/README.md`. Save points: `docs
 
 ## 2026-11-13 15:10: RELEASE 1.6 LIVE (checkpoint 23 = 6cd45f9); 013 frozen, next 014
 - Building 1.6.1: profit split (investors 30% by amount, managers 20% equal: Jake + owner, shop 50%), editable; script 014 (settings.profit_split).
+- 1.6.1 built: 014 (settings.profit_split + trigger check BAD_PROFIT_SPLIT), Back Office Profit split on the Investors page (bo-acct.js profitSplit/profitParts/openProfitSplitForm). My checks: scratchpad/w4/db161-tests.sql (14), bo161-split.js (5). Waiting for Z.
