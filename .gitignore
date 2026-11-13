@@ -10,3 +10,11 @@ private/
 *costing*.xlsx
 *developer changelog*
 !tests/fixtures/demo_*.xlsx
+
+# never commit secrets, backups or exports (1.6.2)
+.env
+.env.*
+*.zip
+*-backup-*.json
+*.csv
+!tests/fixtures/*.csv

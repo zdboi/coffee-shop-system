@@ -4,5 +4,4 @@ exclude:
   - tests
   - .claude
   - CLAUDE.md
-  - docs/handoff
-  - docs/prototype
+  - docs

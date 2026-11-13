@@ -634,7 +634,7 @@ function openPasteRows(table){
   const isInv = table === 'investors';
   openModal({title: isInv ? 'Paste investors from Excel' : 'Paste start-up costs from Excel', wide: true, body: `
     <p class="hint" style="margin-top:0;">In Excel, select the two columns (${isInv ? 'name and amount invested' : 'what it was and the price'}), copy (Ctrl+C), then paste here (Ctrl+V). One row per line. Rows without a name or an amount are skipped${isInv ? '' : ', and a total row is left out if you copied it'}.</p>
-    <textarea id="pr-text" rows="10" style="width:100%;font-family:inherit;" placeholder="${isInv ? 'Mama Lorna\t50000' : 'Espresso machine\t29990'}"></textarea>
+    <textarea id="pr-text" rows="10" style="width:100%;font-family:inherit;" placeholder="${isInv ? 'Ana Santos\t50000' : 'Espresso machine\t29990'}"></textarea>
     <div class="form-grid" style="margin-top:10px;">
       <div class="form-row"><label for="pr-date">Date for all of them <span class="text-light">(optional)</span></label><input type="date" id="pr-date"></div>
       ${isInv ? '' : `<div class="form-row"><label for="pr-cat">Category for all of them</label><select id="pr-cat">${startupCategoryOptions('OTHER')}</select><div class="hint">You can change each one afterwards.</div></div>`}

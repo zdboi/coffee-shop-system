@@ -126,6 +126,8 @@ if $PSQL -v ON_ERROR_STOP=1 -q -f "$DIR/sql/10_behaviour_tests.sql" > /dev/null 
   run_cmd conc16_checks "$DIR/conc16_checks.sh" "$DB"          # 1.6, two sessions at once, on the data 43 left
   run_sql_lines sql/44_release_1_6_1_tests "$DIR/sql/44_release_1_6_1_tests.sql"   # 014 profit split, on the data 43 left
 else record sql/43_release_1_6_tests FAIL 1 1 0 "$LOGS/sql_43_release_1_6_tests.log"; echo "      setup (10 + 11) failed"; fi
+"$DIR/reset_db.sh" "" "$DB" > /dev/null 2>&1
+run_sql_lines  sql/45_audit_two_account_tests "$DIR/sql/45_audit_two_account_tests.sql"   # Part 3 audit B8: every login vs another shop / customer, every table + API function (fresh database)
 
 echo "== unit checks (shared core)"
 run_node unit/core_check "$DIR/unit/core_check.js" "$REPO"
@@ -182,6 +184,9 @@ if [ "$BROWSER" = 1 ]; then
       { echo "== e2e/$name#$run"; $PSQL -At -c "select 'sale '||coalesce(transaction_number,'?')||' '||coalesce(cashier_name,'')||' signed_in='||coalesce((select name from staff where id=s.signed_in_staff_id),'-')||' total='||grand_total||' review='||coalesce(review_reason,'') from sales s where review_reason is not null union all select 'refund '||type||' '||amount||' by='||coalesce(performed_by_name,'')||' review='||coalesce(review_reason,'') from refunds where review_reason is not null or needs_review union all select 'payout '||amount||' by='||coalesce(performed_by_name,'') from cash_movements where needs_review" 2>&1; } >> "$LOGS/review_flags.log"
     done
   done
+  # Part 3 audit G3: backup -> restore drill (own databases db_rev_rsrc / db_rev_rdst, this port; once per run_all)
+  run_cmd restore_audit "$DIR/restore_audit.sh" "$PORT"
+  "$DIR/restart_fake.sh" "$PORT" "$DB" > /dev/null 2>&1
 fi
 
 echo
