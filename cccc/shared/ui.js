@@ -295,6 +295,10 @@ const REVIEW_REASON_TEXT = {
   BEFORE_START_FRESH: 'Dated before the shop started fresh (old test data uploaded late)',
   FUTURE_DATE: 'Dated in the future',
   OLD_DATE: 'Dated more than 7 days back',
+  // release 1.6 (013)
+  SENIOR_MISMATCH: 'Senior / PWD discount differs from your settings',
+  CHARGE_MISMATCH: 'Payment charge differs from your settings',
+  PAYMENT_METHOD_OFF: 'Paid by a method that is switched off or not in your list',
 };
 // "PRICE_BELOW_MENU, TAX_MISMATCH" -> "Sold below the menu price; Tax or service charge doesn't match your settings".
 // Unknown codes become plain lower-case words; an empty reason gives 'Flagged by the server'.

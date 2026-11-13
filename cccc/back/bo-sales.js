@@ -32,8 +32,14 @@ function salesSummary(ds, sales, refunds){
   const gross = sales.reduce((s, x) => s + num(x.grand_total), 0);
   const ref = refunds.reduce((s, r) => s + num(r.amount), 0);
   const ids = new Set(sales.map(s => s.id));
-  const items = ds.saleItems.filter(i => ids.has(i.sale_id)).reduce((s, i) => s + num(i.quantity), 0);
+  const its = ds.saleItems.filter(i => ids.has(i.sale_id));
+  const items = its.reduce((s, i) => s + num(i.quantity), 0);
+  // release 1.6 (B18): drinks vs food / pastries (same rule as the server's accounting_report)
+  const kindOf = (i) => { const r = state.recipes.find(x => x.id === i.recipe_id); if(!r) return 'other'; const t = r.recipe_type || 'DRINKS'; return t === 'DRINKS' ? 'drinks' : (t === 'PASTRY' || t === 'FOOD') ? 'food' : 'other'; };
+  const byKind = {drinks: 0, food: 0, other: 0};
+  its.forEach(i => { byKind[kindOf(i)] += num(i.quantity); });
   return {gross, refunds: ref, net: gross - ref, count: sales.length, avg: sales.length ? gross / sales.length : 0, items,
+    drinks: byKind.drinks, food: byKind.food, otherItems: byKind.other,
     qr: sales.filter(s => s.source === 'QR' || s.qr_order_id).length,
     discounts: sales.reduce((s, x) => s + num(x.discount_amount), 0),
     // stamp card rewards (sales.loyalty_discount, release 1.2), shown as their own line
@@ -156,13 +162,15 @@ function calKpis(sum){
   return `<div class="grid grid-4 cal-kpis">
     ${statCard(SALES_LABELS.netSales, fmtMoney(sum.net), sum.refunds > 0 ? salesMinusRefundsText(sum.gross, sum.refunds) : 'no refunds')}
     ${statCard('Transactions', sum.count.toLocaleString('en-PH'), sum.qr ? `${sum.qr} from QR orders` : 'voided sales not counted')}
-    ${statCard('Average sale', fmtMoney(sum.avg), [sum.discounts > 0 ? `${fmtMoney(sum.discounts)} in discounts` : '', sum.loyalty > 0 ? `${fmtMoney(sum.loyalty)} in ${loyaltyLineLabel().toLowerCase()} (${sum.loyaltyCount})` : ''].filter(Boolean).join(' · '))}
-    ${statCard('Items sold', sum.items.toLocaleString('en-PH'), '')}
+    ${statCard(SALES_LABELS.sales, fmtMoney(sum.gross), [sum.discounts > 0 ? `${fmtMoney(sum.discounts)} in discounts` : '', sum.loyalty > 0 ? `${fmtMoney(sum.loyalty)} in ${loyaltyLineLabel().toLowerCase()} (${sum.loyaltyCount})` : ''].filter(Boolean).join(' · ') || 'what customers paid')}
+    ${statCard('Items sold', sum.items.toLocaleString('en-PH'), `${sum.drinks.toLocaleString('en-PH')} drinks · ${sum.food.toLocaleString('en-PH')} food / pastries${sum.otherItems ? ' · ' + sum.otherItems.toLocaleString('en-PH') + ' other' : ''}`)}
   </div>`;
 }
 
 /* ================= Sales calendar ================= */
-const CAL = {view: 'month', anchor: null, shiftId: null, lastTable: null};
+const CAL = {view: 'month', anchor: null, shiftId: null, lastTable: null, sel: null};   // sel (1.6): {a, b} picked days ('b' null = waiting for the end date)
+// Open the calendar on a span of days (from the Accounting overview).
+function calSetRange(a, b){ CAL.view = 'month'; CAL.anchor = a; CAL.sel = {a, b: b || a}; }
 function calRange(){
   const a = CAL.anchor || shopTodayKey();
   if(CAL.view === 'day') return {fromKey: a, toKey: a, label: keyLabel(a)};
@@ -212,12 +220,14 @@ async function renderCalendar(){
   }catch(e){ body.innerHTML = emptyBlock(esc(friendlyError(e))); return; }
   if(state.route !== 'calendar' || !body.isConnected) return;
   const r = dayRange(range.fromKey, range.toKey);
-  if(CAL.view === 'month') calRenderMonth(body, ds, range, r);
+  if(CAL.view === 'month' && BO.has16){ await calRenderMonth16(body, ds, range, r); }
+  else if(CAL.view === 'month') calRenderMonth(body, ds, range, r);
   else if(CAL.view === 'week') calRenderWeek(body, ds, range, r);
   else if(CAL.view === 'day') calRenderDay(body, ds, range, r);
   else calRenderShift(body, ds, range, r);
   calWireTips(body);
-  body.querySelectorAll('[data-day],[data-key]').forEach(n => n.addEventListener('click', () => { CAL.anchor = n.dataset.day || n.dataset.key; CAL.view = 'day'; calTip(null); renderCalendar(); }));
+  if(!(CAL.view === 'month' && BO.has16))
+    body.querySelectorAll('[data-day],[data-key]').forEach(n => n.addEventListener('click', () => { CAL.anchor = n.dataset.day || n.dataset.key; CAL.view = 'day'; calTip(null); renderCalendar(); }));
 }
 function calByDay(ds, r){
   const byDay = {};
@@ -254,6 +264,101 @@ function calRenderMonth(body, ds, range, r){
       <div class="cal-scale">Less ${[0.0001, 0.25, 0.5, 0.75, 1].map(t => `<span class="sw" style="background:${calShade(t).bg}"></span>`).join('')} More</div>
       ${calTableTwin(['Date', 'Transactions', SALES_LABELS.sales, SALES_LABELS.refunds, SALES_LABELS.netSales], rows.filter(x => x[1] || Number(x[3])).map(x => [keyLabel(x[0], {weekday: 'short', month: 'short', day: 'numeric'}), x[1], fmtMoney(x[2]), fmtMoney(x[3]), fmtMoney(x[4])]))}
     </div>`;
+}
+/* ---- Month view with a span of days (release 1.6, B18) ----
+   The calendar stays on screen (sticky) while the details scroll. Tap a day = that day;
+   tap a second day (any month: use the arrows in between) = everything from the first
+   to the second. The money comes from the server's accounting_report, the same report
+   as the Accounting overview, so both pages always show the same numbers. */
+function calSelKeys(range){
+  const s = CAL.sel;
+  if(!s || !s.a) return [range.fromKey, range.toKey, false];
+  const b = s.b || s.a;
+  return s.a <= b ? [s.a, b, true] : [b, s.a, true];
+}
+async function calRenderMonth16(body, ds, range, r){
+  const [a, b, picked] = calSelKeys(range);
+  let month, span;
+  try{
+    [month, span] = await Promise.all([acctReport(range.fromKey, range.toKey), (a === range.fromKey && b === range.toKey) ? null : acctReport(a, b)]);
+  }catch(e){ body.innerHTML = emptyBlock(esc(friendlyError(e))); return; }
+  if(state.route !== 'calendar' || !body.isConnected) return;
+  span = span || month;
+  const byDay = {};
+  (month.days || []).forEach(d => { byDay[d.day] = d; });
+  const max = Math.max(0, ...Object.values(byDay).map(d => num(d.net_sales)));
+  const todayKey = shopTodayKey();
+  const inSel = (k) => picked && k >= a && k <= b;
+  let cells = BO_DOW.map(d => `<div class="cal-dow">${d}</div>`).join('');
+  let k = keyAddDays(range.fromKey, -keyDow(range.fromKey));
+  const lastCell = keyAddDays(range.toKey, 6 - keyDow(range.toKey));
+  for(; k <= lastCell; k = keyAddDays(k, 1)){
+    const inMonth = k >= range.fromKey && k <= range.toKey;
+    const v = inMonth ? byDay[k] : null;
+    const net = v ? num(v.net_sales) : 0, n = v ? num(v.sale_count) : 0;
+    const sh = calShade(max > 0 ? net / max : 0);
+    const dayName = keyLabel(k, {weekday: 'long', month: 'short', day: 'numeric'});
+    const tip = n || (v && (num(v.refunds) || num(v.voids) || num(v.waste)))
+      ? calTipAdd(fmtMoney(net) + ' net sales', [dayName, plural(n, 'sale'), 'Net income ' + signedMoney(v.net_income)]
+          .concat(num(v.refunds) ? [fmtMoney(v.refunds) + ' refunded'] : [], num(v.void_count) ? [plural(num(v.void_count), 'void')] : [], num(v.waste) ? [fmtMoney(v.waste) + ' waste'] : []))
+      : calTipAdd('No sales', [dayName]);
+    const cls = ['cal-day', inMonth ? '' : 'out', k === todayKey ? 'today' : '', inSel(k) ? 'sel' : '', picked && (k === a || k === b) ? 'sel-end' : ''].filter(Boolean).join(' ');
+    cells += `<button class="${cls}" style="background:${sh.bg};color:${sh.fg}" data-pick="${k}" data-tip="${tip}" aria-pressed="${inSel(k)}" aria-label="${esc(dayName + ': ' + (n ? fmtMoney(net) + ' net sales' : 'no sales'))}">
+      <span class="d">${Number(k.slice(8))}${v && (num(v.void_count) || num(v.refunds)) ? ' <span class="cal-flag" aria-hidden="true">•</span>' : ''}</span>${n ? `<span><span class="v">${esc(calCompact(net))}</span><br><span class="n">${n} sale${n === 1 ? '' : 's'}</span></span>` : ''}</button>`;
+  }
+  const t = span.totals || {}, it = t.items || {};
+  const label = a === b ? keyLabel(a, {weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'}) : `${keyLabel(a, {month: 'short', day: 'numeric', year: 'numeric'})} to ${keyLabel(b, {month: 'short', day: 'numeric', year: 'numeric'})}`;
+  const waiting = CAL.sel && CAL.sel.a && !CAL.sel.b;
+  const days = (span.days || []).filter(d => num(d.sale_count) || num(d.refunds) || num(d.voids) || num(d.waste) || num(d.expenses));
+  const headers = ['Date', 'Transactions', SALES_LABELS.sales, SALES_LABELS.refunds, SALES_LABELS.netSales, 'Voids', 'Waste', 'Expenses', 'Net income', 'Drinks', 'Food / pastries'];
+  CAL.lastTable = {name: 'daily-' + a + (a === b ? '' : '-to-' + b), headers,
+    rows: (span.days || []).map(d => [d.day, num(d.sale_count), num(d.sales).toFixed(2), num(d.refunds).toFixed(2), num(d.net_sales).toFixed(2),
+      num(d.voids).toFixed(2), num(d.waste).toFixed(2), num(d.expenses).toFixed(2), num(d.net_income).toFixed(2), num(d.drinks), num(d.food)])};
+  const ni = num(t.net_income);
+  body.innerHTML = `<div class="cal-split">
+    <div class="cal-fixed"><div class="card cal-card">
+      <h3>${esc(range.label)}</h3>
+      <div class="cal-sub" id="cal-pick-hint">${waiting ? `Started at ${esc(keyLabel(CAL.sel.a, {month: 'short', day: 'numeric'}))}. Now tap the end date (use the arrows above for another month), or tap the same day again for just that day.` : 'Tap a day to see it. Tap a second day to see everything in between.'}</div>
+      <div class="cal-month">${cells}</div>
+      <div class="cal-scale">Less ${[0.0001, 0.25, 0.5, 0.75, 1].map(x => `<span class="sw" style="background:${calShade(x).bg}"></span>`).join('')} More · <span aria-hidden="true">•</span> refunds or voids</div>
+      ${picked ? `<div class="field-inline" style="margin-top:10px;"><button class="btn btn-ghost btn-sm" id="cal-clear">Show the whole month</button>${a === b ? `<button class="btn btn-outline btn-sm" id="cal-hours">Hour by hour</button>` : ''}</div>` : ''}
+    </div></div>
+    <div class="cal-details">
+      <h3 class="cal-span-title">${esc(label)}</h3>
+      <div class="grid grid-4 cal-kpis">
+        ${statCard(SALES_LABELS.sales, fmtMoney(t.sales), plural(num(t.sale_count), 'transaction'))}
+        ${statCard(SALES_LABELS.netSales, fmtMoney(t.net_sales), num(t.refunds) ? salesMinusRefundsText(t.sales, t.refunds) : 'no refunds')}
+        ${statCard('Net income', `<span class="${ni < 0 ? 'text-red' : 'text-green'}">${signedMoney(ni)}</span>`, 'after tax owed, ingredients, waste, expenses and fees')}
+        ${statCard('Items sold', fmtQtyPlain(num(it.drinks) + num(it.food) + num(it.other)), `${fmtQtyPlain(it.drinks)} drinks · ${fmtQtyPlain(it.food)} food / pastries${num(it.other) ? ' · ' + fmtQtyPlain(it.other) + ' other' : ''}`)}
+      </div>
+      <div class="grid grid-4 cal-kpis">
+        ${statCard(SALES_LABELS.refunds, fmtMoney(t.refunds), 'given back on these days')}
+        ${statCard('Voids', plural(num(t.void_count), 'void'), num(t.void_count) ? fmtMoney(t.voids) + ' cancelled (not in sales)' : 'none')}
+        ${statCard('Waste', fmtMoney(t.ingredients_wasted), 'ingredients, at cost')}
+        ${statCard('Expenses', fmtMoney(t.expenses), num(t.payment_fees) ? fmtMoney(t.payment_fees) + ' payment fees too' : '')}
+      </div>
+      <div class="card cal-card"><h3>Day by day</h3>
+        ${days.length ? `<div class="table-wrap" style="box-shadow:none;"><table class="cal-days-table"><thead><tr><th>Date</th><th class="num">Sales</th><th class="num">Refunds</th><th class="num">Net sales</th><th class="num">Voids</th><th class="num">Waste</th><th class="num">Net income</th><th class="num">Drinks</th><th class="num">Food</th></tr></thead><tbody>
+          ${days.map(d => `<tr><td><a class="linklike" data-open-day="${esc(d.day)}">${esc(keyLabel(d.day, {weekday: 'short', month: 'short', day: 'numeric'}))}</a></td><td class="num">${fmtMoney(d.sales)}<div class="text-light" style="font-size:12px;">${plural(num(d.sale_count), 'sale')}</div></td>
+            <td class="num">${num(d.refunds) ? fmtMoney(d.refunds) : '—'}</td><td class="num">${fmtMoney(d.net_sales)}</td><td class="num">${num(d.void_count) ? num(d.void_count) + ' · ' + fmtMoney(d.voids) : '—'}</td>
+            <td class="num">${num(d.waste) ? fmtMoney(d.waste) : '—'}</td><td class="num ${num(d.net_income) < 0 ? 'text-red' : ''}">${signedMoney(d.net_income)}</td><td class="num">${fmtQtyPlain(d.drinks)}</td><td class="num">${fmtQtyPlain(d.food)}</td></tr>`).join('')}
+          <tr class="total-row"><td><b>Total</b></td><td class="num"><b>${fmtMoney(t.sales)}</b></td><td class="num"><b>${fmtMoney(t.refunds)}</b></td><td class="num"><b>${fmtMoney(t.net_sales)}</b></td><td class="num"><b>${num(t.void_count)}</b></td><td class="num"><b>${fmtMoney(t.ingredients_wasted)}</b></td><td class="num"><b>${signedMoney(ni)}</b></td><td class="num"><b>${fmtQtyPlain(it.drinks)}</b></td><td class="num"><b>${fmtQtyPlain(it.food)}</b></td></tr>
+          </tbody></table></div>` : '<div class="cal-empty">No sales, refunds or waste on these days.</div>'}
+        <p class="hint" style="margin-bottom:0;">Same numbers as <a class="linklike" id="cal-go-acct">Money → Accounting overview</a> for these days. Net income takes off tax owed, ingredients used and wasted, expenses and payment fees.</p>
+      </div>
+    </div></div>`;
+  body.querySelectorAll('[data-pick]').forEach(n => n.addEventListener('click', () => {
+    const key = n.dataset.pick;
+    calTip(null);
+    if(CAL.sel && CAL.sel.a && !CAL.sel.b) CAL.sel.b = key;            // second tap: the end of the span
+    else CAL.sel = {a: key, b: null};                                    // first tap: start over at this day
+    if(key < range.fromKey || key > range.toKey) CAL.anchor = key;       // a greyed day of the next / previous month
+    renderCalendar();
+  }));
+  const clear = body.querySelector('#cal-clear'); if(clear) clear.onclick = () => { CAL.sel = null; renderCalendar(); };
+  const hours = body.querySelector('#cal-hours'); if(hours) hours.onclick = () => { CAL.anchor = a; CAL.view = 'day'; renderCalendar(); };
+  body.querySelectorAll('[data-open-day]').forEach(x => x.onclick = () => { CAL.anchor = x.dataset.openDay; CAL.view = 'day'; renderCalendar(); });
+  const ga = body.querySelector('#cal-go-acct'); if(ga) ga.onclick = () => { ACCT.preset = 'custom'; ACCT.from = a; ACCT.to = b; navigate('netIncome'); };
 }
 function calRenderWeek(body, ds, range, r){
   const sales = salesIn(ds, r.from, r.to), refunds = refundsIn(ds, r.from, r.to);
@@ -465,6 +570,9 @@ const REVIEW_CHECK_HINT = {
   TAX_MISMATCH: 'compare the tax and service charge with Settings → Receipts & tax',
   PAYMENT_MISMATCH: 'compare the payments with the total',
   STAFF_MISMATCH: 'check who was signed in at the counter (shown above)',
+  SENIOR_MISMATCH: 'compare the Senior / PWD discount with Settings → Payments & discounts (a counter may not have reloaded yet)',
+  CHARGE_MISMATCH: 'compare the payment charge with Settings → Payments & discounts (a counter may not have reloaded yet)',
+  PAYMENT_METHOD_OFF: 'check the payment method; switch it back on in Settings → Payments & discounts if it is still used',
   FUTURE_DATE: 'check the sale\'s date and time, and the clock of that counter',
   // release 1.3 (009)
   OUT_OF_STOCK: 'count the ingredients this sale used (Inventory) and record the missing stock, a purchase or a stock count',

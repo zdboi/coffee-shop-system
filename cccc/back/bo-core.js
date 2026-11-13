@@ -724,7 +724,8 @@ const BO_NAV = [
   {id: 'suppliers', label: 'Suppliers', ic: 'download'},
   {group: 'Money'},
   {id: 'expenses', label: 'Expenses', ic: 'card'},
-  {id: 'netIncome', label: 'Net income', ic: 'star'},
+  {id: 'netIncome', label: 'Accounting overview', ic: 'star'},
+  {id: 'seniorReport', label: 'Senior / PWD report', ic: 'user'},
   {id: 'reports', label: 'Reports', ic: 'chart'},
   {group: 'Setup'},
   {id: 'tables', label: 'Tables & QR codes', ic: 'map'},
@@ -756,7 +757,8 @@ const BO_ROUTES = {
   optionLibrary: {title: 'Options library', nav: 'recipes', render: () => renderOptionLibrary()},     // bo-library.js (1.4, A9)
   wasteReport: {title: 'Waste report', render: () => renderWasteReport()},                          // bo-money.js (1.4, A15)
   expenses: {title: 'Expenses', render: () => renderExpenses()},                                    // bo-money.js (1.4, A11)
-  netIncome: {title: 'Net income', render: () => renderNetIncome()},                                // bo-money.js (1.4, A11)
+  netIncome: {title: 'Accounting overview', render: () => renderAccounting()},                      // bo-acct.js (1.6, B1; month-only Net income on an older database)
+  seniorReport: {title: 'Senior / PWD report', render: () => renderSeniorReport()},                 // bo-acct.js (1.6, B19)
   inventory: {title: 'Inventory', render: () => renderInventory()},
   costing: {title: 'Recipe costing', render: () => renderCosting()},
   suppliers: {title: 'Suppliers', render: () => renderSuppliers()},

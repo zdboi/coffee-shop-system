@@ -840,9 +840,10 @@ begin
   ),
   itd as (
     select s.day,
-           sum(case when r.recipe_type = 'DRINKS' then coalesce(si.quantity, 0) else 0 end) as drinks,
+           -- a recipe without a type is a drink (same rule as the apps: recipeTypeOf)
+           sum(case when r.id is not null and coalesce(r.recipe_type, 'DRINKS') = 'DRINKS' then coalesce(si.quantity, 0) else 0 end) as drinks,
            sum(case when r.recipe_type in ('PASTRY', 'FOOD') then coalesce(si.quantity, 0) else 0 end) as food,
-           sum(case when r.recipe_type is null or r.recipe_type not in ('DRINKS', 'PASTRY', 'FOOD') then coalesce(si.quantity, 0) else 0 end) as other
+           sum(case when r.id is null or r.recipe_type not in ('DRINKS', 'PASTRY', 'FOOD') then coalesce(si.quantity, 0) else 0 end) as other
     from s join public.sale_items si on si.sale_id = s.id and si.business_id = v_biz
     left join public.recipes r on r.id = si.recipe_id and r.business_id = v_biz
     group by s.day

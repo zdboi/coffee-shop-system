@@ -1078,7 +1078,7 @@ function stockCountDeltas(dataOrLines, expectedById){
 // Why the server flagged a count (stock_counts.review_reason, comma separated) in plain words.
 const COUNT_REVIEW_TEXT = {
   COUNT_EXTRA: 'More counted than expected (stock was raised to the count)',
-  COUNT_INCOMPLETE: 'Not every ticked item was counted',
+  COUNT_INCOMPLETE: 'An item that was due was not counted',
   LARGE_SHORTAGE: 'Missing stock worth more than the review limit',
   STAFF_MISMATCH: 'Counted by someone other than who was signed in',
   FUTURE_DATE: 'Dated in the future', OLD_DATE: 'Dated more than 7 days back',
