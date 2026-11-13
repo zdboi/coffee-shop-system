@@ -814,6 +814,8 @@ async function openSaleModal(saleId){
     </tbody></table></div>
     <div class="kv-list" style="margin-top:12px;">
       <div>Subtotal <b>${fmtMoney(sale.subtotal)}</b>${num(sale.discount_amount) > 0 ? ` · Discount <b>-${fmtMoney(sale.discount_amount)}</b>${sale.discount_approved_by_name ? ' (approved by ' + esc(sale.discount_approved_by_name) + ')' : ''}` : ''}${num(sale.loyalty_discount) > 0 ? ` · ${esc(loyaltyLineLabel())} <b>-${fmtMoney(sale.loyalty_discount)}</b>` : ''}${num(sale.tax_amount) > 0 ? ` · Tax <b>${fmtMoney(sale.tax_amount)}</b>` : ''}${num(sale.service_charge_amount) > 0 ? ` · Service charge <b>${fmtMoney(sale.service_charge_amount)}</b>` : ''}</div>
+      ${num(sale.senior_discount) + num(sale.vat_exempt_amount) > 0 ? `<div>${esc(seniorKindLabel(sale.senior_kind))} discount on ${fmtMoney(sale.senior_items_amount)} of items: ${num(sale.vat_exempt_amount) ? `VAT taken out <b>-${fmtMoney(sale.vat_exempt_amount)}</b> · ` : ''}discount <b>-${fmtMoney(sale.senior_discount)}</b> <a class="linklike" id="sm-senior">name and ID in the Senior / PWD report</a></div>` : ''}
+      ${num(sale.payment_fee) > 0 ? `<div>Payment charge ${num(sale.payment_charge) > 0 ? `<b>+${fmtMoney(sale.payment_charge)}</b> (paid by the customer)` : `<b>${fmtMoney(sale.payment_fee)}</b> waived (absorbed by the shop)`}</div>` : ''}
       <div style="font-size:16px;">Total <b>${fmtMoney(sale.grand_total)}</b></div>
       ${payments.map(p => `<div>Paid by <b>${esc(payLabel(p.method))}</b> ${fmtMoney(p.amount)}${p.method === 'CASH' && p.tendered != null ? ` (cash ${fmtMoney(p.tendered)}, change ${fmtMoney(p.change)})` : ''}${p.reference ? ' · ref ' + esc(p.reference) : ''}</div>`).join('') || '<div class="text-light">No payment recorded.</div>'}
     </div>
@@ -828,6 +830,8 @@ async function openSaleModal(saleId){
         const ok = await boSave([Ops.update('sales', {id: sale.id, needs_review: false}), Ops.audit('Sale reviewed', `${sale.transaction_number} — ${reviewText(sale.review_reason)}`, sale.id)], {reload: false, dropSales: true, success: 'Marked as reviewed'});
         if(ok){ closeModal(); await refreshReviewCount(); if(state.route === 'transactions') loadTransactions(true); }
       });
+      const sn = root.querySelector('#sm-senior');
+      if(sn) sn.onclick = () => { const k = dayKeyOf(sale.transaction_date); SENIOR_REP.preset = 'custom'; SENIOR_REP.from = k; SENIOR_REP.to = k; closeModal(); navigate('seniorReport'); };
       const v = root.querySelector('#sm-void'); if(v) v.onclick = () => openOwnerRefund(b, 'VOID');
       const r = root.querySelector('#sm-refund'); if(r) r.onclick = () => openOwnerRefund(b, 'REFUND');
     }});
