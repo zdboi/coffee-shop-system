@@ -329,3 +329,10 @@ Owner: **don't start 1.3 until I say so.**
 - Lead suggestions (26 menu items → 12 with tabs; Dashboard trimmed; repeated reports removed; one badge per item; remembered tab). Owner: "I like the new 12 items and the other clean-up ideas."
 - Decisions: **Sales calendar under Sales, as the first tab**; the 12-item grouping as proposed; **ship the clean-up and the security hardening together** (as 1.6.2) if they don't interfere (they don't).
 - Z's full audit of 1.6.1 started 2026-11-14 01:5x (baseline for the hardening plan).
+
+## 1.6.2 decisions after Z's audit (owner, 2026-11-14)
+- Repository: **make it private and move hosting to Cloudflare Pages** (free; the web address changes, so QR codes are reprinted and counters re-paired). Cloudflare also lets us send real security headers.
+- Two-step sign-in (authenticator app) for the Back Office: **optional** (the owner chooses to switch it on).
+- Privacy notice: QR customers' details kept **1 year** after their last visit.
+- Google Drive backup and Google Fonts: **not used, remove** (the Back Office loads only our own code; downloaded backups stay).
+- Hotfix PR #11 (investor details out of public docs, `docs/` off the site) sent to the owner to merge now.
