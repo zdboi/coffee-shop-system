@@ -293,7 +293,7 @@ Owner: **don't start 1.3 until I say so.**
 ## B2 back in Wave 4: investors + start-up costs (owner, 2026-11-13 10:13)
 - Owner (with the sheet "CCCC Initial Funds and Expense"): "Can I also integrate this data in the app. these are the initial investments and the initial expenses made. also make it so that I can add/remove/replace investors and their investment values."
 - Overlap (lead): this is B2 investor equity, moved out of Wave 4 on 2026-11-12; Expenses (1.4) exists but is for running costs.
-- Sheet: 5 investors = ₱200,000 (Mama Lorna 50,000; Jake 30,000; Renan 40,000; Jom 40,000; Zed 40,000; a "?" row with no amount, left out); 61 start-up costs = ₱195,871 (no dates); cash left ₱4,129.
+- Sheet: 5 investors and 61 start-up costs (names and amounts kept privately, not in this repository; they live only in the Back Office).
 - **Owner decisions (10:1x):** build it **in Wave 4 now**; start-up costs are **separate "start-up costs", NOT taken off any month's net income**; ownership % **follows the amounts** (amount ÷ total, updates by itself).
 - Lead scope: Back Office → Money → Investors & start-up: investors (add / edit / remove, amount, date, note), start-up costs (add / edit / delete, date, category, note), paste rows straight from Excel (name + amount), totals: invested, start-up costs, cash left, each person's %, and each person's share of net income for any dates (information only). Payouts / payback tracking: later.
 
