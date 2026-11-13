@@ -296,3 +296,7 @@ Owner: **don't start 1.3 until I say so.**
 - Sheet: 5 investors = ₱200,000 (Mama Lorna 50,000; Jake 30,000; Renan 40,000; Jom 40,000; Zed 40,000; a "?" row with no amount, left out); 61 start-up costs = ₱195,871 (no dates); cash left ₱4,129.
 - **Owner decisions (10:1x):** build it **in Wave 4 now**; start-up costs are **separate "start-up costs", NOT taken off any month's net income**; ownership % **follows the amounts** (amount ÷ total, updates by itself).
 - Lead scope: Back Office → Money → Investors & start-up: investors (add / edit / remove, amount, date, note), start-up costs (add / edit / delete, date, category, note), paste rows straight from Excel (name + amount), totals: invested, start-up costs, cash left, each person's %, and each person's share of net income for any dates (information only). Payouts / payback tracking: later.
+
+## Supplied sauces / syrups (owner, 2026-11-13 10:31)
+- Owner: "Include sauces, syrups, and foods to Supplied items". Asked what for: **"Use them in drinks"**.
+- Lead: already supported, nothing to build. Food is already a supplied item type (resold per piece). Bought-ready sauces and syrups used in drinks are normal (raw) ingredients: Ingredients → + Add ingredient (category Syrups & Sauces, stock in mL or g), then Purchases, then in recipes / the Options library. Told the owner how.
