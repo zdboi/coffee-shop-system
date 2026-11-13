@@ -1583,6 +1583,10 @@ function saleItemUnitPrice(it){
 //   otherwise -> min(left, round(L × G / S, 2))          (S = 0 -> 0)
 // Release 1.6: a Senior / PWD line counts at unit price − its senior_discount / quantity,
 // and S = subtotal − VAT taken out − Senior / PWD discount (same numbers as before without one).
+// Release 1.6 (Z finding 3): tax is only on the lines WITHOUT a Senior / PWD discount, so the
+// tax part is shared over those lines only: share = L × (G − T) / S + Lt × T / St, where
+// T = tax_amount, Lt = the returned value of taxed lines, St = the value of all taxed lines
+// (St = 0 -> no tax part). Without Senior / PWD lines St = S and Lt = L, so this is L × G / S.
 // So a void or a refund of everything gives back exactly what is left, and several
 // partial refunds of a sale add up to its grand total.
 function refundAmountForItems(sale, items, refundItems, prior){
@@ -1594,15 +1598,19 @@ function refundAmountForItems(sale, items, refundItems, prior){
     if(!ri || ri.sale_item_id == null) return;
     now[ri.sale_item_id] = (now[ri.sale_item_id] || 0) + Math.max(0, Number(ri.quantity) || 0);
   });
-  let returnedValue = 0, everything = true;
+  let returnedValue = 0, returnedTaxed = 0, taxedAll = 0, everything = true;
   (items || []).forEach(it => {
     if(!it) return;
     const sold = Math.max(0, Number(it.quantity) || 0);
     const before = Math.max(0, Number(priorQty[it.id]) || 0);
     const q = now[it.id] || 0;
     // a Senior / PWD line counts at its price minus its own discount (1.6)
-    const sd = sold > 0 ? Math.max(0, Number(it.senior_discount) || 0) / sold : 0;
-    returnedValue += Math.max(0, saleItemUnitPrice(it) - sd) * Math.min(q, Math.max(0, sold - before));
+    const sdTotal = Math.max(0, Number(it.senior_discount) || 0);
+    const sd = sold > 0 ? sdTotal / sold : 0;
+    const unit = Math.max(0, saleItemUnitPrice(it) - sd);
+    const back = unit * Math.min(q, Math.max(0, sold - before));
+    returnedValue += back;
+    if(!(sdTotal > 0)){ returnedTaxed += back; taxedAll += unit * sold; }
     if(before + q < sold - 0.0001) everything = false;
   });
   if(everything) return left;
@@ -1610,7 +1618,10 @@ function refundAmountForItems(sale, items, refundItems, prior){
   const S = roundMoney((Number(sale && sale.subtotal) || 0) - (Number(sale && sale.vat_exempt_amount) || 0) - (Number(sale && sale.senior_discount) || 0));
   if(S <= 0) return 0;
   const G = Math.max(0, roundMoney(sale && sale.grand_total));
-  return Math.min(left, roundMoney(returnedValue * G / S));
+  const T = Math.min(G, Math.max(0, roundMoney(sale && sale.tax_amount)));
+  const St = roundMoney(taxedAll);
+  const share = returnedValue * (G - (St > 0 ? T : 0)) / S + (St > 0 ? returnedTaxed * T / St : 0);
+  return Math.min(left, roundMoney(share));
 }
 
 /* ================= Stamp card (release 1.2, 008) =================

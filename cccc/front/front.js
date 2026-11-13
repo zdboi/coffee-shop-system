@@ -1041,7 +1041,9 @@ async function showFailedOps(){
       root.querySelector('[data-close]').onclick = closeModal;
       const dl = root.querySelector('#fo-dl-failed');
       // Approval tokens stay on this counter (needed for Retry) but are left out of the download.
-      const noTokens = list.map(f=>Object.assign({}, f, {data: Object.assign({}, f.data, {approval_token: undefined, discount_approval_token: undefined})}));
+      // 1.6: a refused Senior / PWD sale keeps the full ID on this counter (needed for Retry), but the download shows only its last characters.
+      const noTokens = list.map(f=>Object.assign({}, f, {data: Object.assign({}, f.data, {approval_token: undefined, discount_approval_token: undefined},
+        f.data && f.data.senior ? {senior: Object.assign({}, f.data.senior, {id_number: maskIdNumber(f.data.senior.id_number)})} : {})}));
       if(dl) dl.onclick = ()=> downloadFile(`${fileNameSlug()}-failed-uploads-${todayISO()}.json`, JSON.stringify(noTokens, null, 2), 'application/json');
       root.querySelectorAll('[data-retry]').forEach(b=> b.onclick = async ()=>{
         const f = list.find(x=>String(x.seq)===b.dataset.retry);

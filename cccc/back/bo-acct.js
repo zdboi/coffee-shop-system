@@ -406,7 +406,7 @@ function parsePastedRows(text){
     if(parts.length < 2){ const m = line.match(/^(.*?)[\s]+([₱\d,.=+]+)\s*$/); if(m) parts = [m[1], m[2]]; }
     const name = String(parts[0] || '').replace(/[\x00-\x1F\x7F]/g, ' ').replace(/\s+/g, ' ').trim();
     const amount = parsePeso(parts.slice(1).find(x => String(x).trim() !== ''));
-    if(!name || !(amount > 0)){ bad.push(i + 1); return; }
+    if(!name || !(amount > 0) || amount > 100000000){ bad.push(i + 1); return; }
     rows.push({name: name.slice(0, 120), amount: Math.round(amount * 100) / 100});
   });
   return {rows, bad};
@@ -514,7 +514,7 @@ function openInvestorForm(x){
         const name = root.querySelector('#if-name').value.replace(/\s+/g, ' ').trim();
         const amount = Math.round(num(root.querySelector('#if-amt').value) * 100) / 100;
         if(!name){ toast('Type the investor\'s name.', 'error'); return; }
-        if(!(amount > 0)){ toast('Type the amount invested (more than ₱0).', 'error'); return; }
+        if(!(amount > 0) || amount > 100000000){ toast('Type the amount invested (more than ₱0, at most ₱100,000,000).', 'error'); return; }
         if(INV.investors.some(o => o.id !== (x && x.id) && o.name.trim().toLowerCase() === name.toLowerCase())){ toast(`There is already an investor called "${name}".`, 'error'); return; }
         const row = {id: x ? x.id : uid(), name, amount, invested_on: root.querySelector('#if-date').value || null, notes: root.querySelector('#if-note').value.trim() || null, updated_at: nowISO()};
         const what = isNew ? `${name}: ${fmtMoney(amount)}` : `${x.name}: ${fmtMoney(x.amount)} -> ${name}: ${fmtMoney(amount)}`;
@@ -546,7 +546,7 @@ function openStartupForm(c){
         const name = root.querySelector('#sf-name').value.replace(/\s+/g, ' ').trim();
         const amount = Math.round(num(root.querySelector('#sf-amt').value) * 100) / 100;
         if(!name){ toast('Type what it was.', 'error'); return; }
-        if(!(amount > 0)){ toast('Type the amount (more than ₱0).', 'error'); return; }
+        if(!(amount > 0) || amount > 100000000){ toast('Type the amount (more than ₱0, at most ₱100,000,000).', 'error'); return; }
         const row = {id: c ? c.id : uid(), name, amount, cost_date: root.querySelector('#sf-date').value || null, category: root.querySelector('#sf-cat').value,
           notes: root.querySelector('#sf-note').value.trim() || null, updated_at: nowISO()};
         const what = isNew ? `${name}: ${fmtMoney(amount)}` : `${c.name}: ${fmtMoney(c.amount)} -> ${name}: ${fmtMoney(amount)}`;
@@ -581,7 +581,7 @@ function openPasteRows(table){
         parsed.rows = parsed.rows.filter(r => !/^(total|sub-?total|grand total)$/i.test(r.name));
         const dupes = isInv ? parsed.rows.filter((r, i) => parsed.rows.findIndex(o => o.name.toLowerCase() === r.name.toLowerCase()) !== i || INV.investors.some(o => o.name.trim().toLowerCase() === r.name.toLowerCase())) : [];
         const sum = parsed.rows.reduce((s, r) => s + r.amount, 0);
-        pv.innerHTML = parsed.rows.length ? `<b>${plural(parsed.rows.length, isInv ? 'investor' : 'item')}, ${fmtMoney(sum)} in all.</b>${parsed.bad.length ? ` Skipped line${parsed.bad.length === 1 ? '' : 's'} ${parsed.bad.slice(0, 10).join(', ')}${parsed.bad.length > 10 ? '…' : ''} (no name or amount).` : ''}
+        pv.innerHTML = parsed.rows.length ? `<b>${plural(parsed.rows.length, isInv ? 'investor' : 'item')}, ${fmtMoney(sum)} in all.</b>${parsed.bad.length ? ` Skipped line${parsed.bad.length === 1 ? '' : 's'} ${parsed.bad.slice(0, 10).join(', ')}${parsed.bad.length > 10 ? '…' : ''} (no name, or no amount between ₱0 and ₱100,000,000).` : ''}
           ${dupes.length ? `<div class="text-red">Already on the list or twice in what you pasted: ${dupes.map(d => esc(d.name)).join(', ')}. Remove ${dupes.length === 1 ? 'it' : 'them'} first.</div>` : ''}
           <div style="max-height:180px;overflow:auto;margin-top:6px;">${parsed.rows.slice(0, 200).map(r => `<div>${esc(r.name)} · ${fmtMoney(r.amount)}</div>`).join('')}</div>`
           : (ta.value.trim() ? 'Nothing could be read yet: each line needs a name and an amount.' : '');

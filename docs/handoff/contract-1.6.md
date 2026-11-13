@@ -62,8 +62,8 @@ sale_items.senior_discount: (V + Ds) shared over the Senior/PWD lines by line to
 `sale` op data: as before + `data.senior = {kind, holder_name, id_number}` (only with a Senior/PWD discount).
 The server saves it in `senior_discount_records` (pct = what the sale used: `Ds / (A − V)`), and never sends it back to a counter.
 
-**Partial refund share** (`refundAmountForItems` = `_refund_items_cap`): returned value = Σ (unit price − line `senior_discount` / line quantity) × quantity returned;
-share = returned value × `grand_total` / (`S − V − Ds`). Same as before for sales without Senior/PWD.
+**Partial refund share** (`refundAmountForItems` = `_refund_items_cap`): L = Σ (unit price − line `senior_discount` / line quantity) × quantity returned; Lt / St = the returned / all value of the lines WITHOUT a Senior/PWD discount (the lines that carried tax);
+share = L × (G − T) / (S − V − Ds) + Lt × T / St (St = 0 → no tax part). Same as before (L × G / S) for sales without Senior/PWD. "Tax owed" in `accounting_report` takes off each refund's tax part by the same split (`_refund_tax_part`).
 
 ## C. Smart stock count (B20)
 - `_count_due(biz, shift)`: ticked items (`_count_items`) that are due, ignoring counts of `shift`:
@@ -94,3 +94,13 @@ share = returned value × `grand_total` / (`S − V − Ds`). Same as before for
 1. Close shift is no longer refused for a count that misses items (only for no count at all while items are due). Reason: with a server-decided, moving list, an offline counter can't know another counter's sales, and a refused close can't be repaired by staff. Missed items are flagged and stay due.
 2. Senior/PWD needs no manager approval (owner decision). The ID record + report + review flags are the control.
 3. ID numbers: write-only for counters. Full numbers only in `senior_report` (owner).
+
+## Z gate fixes (2026-11-13)
+1. **Numbers read one way** (finding 1): `_num_strict` (plain-number rule of `_to_num`; present but unreadable → error) for every number in `_check_sale_totals`. A sale with "+150", "0x4B", "NaN"… in a money field is refused (`SALE_TOTALS_MISMATCH`), so the Senior/PWD name/ID gate and the totals check can't read different values.
+2. **Arrival times** (finding 2): stock lines (`_stamp_stock_received`) and stock counts (`received_at` default) use `clock_timestamp()`, so uploads in ONE `fo_sync` call keep their order. An owner edit of a stock line's amount / item / type also counts as new movement (finding 8a).
+3. **Refund share** (finding 3): tax is shared over the taxed lines only (formula above, SQL and JS identical); `_refund_tax_part` for tax owed.
+4. Back Office B2 forms and paste refuse amounts above ₱100,000,000 before saving; `friendlyError` maps the two tables' check names to plain words.
+5. Counter "Download details" of failed uploads masks the Senior/PWD ID (`maskIdNumber`).
+6. The Senior/PWD record, the report and the waived list take the cashier's name from `staff` by `cashier_id`.
+7. The thermal receipt masks the ID like the screen receipt (`maskIdNumber`).
+Left as is (owner only, pre-existing): editing `sale_items` of a finished sale through `apply_changes`; deleting a stock line leaves no movement trace. A voided Senior/PWD sale keeps its record (hidden from the report) until the sale is deleted.

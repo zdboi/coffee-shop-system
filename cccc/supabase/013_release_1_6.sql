@@ -95,16 +95,22 @@ begin
                  where table_schema = 'public' and table_name = 'inventory_transactions' and column_name = 'received_at') then
     alter table public.inventory_transactions add column received_at timestamptz;
     update public.inventory_transactions set received_at = coalesce(created_at, now());
-    alter table public.inventory_transactions alter column received_at set default now();
+    alter table public.inventory_transactions alter column received_at set default clock_timestamp();
     alter table public.inventory_transactions alter column received_at set not null;
   end if;
 end $$;
+-- a stock count's arrival time the same way (its lines come after it, the next sales after them)
+alter table public.stock_counts alter column received_at set default clock_timestamp();
 create index if not exists inventory_transactions_received_idx
   on public.inventory_transactions(business_id, ingredient_id, received_at);
 create or replace function public._stamp_stock_received() returns trigger
 language plpgsql set search_path = public as $$
 begin
-  if tg_op = 'INSERT' then new.received_at := now();
+  -- clock_timestamp, not now(): several uploads in ONE call must get their own times (Z gate finding 2)
+  if tg_op = 'INSERT' then new.received_at := clock_timestamp();
+  -- a changed amount or item counts as new stock movement (the owner editing an old line makes it due, Z gate 8)
+  elsif new.quantity is distinct from old.quantity or new.ingredient_id is distinct from old.ingredient_id
+        or new.transaction_type is distinct from old.transaction_type then new.received_at := clock_timestamp();
   else new.received_at := old.received_at; end if;
   return new;
 end $$;
@@ -273,8 +279,22 @@ end $$;
 -- =============================================================================
 -- 4. SALE TOTALS (contract B)
 -- =============================================================================
+-- A money field of a sale read ONE way everywhere (Z gate finding 1): the
+-- same plain-number rule as _to_num. Missing / null -> null; present but not a
+-- plain number ("+150", "0x4B", "NaN"...) -> an error, so the sale is refused
+-- (SALE_TOTALS_MISMATCH) instead of being read differently by two checks.
+create or replace function public._num_strict(p text) returns numeric
+language plpgsql immutable set search_path = public as $$
+declare v numeric;
+begin
+  if p is null then return null; end if;
+  v := public._to_num(p);
+  if v is null then raise exception 'NOT_A_NUMBER' using errcode = '22P02'; end if;
+  return v;
+end $$;
 -- A finished sale must add up, else SALE_TOTALS_MISMATCH (as 008, plus the
--- payment charge and the Senior / PWD amounts). A Senior / PWD discount that
+-- payment charge and the Senior / PWD amounts). Every number is read with
+-- _num_strict, the same rule as the other checks (Z gate finding 1). A Senior / PWD discount that
 -- doesn't hold together -> BAD_SENIOR.
 create or replace function public._check_sale_totals(p_sale jsonb, p_items jsonb) returns void
 language plpgsql immutable set search_path = public as $$
@@ -288,33 +308,33 @@ declare
 begin
   begin
     for v_it in select value from jsonb_array_elements(case when jsonb_typeof(p_items) = 'array' then p_items else '[]'::jsonb end) loop
-      v_qty  := (v_it->>'quantity')::numeric;
-      v_unit := (v_it->>'unit_price')::numeric;
-      v_line := (v_it->>'line_total')::numeric;
+      v_qty  := public._num_strict(v_it->>'quantity');
+      v_unit := public._num_strict(v_it->>'unit_price');
+      v_line := public._num_strict(v_it->>'line_total');
       if v_qty is null or v_qty <= 0 or v_unit is null or v_unit < 0 or v_line is null
          or abs(v_line - v_unit * v_qty) > c_tol then
         v_bad := true;
       end if;
       v_sum := v_sum + coalesce(v_line, 0);
-      v_isd := coalesce((v_it->>'senior_discount')::numeric, 0);
+      v_isd := coalesce(public._num_strict(v_it->>'senior_discount'), 0);
       if v_isd < 0 or v_isd > coalesce(v_line, 0) + c_tol then v_bad_sen := true; end if;
       if v_isd > 0 then
         v_sd_sum := v_sd_sum + v_isd; v_a_sum := v_a_sum + coalesce(v_line, 0); v_sen_lines := v_sen_lines + 1;
       end if;
     end loop;
-    v_sub   := coalesce((p_sale->>'subtotal')::numeric, 0);
-    v_disc  := coalesce((p_sale->>'discount_amount')::numeric, 0);
+    v_sub   := coalesce(public._num_strict(p_sale->>'subtotal'), 0);
+    v_disc  := coalesce(public._num_strict(p_sale->>'discount_amount'), 0);
     v_dtype := lower(nullif(btrim(p_sale->>'discount_type'), ''));
-    v_dval  := coalesce((p_sale->>'discount_value')::numeric, 0);
-    v_tax   := coalesce((p_sale->>'tax_amount')::numeric, 0);
-    v_svc   := coalesce((p_sale->>'service_charge_amount')::numeric, 0);
-    v_grand := (p_sale->>'grand_total')::numeric;
-    v_loy   := coalesce((p_sale->>'loyalty_discount')::numeric, 0);
-    v_sen   := coalesce((p_sale->>'senior_discount')::numeric, 0);
-    v_vat   := coalesce((p_sale->>'vat_exempt_amount')::numeric, 0);
-    v_a     := coalesce((p_sale->>'senior_items_amount')::numeric, 0);
-    v_chg   := coalesce((p_sale->>'payment_charge')::numeric, 0);
-    v_fee   := coalesce((p_sale->>'payment_fee')::numeric, 0);
+    v_dval  := coalesce(public._num_strict(p_sale->>'discount_value'), 0);
+    v_tax   := coalesce(public._num_strict(p_sale->>'tax_amount'), 0);
+    v_svc   := coalesce(public._num_strict(p_sale->>'service_charge_amount'), 0);
+    v_grand := public._num_strict(p_sale->>'grand_total');
+    v_loy   := coalesce(public._num_strict(p_sale->>'loyalty_discount'), 0);
+    v_sen   := coalesce(public._num_strict(p_sale->>'senior_discount'), 0);
+    v_vat   := coalesce(public._num_strict(p_sale->>'vat_exempt_amount'), 0);
+    v_a     := coalesce(public._num_strict(p_sale->>'senior_items_amount'), 0);
+    v_chg   := coalesce(public._num_strict(p_sale->>'payment_charge'), 0);
+    v_fee   := coalesce(public._num_strict(p_sale->>'payment_fee'), 0);
     v_kind  := nullif(btrim(p_sale->>'senior_kind'), '');
     v_expect := least(case v_dtype when 'percent' then v_sub * v_dval / 100 when 'fixed' then v_dval else 0 end, v_sub);
     if abs(v_sub - v_sum) > c_tol
@@ -443,16 +463,25 @@ begin
 end $$;
 
 -- The most a partial refund of these items may give back (as 004): what the
--- customer paid for them. A Senior / PWD line counts at its price minus its
--- own discount; the rest of the sale is shared in proportion, as before.
+-- customer paid for them. Same formula as refundAmountForItems (logic.js):
+--   a Senior / PWD line counts at its price minus its own discount;
+--   share = L x (G - T) / S + Lt x T / St
+--   S = subtotal - VAT taken out - Senior / PWD discount, G = grand total,
+--   T = tax, L = returned value, Lt / St = returned / all value of the lines
+--   that carried tax (lines without a Senior / PWD discount; St = 0 -> no tax
+--   part). Without Senior / PWD lines this is L x G / S, as before (Z gate
+--   finding 3: tax is never added on Senior / PWD items, so it is not given
+--   back on them either).
 create or replace function public._refund_items_cap(p_sale public.sales, p_refund_id uuid, p_items jsonb, p_left numeric)
 returns numeric language plpgsql stable security definer set search_path = public as $$
 declare
-  v_l numeric := 0; v_all boolean := true; r record;
+  v_l numeric := 0; v_lt numeric := 0; v_st numeric := 0; v_all boolean := true; r record; v_unit numeric; v_back numeric;
   v_s numeric := round(coalesce(p_sale.subtotal, 0) - coalesce(p_sale.vat_exempt_amount, 0) - coalesce(p_sale.senior_discount, 0), 2);
   v_g numeric := greatest(round(coalesce(p_sale.grand_total, 0), 2), 0);
+  v_t numeric;
 begin
   if jsonb_typeof(p_items) is distinct from 'array' or jsonb_array_length(p_items) = 0 then return null; end if;
+  v_t := least(v_g, greatest(round(coalesce(p_sale.tax_amount, 0), 2), 0));
   for r in
     select greatest(coalesce(si.quantity, 0), 0) as sold,
            greatest(coalesce(si.unit_price, si.line_total / nullif(si.quantity, 0), 0), 0) as unit,
@@ -469,13 +498,17 @@ begin
     from public.sale_items si
     where si.sale_id = p_sale.id and si.business_id = p_sale.business_id
   loop
-    v_l := v_l + greatest(r.unit - case when r.sold > 0 then r.sd / r.sold else 0 end, 0)
-                 * least(r.now, greatest(r.sold - r.before, 0));
+    v_unit := greatest(r.unit - case when r.sold > 0 then r.sd / r.sold else 0 end, 0);
+    v_back := v_unit * least(r.now, greatest(r.sold - r.before, 0));
+    v_l := v_l + v_back;
+    if r.sd <= 0 then v_lt := v_lt + v_back; v_st := v_st + v_unit * r.sold; end if;
     if r.before + r.now < r.sold - 0.0001 then v_all := false; end if;
   end loop;
   if v_all then return p_left; end if;
   if v_s <= 0 then return 0; end if;
-  return least(p_left, round(v_l * v_g / v_s, 2));
+  v_st := round(v_st, 2);
+  return least(p_left, round(v_l * (v_g - case when v_st > 0 then v_t else 0 end) / v_s
+                             + case when v_st > 0 then v_lt * v_t / v_st else 0 end, 2));
 end $$;
 
 -- =============================================================================
@@ -640,7 +673,9 @@ begin
         select p_biz, x.id, x.senior_kind, v_name, v_idno,
                case when x.senior_items_amount - x.vat_exempt_amount > 0
                     then round(x.senior_discount / (x.senior_items_amount - x.vat_exempt_amount) * 100, 2) end,
-               x.senior_items_amount, x.vat_exempt_amount, x.senior_discount, x.cashier_id, x.cashier_name
+               x.senior_items_amount, x.vat_exempt_amount, x.senior_discount, x.cashier_id,
+               -- the staff list's name for that cashier, not what the counter typed (Z gate finding 6)
+               coalesce((select st.name from public.staff st where st.id = x.cashier_id and st.business_id = p_biz), x.cashier_name)
         from public.sales x where x.id = public._to_uuid(v_sale->>'id') and x.business_id = p_biz
         on conflict (sale_id) do nothing;
     end if;
@@ -778,6 +813,38 @@ end $$;
 -- =============================================================================
 -- 7. REPORTS
 -- =============================================================================
+-- The tax inside one refund (for "tax owed"): a refund of listed items gives
+-- back the tax of the TAXED lines among them (same split as _refund_items_cap,
+-- Z gate finding 3); a refund without items, or of every line, its share of
+-- the sale's tax (amount x tax / grand total). Never more than the refund.
+create or replace function public._refund_tax_part(p_sale public.sales, p_ref public.refunds) returns numeric
+language plpgsql stable security definer set search_path = public as $$
+declare
+  v_g numeric := greatest(round(coalesce(p_sale.grand_total, 0), 2), 0);
+  v_t numeric; v_amt numeric := greatest(coalesce(p_ref.amount, 0), 0);
+  v_lt numeric := 0; v_st numeric := 0; v_all boolean := true; r record; v_unit numeric;
+begin
+  v_t := least(v_g, greatest(round(coalesce(p_sale.tax_amount, 0), 2), 0));
+  if v_t <= 0 or v_g <= 0 then return 0; end if;
+  if jsonb_typeof(p_ref.items) is distinct from 'array' or jsonb_array_length(p_ref.items) = 0 then
+    return least(v_amt, v_amt * v_t / v_g);
+  end if;
+  for r in
+    select greatest(coalesce(si.quantity, 0), 0) as sold,
+           greatest(coalesce(si.unit_price, si.line_total / nullif(si.quantity, 0), 0), 0) as unit,
+           greatest(coalesce(si.senior_discount, 0), 0) as sd,
+           coalesce((select sum(greatest(coalesce(public._to_num(it->>'quantity'), 0), 0))
+                     from jsonb_array_elements(p_ref.items) it where it->>'sale_item_id' = si.id::text), 0) as now
+    from public.sale_items si where si.sale_id = p_sale.id and si.business_id = p_sale.business_id
+  loop
+    v_unit := greatest(r.unit - case when r.sold > 0 then r.sd / r.sold else 0 end, 0);
+    if r.sd <= 0 then v_lt := v_lt + v_unit * least(r.now, r.sold); v_st := v_st + v_unit * r.sold; end if;
+    if r.now < r.sold - 0.0001 then v_all := false; end if;
+  end loop;
+  if v_all or v_st <= 0 then return least(v_amt, v_amt * v_t / v_g); end if;
+  return least(v_amt, v_lt * v_t / round(v_st, 2));
+end $$;
+
 -- B1 / B18: the money of a range of shop days, with one row per day
 -- (contract D). Owner only.
 create or replace function public.accounting_report(p_from date, p_to date) returns jsonb
@@ -811,8 +878,8 @@ begin
   rd as (
     select (coalesce(r.date, r.created_at) at time zone v_tz)::date as day,
            sum(case when r.type <> 'VOID' and x.status in ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED') then coalesce(r.amount, 0) else 0 end) as refunds,
-           sum(case when r.type <> 'VOID' and x.status in ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED') and coalesce(x.grand_total, 0) > 0
-                    then coalesce(r.amount, 0) * coalesce(x.tax_amount, 0) / x.grand_total else 0 end) as ref_tax,
+           sum(case when r.type <> 'VOID' and x.status in ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
+                    then public._refund_tax_part(x, r) else 0 end) as ref_tax,
            count(*) filter (where r.type = 'VOID') as void_count,
            sum(case when r.type = 'VOID' then coalesce(r.amount, 0) else 0 end) as voids
     from public.refunds r join public.sales x on x.id = r.sale_id
@@ -930,7 +997,8 @@ begin
   select coalesce(jsonb_agg(to_jsonb(w) order by w.date desc), '[]'::jsonb) into v_waived
     from (select coalesce(x.transaction_date, x.created_at) as date, x.transaction_number,
                  (select pp.method from public.payments pp where pp.sale_id = x.id order by pp.created_at limit 1) as method,
-                 round(coalesce(x.payment_fee, 0) - coalesce(x.payment_charge, 0), 2) as amount, x.cashier_name
+                 round(coalesce(x.payment_fee, 0) - coalesce(x.payment_charge, 0), 2) as amount,
+                 coalesce((select st.name from public.staff st where st.id = x.cashier_id and st.business_id = v_biz), x.cashier_name) as cashier_name
           from public.sales x
           where x.business_id = v_biz and x.status in ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
             and coalesce(x.transaction_date, x.created_at) >= v_from_ts and coalesce(x.transaction_date, x.created_at) < v_to_ts
@@ -966,7 +1034,7 @@ begin
              'status', x.status, 'kind', r.kind, 'holder_name', r.holder_name, 'id_number', r.id_number,
              'items_amount', round(r.items_amount, 2), 'vat_exempt', round(r.vat_exempt_amount, 2),
              'discount', round(r.discount_amount, 2), 'pct', r.pct, 'grand_total', round(coalesce(x.grand_total, 0), 2),
-             'cashier_name', coalesce(r.cashier_name, x.cashier_name))
+             'cashier_name', coalesce((select st.name from public.staff st where st.id = x.cashier_id and st.business_id = v_biz), r.cashier_name, x.cashier_name))
            order by coalesce(x.transaction_date, x.created_at), x.transaction_number)
     from public.senior_discount_records r join public.sales x on x.id = r.sale_id
     where r.business_id = v_biz and x.business_id = v_biz and x.status <> 'VOIDED'
@@ -1083,7 +1151,7 @@ do $$
 declare f record;
   -- (functions that existed before and are only re-made here keep the rights they had)
   mine text[] := array['_stamp_stock_received','_valid_payment_methods','_payment_method','_settings_check',
-    '_count_due','fo_count_due','bo_count_status','_ingredient_check',
+    '_count_due','fo_count_due','bo_count_status','_ingredient_check','_num_strict','_refund_tax_part',
     '_fo_error_code','_fo_apply_16','fo_sync','accounting_report','senior_report'];
   member_fns text[] := array['fo_sync','fo_count_due','bo_count_status','accounting_report','senior_report'];
 begin

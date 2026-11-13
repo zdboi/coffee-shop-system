@@ -341,6 +341,12 @@ function friendlyError(e){
     if(why && OPTION_GROUP_PROBLEM_TEXT[why]) return 'The option group could not be saved. ' + OPTION_GROUP_PROBLEM_TEXT[why];
   }
   if(code && ERROR_TEXT[code]) return ERROR_TEXT[code];
+  // release 1.6 (B2): the database's own limits on investors / start-up costs, in plain words
+  if(/(investors|startup_costs)_amount_check/.test(raw)) return 'An amount must be more than ₱0 and at most ₱100,000,000.';
+  if(/(investors|startup_costs)_name_check/.test(raw)) return 'A name is missing or too long (investors: 80 characters, start-up costs: 120).';
+  if(/(investors|startup_costs)_notes_check/.test(raw)) return 'A note can be at most 500 characters.';
+  if(/investors_name_key/.test(raw)) return 'There is already an investor with that name.';
+  if(/violates check constraint/i.test(raw)) return 'Something you typed is outside what the app accepts. Check the amounts and names, then try again.';
   if(/row-level security/i.test(raw)) return 'You do not have permission to change this.';
   if(/foreign key/i.test(raw)) return 'This record is still used elsewhere (e.g. in sales history), so it cannot be deleted.';
   if(/duplicate key/i.test(raw)) return 'That already exists.';

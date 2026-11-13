@@ -328,7 +328,8 @@ const Printer = (() => {
       const idText = String(sn.id_number || '').trim();
       b.sep();
       b.line(kind + (sn.holder_name ? ': ' + sn.holder_name : ''));
-      b.line('ID no.: ' + (idText ? '**** ' + idText.slice(-4) : 'on file'));
+      // same masking as the screen receipt (maskIdNumber): last 4, or last 2 for a short ID; ASCII for the printer
+      b.line('ID no.: ' + (idText ? (typeof maskIdNumber === 'function' ? maskIdNumber(idText) : '**** ' + idText.slice(-4)).replace(/•/g, '*') : 'on file'));
       b.feed(1).line('Signature: ____________________');
     }
     b.sep();
